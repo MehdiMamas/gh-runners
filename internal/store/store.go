@@ -224,7 +224,13 @@ type Config struct {
 	DashboardPort int      `json:"dashboard_port,omitempty"`
 	Sync          Sync     `json:"sync"`
 	OnDemand      OnDemand `json:"on_demand"`
+	// AutoUpdate installs new gh-runners releases when no job is running;
+	// unset means on.
+	AutoUpdate *bool `json:"auto_update,omitempty"`
 }
+
+// AutoUpdateOn reports whether the daemon installs new releases itself.
+func (c Config) AutoUpdateOn() bool { return c.AutoUpdate == nil || *c.AutoUpdate }
 
 // Sync decides which repositories `gh-runners sync` (and the daemon's
 // auto-sync) give a runner.

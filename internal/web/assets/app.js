@@ -616,6 +616,27 @@ function renderSettings() {
         if (await confirmDialog('Stop gh-runners?', 'Every runner on this computer stops, and so does this dashboard, until you open gh-runners again' + (st.service.installed ? ' or sign in again.' : '.'), 'Stop everything', true)) serviceAction('stop');
       } }, 'Stop everything')));
 
+  const u = st.update || {};
+  const autoUpdate = cfg.auto_update !== false;
+  const newer = u.latest && u.latest !== st.version && u.note !== 'up to date';
+  const updates = h('div', { class: 'card' },
+    h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Updates'),
+      h('p', { class: 'muted' }, 'gh-runners checks for a new version every few hours. With auto-update on it installs it and restarts by itself, but only while no runner here is running a job.')),
+    sw(autoUpdate, (v) => guard(async () => { cfg.auto_update = v; await api('PUT', '/api/config', cfg); toast('Auto-update ' + (v ? 'on' : 'off')); await refreshState(); }), 'Auto-update')),
+    h('dl', { class: 'kv' },
+      h('dt', {}, 'This version'), h('dd', {}, st.version),
+      h('dt', {}, 'Latest'), h('dd', {}, (u.latest || 'not checked yet') + (u.checked ? ' · checked ' + ago(u.checked) : ''))),
+    u.note ? h('p', {}, u.note) : null,
+    u.error ? h('p', { class: 'err' }, 'Last check failed: ' + u.error) : null,
+    h('div', { class: 'row' },
+      h('button', { class: 'btn' + (newer ? ' primary' : ''), onclick: () => guard(async () => {
+        await api('POST', '/api/update');
+        toast(newer ? 'Updating once no job is running ...' : 'Checking for updates ...');
+        setTimeout(refreshState, 3000);
+        setTimeout(refreshState, 10000);
+        setTimeout(refreshState, 20000);
+      }) }, newer ? 'Update to ' + u.latest + ' now' : 'Check now')));
+
   const about = h('div', { class: 'card' }, h('h2', {}, 'About'),
     h('dl', { class: 'kv' },
       h('dt', {}, 'Version'), h('dd', {}, st.version),
@@ -624,7 +645,7 @@ function renderSettings() {
       h('dt', {}, 'Running since'), h('dd', {}, ago(st.started) + ' (pid ' + st.pid + ')')),
     h('p', {}, h('a', { href: 'https://github.com/MehdiMamas/gh-runners', target: '_blank', rel: 'noopener' }, 'github.com/MehdiMamas/gh-runners')));
 
-  mount(el, h('div', { class: 'two' }, h('div', {}, account, folder, defaults), h('div', {}, svc, about)));
+  mount(el, h('div', { class: 'two' }, h('div', {}, account, folder, defaults), h('div', {}, svc, updates, about)));
 }
 
 async function serviceAction(action) {

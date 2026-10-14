@@ -35,6 +35,15 @@ type Status struct {
 	LastSync time.Time   `json:"last_sync,omitempty"`
 	SyncErr  string      `json:"sync_error,omitempty"`
 	OnDemand string      `json:"on_demand,omitempty"`
+	Update   UpdateState `json:"update"`
+}
+
+// UpdateState is what the daemon knows about gh-runners releases.
+type UpdateState struct {
+	Latest  string    `json:"latest,omitempty"` // newest release seen
+	Checked time.Time `json:"checked,omitzero"` // last successful check
+	Note    string    `json:"note,omitempty"`   // what it is doing or waiting for
+	Error   string    `json:"error,omitempty"`
 }
 
 // ErrNotRunning means no daemon answered.
@@ -78,6 +87,9 @@ func Reload() error { return call(http.MethodPost, "/reload", nil) }
 
 // Sync makes the daemon run auto-sync now.
 func Sync() error { return call(http.MethodPost, "/sync", nil) }
+
+// Update makes the daemon install the latest release as soon as no job runs.
+func Update() error { return call(http.MethodPost, "/update", nil) }
 
 // Shutdown stops the daemon and every runner it supervises.
 func Shutdown() error { return call(http.MethodPost, "/shutdown", nil) }

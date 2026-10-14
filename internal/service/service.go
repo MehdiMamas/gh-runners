@@ -96,6 +96,29 @@ func StartDetached() error {
 	return waitRunning(15 * time.Second)
 }
 
+// Spawn runs this executable with args, detached, writing its output to
+// logPath. The dashboard and the updater use it to restart the daemon they
+// run in.
+func Spawn(logPath string, args ...string) error {
+	exe, err := Executable()
+	if err != nil {
+		return err
+	}
+	f, err := os.Create(logPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	cmd := helperCommand(exe, args...)
+	cmd.Stdout, cmd.Stderr = f, f
+	proc.Detach(cmd)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
+
 func waitRunning(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {

@@ -51,6 +51,7 @@ type jitManager struct {
 	lastPoll time.Time
 	lastErr  string
 	enabled  bool
+	paused   bool // an update is about to restart the daemon
 	watching int
 	wakeUp   chan struct{}
 }
@@ -66,6 +67,13 @@ func (m *jitManager) wake() {
 	m.reposAt = time.Time{}
 	m.mu.Unlock()
 	nudge(m.wakeUp)
+}
+
+// pause stops (or resumes) starting new on-demand runners.
+func (m *jitManager) pause(on bool) {
+	m.mu.Lock()
+	m.paused = on
+	m.mu.Unlock()
 }
 
 func (m *jitManager) states() []control.ProcState {
@@ -104,8 +112,9 @@ func (m *jitManager) loop(ctx context.Context) {
 			}
 			m.mu.Lock()
 			m.enabled = cfg.OnDemand.Enabled
+			paused := m.paused
 			m.mu.Unlock()
-			if cfg.OnDemand.Enabled {
+			if cfg.OnDemand.Enabled && !paused {
 				err = m.poll(ctx, cfg)
 			}
 		}

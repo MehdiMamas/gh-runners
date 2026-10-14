@@ -63,6 +63,9 @@ type Daemon struct {
 	syncErr  string
 	jit      *jitManager
 
+	updateNow chan struct{}
+	upd       control.UpdateState
+
 	tokMu    sync.Mutex
 	tok      string
 	tokAt    time.Time
@@ -82,6 +85,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.started = time.Now()
 	d.reload = make(chan struct{}, 1)
 	d.syncNow = make(chan struct{}, 1)
+	d.updateNow = make(chan struct{}, 1)
 	d.jit = newJITManager(d)
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -115,6 +119,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		SyncNow:     func() { nudge(d.syncNow) },
 		WakeJIT:     d.jit.wake,
 		ResetClient: d.resetClient,
+		UpdateNow:   func() { nudge(d.updateNow) },
 		Log:         d.Log,
 	}, uiSecret)
 	srv := &http.Server{Handler: dash.Handler(d.handler(secret, cancel)), ReadHeaderTimeout: 5 * time.Second}
@@ -124,6 +129,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.Log.Printf("gh-runners daemon %s started (pid %d, home %s, dashboard http://%s)", d.Version, info.PID, store.Home(), info.Addr)
 	go d.syncLoop(ctx)
 	go d.jit.loop(ctx)
+	go d.updateLoop(ctx)
 
 	t := time.NewTicker(tick)
 	defer t.Stop()
@@ -189,6 +195,9 @@ func (d *Daemon) handler(secret string, shutdown context.CancelFunc) http.Handle
 	mux.HandleFunc("POST /sync", auth(func(w http.ResponseWriter, r *http.Request) {
 		nudge(d.syncNow)
 	}))
+	mux.HandleFunc("POST /update", auth(func(w http.ResponseWriter, r *http.Request) {
+		nudge(d.updateNow)
+	}))
 	mux.HandleFunc("POST /shutdown", auth(func(w http.ResponseWriter, r *http.Request) {
 		shutdown()
 	}))
@@ -204,7 +213,7 @@ func nudge(c chan struct{}) {
 
 func (d *Daemon) status() control.Status {
 	d.mu.Lock()
-	s := control.Status{PID: os.Getpid(), Version: d.Version, Started: d.started, LastSync: d.lastSync, SyncErr: d.syncErr}
+	s := control.Status{PID: os.Getpid(), Version: d.Version, Started: d.started, LastSync: d.lastSync, SyncErr: d.syncErr, Update: d.upd}
 	for _, c := range d.children {
 		s.Runners = append(s.Runners, c.state)
 	}
