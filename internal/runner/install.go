@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/MehdiMamas/gh-runners/internal/github"
+	"github.com/MehdiMamas/gh-runners/internal/proc"
 	"github.com/MehdiMamas/gh-runners/internal/store"
 )
 
@@ -321,9 +322,13 @@ func Unconfigure(ctx context.Context, dir, token string, out io.Writer) error {
 // With a JIT config the runner takes one job and exits.
 func RunCommand(dir string, jitConfig string) *exec.Cmd {
 	if jitConfig != "" {
-		return script(dir, "run", "--jitconfig", jitConfig)
+		cmd := script(dir, "run", "--jitconfig", jitConfig)
+		cmd.Env = proc.Env()
+		return cmd
 	}
-	return script(dir, "run")
+	cmd := script(dir, "run")
+	cmd.Env = proc.Env()
+	return cmd
 }
 
 func runCtx(ctx context.Context, cmd *exec.Cmd) error {

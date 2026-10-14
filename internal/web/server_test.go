@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -458,5 +459,53 @@ func TestSeveralRunnersPerRepo(t *testing.T) {
 	sort.Strings(titles)
 	if strings.Join(titles, "|") != "Add another runner to octo/private (light)|Add another runner to octo/private named small" {
 		t.Fatalf("queued: %q", titles)
+	}
+}
+
+func TestRestartRunner(t *testing.T) {
+	s, h := setup(t)
+	rn := store.Runner{ID: "octo__private", Kind: store.KindRepo, Owner: "octo", Repo: "private", Name: "laptop", Labels: []string{"heavy"}}
+	if err := store.Save(rn); err != nil {
+		t.Fatal(err)
+	}
+	// A fake daemon: the runner runs while it is not disabled, and every
+	// reload is recorded with the state it saw.
+	var reloads []bool
+	s.h.Reload = func() {
+		r, _ := store.Load(rn.ID)
+		reloads = append(reloads, r.Disabled)
+	}
+	s.h.Status = func() control.Status {
+		st := control.Status{PID: 42}
+		if r, _ := store.Load(rn.ID); !r.Disabled {
+			st.Runners = []control.ProcState{{ID: rn.ID, State: "running", PID: 7}}
+		}
+		return st
+	}
+
+	var started struct {
+		Task int `json:"task"`
+	}
+	if code := api(t, h, "POST", "/api/runners/octo__private/restart", "", &started); code != 202 {
+		t.Fatalf("restart: %d", code)
+	}
+	var tv taskView
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		api(t, h, "GET", fmt.Sprintf("/api/tasks/%d", started.Task), "", &tv)
+		if tv.State == "done" || tv.State == "failed" || time.Now().After(deadline) {
+			break
+		}
+	}
+	if tv.State != "done" || !strings.Contains(tv.Log, "Restarted octo/private (laptop)") {
+		t.Fatalf("task: %+v", tv)
+	}
+	if fmt.Sprint(reloads) != "[true false]" {
+		t.Fatalf("reloads: %v", reloads)
+	}
+	if r, _ := store.Load(rn.ID); r.Disabled || strings.Join(r.Labels, ",") != "heavy" {
+		t.Fatalf("after restart: %+v", r)
+	}
+	if code := api(t, h, "POST", "/api/runners/nope/restart", "", nil); code != 404 {
+		t.Fatalf("unknown runner: %d", code)
 	}
 }

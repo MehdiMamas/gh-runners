@@ -3,6 +3,7 @@
 package proc
 
 import (
+	"os"
 	"os/exec"
 	"strconv"
 	"syscall"
@@ -36,4 +37,14 @@ func kill(cmd *exec.Cmd) {
 	if err := k.Run(); err != nil {
 		_ = cmd.Process.Kill()
 	}
+}
+
+func env() []string {
+	// The daemon's own environment is the one from when it started, and a
+	// restart from the dashboard inherits it again; the registry has now.
+	fresh, err := windows.GetCurrentProcessToken().Environ(false)
+	if err != nil {
+		return nil
+	}
+	return mergeEnv(os.Environ(), fresh)
 }

@@ -440,6 +440,7 @@ function runnerRow(lr) {
       lr.disabled
         ? h('button', { class: 'btn small', onclick: () => startStop(lr, false) }, 'Start')
         : h('button', { class: 'btn small', onclick: () => startStop(lr, true) }, 'Stop'),
+      lr.disabled ? null : h('button', { class: 'btn small', title: 'Stop and start again, with the current PATH and other variables', onclick: () => restartRunner(lr) }, 'Restart'),
       h('button', { class: 'btn small', onclick: () => showLog(lr) }, 'Logs'),
       S.state.auth.signed_in ? h('button', { class: 'btn small', onclick: () => editLocalLabels(lr) }, 'Edit labels') : null,
       h('button', { class: 'btn small danger', onclick: () => removeRunner(lr) }, 'Remove')));
@@ -815,6 +816,14 @@ async function startStop(r, stop) {
   });
 }
 
+// restartRunner stops the runner and starts it again, so it picks up tools
+// installed since it started. A job it is running is cancelled.
+async function restartRunner(r) {
+  if (S.remote[r.id] === 'busy' && !await confirmDialog('Restart the runner ' + r.name + '?',
+    [h('p', {}, h('b', {}, r.name), ' is running a job. Restarting it cancels that job.')], 'Restart anyway', true)) return;
+  await guard(async () => { await api('POST', `/api/runners/${encodeURIComponent(r.id)}/restart`); loadTasks(); });
+}
+
 async function removeRunner(r) {
   const rest = S.state.runners.filter((x) => x.id !== r.id && x.scope.toLowerCase() === r.scope.toLowerCase());
   const body = [h('p', {}, 'This stops the runner ', h('b', {}, r.name), ', removes it from ', h('b', {}, r.scope), ' on GitHub and deletes its folder:'), h('p', {}, h('code', {}, r.dir)),
@@ -861,6 +870,7 @@ function renderMachine() {
       h('div', { class: 'snippet' }, h('code', {}, 'runs-on: ' + runsOn), h('button', { class: 'btn small ghost', onclick: () => copy('runs-on: ' + runsOn) }, 'Copy')),
       h('div', { class: 'row', 'data-gap': '1' },
         r.disabled ? h('button', { class: 'btn', onclick: () => startStop(r, false) }, 'Start') : h('button', { class: 'btn', onclick: () => startStop(r, true) }, 'Stop'),
+        r.disabled ? null : h('button', { class: 'btn', title: 'Stop and start again, with the current PATH and other variables', onclick: () => restartRunner(r) }, 'Restart'),
         h('button', { class: 'btn', onclick: () => showLog(r) }, 'Logs'),
         r.kind !== 'org' && st.auth.signed_in ? h('button', { class: 'btn', onclick: () => editLocalLabels(r) }, 'Edit labels') : null,
         h('div', { class: 'grow' }),

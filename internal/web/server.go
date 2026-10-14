@@ -194,6 +194,7 @@ func (s *Server) api() http.Handler {
 	mux.HandleFunc("POST /api/adopt", s.postAdopt)
 	mux.HandleFunc("POST /api/runners/{id}/start", s.postStartStop(false))
 	mux.HandleFunc("POST /api/runners/{id}/stop", s.postStartStop(true))
+	mux.HandleFunc("POST /api/runners/{id}/restart", s.postRestart)
 	mux.HandleFunc("POST /api/runners/{id}/remove", s.postRemove)
 	mux.HandleFunc("GET /api/runners/{id}/log", s.getRunnerLog)
 	mux.HandleFunc("GET /api/daemon-log", s.getDaemonLog)
