@@ -211,8 +211,11 @@ go build .
 GOOS=darwin go vet ./... && GOOS=linux go vet ./...
 ```
 
-CI runs tests and a service install/uninstall smoke test on Linux, macOS and
-Windows for every push. Releases are built by the manually started `release`
+CI runs tests, a service install/uninstall smoke test and the install scripts
+on Linux, macOS and Windows for every push. The manual `e2e` workflow registers
+real runners on hosted macOS and Linux (x64 and arm64) machines for a private
+test repo and waits for them to run a job (see the comments in
+`.github/workflows/e2e.yml`). Releases are built by the manually started `release`
 workflow (`gh workflow run release.yml -f version=v0.2.0`).
 
 ## License
