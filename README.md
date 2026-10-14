@@ -230,6 +230,9 @@ only lands on a runner that has every label in its `runs-on:` list.
   lingering enabled so it runs without a login; a `@reboot` crontab entry where
   systemd isn't available), Windows `HKCU\...\Run` entry. None of them need
   root/admin. On Windows the runners therefore run while you are signed in.
+  A copy with its own state directory (`--home` or `GH_RUNNERS_HOME`) gets its
+  own entry and app shortcut, named with a short hash of the directory
+  (`gh-runners-1a2b3c4d`), so it never replaces or removes the main one's.
 - **Sync** lists the repos you can admin (`owner`, `collaborator`, `organization_member`),
   keeps the ones that match the filter (default: private, not archived, not a
   fork, owned by you) and adds a runner for each. With `prune`, it removes

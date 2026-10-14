@@ -20,7 +20,7 @@ func TestPlist(t *testing.T) {
 			t.Fatalf("plist is not valid XML: %v\n%s", err, p)
 		}
 	}
-	for _, want := range []string{"<string>" + Label + "</string>", "<string>daemon</string>", "R&amp;D", "GH_RUNNERS_HOME"} {
+	for _, want := range []string{"<string>" + Label + SuffixFor("/Users/me/R&D") + "</string>", "<string>daemon</string>", "R&amp;D", "GH_RUNNERS_HOME"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("plist lacks %q:\n%s", want, p)
 		}

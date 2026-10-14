@@ -4,21 +4,58 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/control"
 	"github.com/MehdiMamas/gh-runners/internal/proc"
 )
 
-// Name is used for the unit and registry value, Label for the launchd agent.
+// Name is used for the unit and registry value, Label for the launchd agent,
+// both followed by Suffix.
 const (
 	Name  = "gh-runners"
 	Label = "io.github.mehdimamas.gh-runners"
 )
+
+// Suffix tells a copy with its own state directory ($GH_RUNNERS_HOME or
+// --home) apart from the main one in ~/.gh-runners: "" for the main one,
+// "-" and 8 hex characters of the directory otherwise. Login entries and
+// shortcuts carry it, so installing or removing a second copy (a test, say)
+// never replaces or removes the main one's.
+func Suffix() string { return SuffixFor(os.Getenv("GH_RUNNERS_HOME")) }
+
+// SuffixFor is Suffix for the state directory home ("" is the main one).
+func SuffixFor(home string) string {
+	if home == "" {
+		return ""
+	}
+	norm := func(p string) string {
+		if a, err := filepath.Abs(p); err == nil {
+			p = a
+		}
+		p = filepath.Clean(p)
+		if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+			p = strings.ToLower(p)
+		}
+		return p
+	}
+	if u, err := os.UserHomeDir(); err == nil && norm(home) == norm(filepath.Join(u, ".gh-runners")) {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(norm(home)))
+	return "-" + hex.EncodeToString(sum[:4])
+}
+
+func name() string  { return Name + Suffix() }
+func label() string { return Label + Suffix() }
 
 // Status of the login service.
 type Status struct {
