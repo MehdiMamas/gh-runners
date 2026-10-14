@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -129,5 +131,60 @@ func TestConcurrentSaveLoad(t *testing.T) {
 	close(done)
 	if err := <-loadErrs; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMoreRunnersPerScope(t *testing.T) {
+	t.Setenv("GH_RUNNERS_HOME", t.TempDir())
+	base := IDFor(KindRepo, "o", "r")
+	if got := IDWithName(base, "box-2"); got != "o__r__box-2" {
+		t.Errorf("IDWithName = %q", got)
+	}
+	if got := IDWithName(base, " my light/box "); got != "o__r__my-light-box" {
+		t.Errorf("IDWithName unsafe = %q", got)
+	}
+	// The first runner keeps the v0.4.0 folder; more get base__name.
+	for _, r := range []Runner{
+		{ID: base, Kind: KindRepo, Owner: "o", Repo: "r", Name: "box"},
+		{ID: IDWithName(base, "box-2"), Kind: KindRepo, Owner: "o", Repo: "r", Name: "box-2"},
+		{ID: IDFor(KindRepo, "o", "r2"), Kind: KindRepo, Owner: "o", Repo: "r2", Name: "box"},
+	} {
+		if err := Save(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := ForScope("O/R")
+	if err != nil || len(got) != 2 || got[0].ID != "o__r" || got[1].ID != "o__r__box-2" {
+		t.Fatalf("ForScope: %+v %v", got, err)
+	}
+	if got[1].Display() != "o/r (box-2)" {
+		t.Errorf("Display = %q", got[1].Display())
+	}
+}
+
+func TestClaimIsExclusive(t *testing.T) {
+	t.Setenv("GH_RUNNERS_HOME", t.TempDir())
+	const n = 32
+	var wins atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := Claim("o__r__box-2")
+			if err != nil {
+				t.Error(err)
+			}
+			if ok {
+				wins.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if wins.Load() != 1 {
+		t.Fatalf("%d goroutines claimed the same folder", wins.Load())
+	}
+	if ok, err := Claim("o__r__box-3"); !ok || err != nil {
+		t.Fatalf("claim a free folder: %v %v", ok, err)
 	}
 }

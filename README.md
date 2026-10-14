@@ -90,7 +90,7 @@ manages it.
 
 | Tab | What you do there |
 | --- | --- |
-| Repositories | Every repo you can reach, filter by owner and name, **Add runner** on one or tick several and add them all. Each repo shows the runners GitHub already has for it (from any machine) and their labels. Public repos ask first. |
+| Repositories | Every repo you can reach, filter by owner and name, **Add runner** on one or tick several and add them all. Each repo shows the runners GitHub already has for it (from any machine) and their labels, and under it one row per runner on this machine with its labels, **Stop**/**Start**, **Logs**, **Edit labels** and **Remove**. Public repos ask first. |
 | This machine | Each runner here: state on this computer and on GitHub, labels (**Edit labels**), a `runs-on:` line to copy, **Stop**, **Start**, **Logs**, **Remove**. |
 | Automation | A runner for every repo that matches your rules (with preview), or on-demand runners. |
 | Activity | What the dashboard did, with the output of each step, and the service log. |
@@ -108,6 +108,17 @@ labels**; the change goes straight to GitHub, no re-registration.
 them and add them together. Each repo is queued; its row says *Queued* or
 *Adding…* and can't be added twice, and work on different repos runs side by
 side.
+
+**Several runners for one repo.** A runner takes one job at a time, so a quick
+job (say `runs-on: [self-hosted, light]`) waits behind a long test run on the
+same runner. Give the repo a second runner: **Add runner** on a repo that
+already has one adds another, with its own labels (for example `heavy` on the
+first, `light` on the second) and a name on GitHub (empty picks the next free
+one: `<machine>-2`, `<machine>-3`, …). Clicking it again while one is still
+being added queues the next. Each runner has its own folder, process and log,
+and its own row under the repo; stopping or removing one never touches the
+others. A runner added before this existed stays as it is: it remains the
+repo's first runner, with the same folder and registration.
 
 **Runners set up by hand.** The dashboard looks for runners made with GitHub's
 own `config.sh` / `config.cmd` (in your home folder, the top of the system drive
@@ -183,9 +194,10 @@ only lands on a runner that has every label in its `runs-on:` list.
 
 | Command | What it does |
 | --- | --- |
-| `add [owner/repo]` | Download, register and start a runner for a repo (`--org` for an org, `--labels`, `--name`, `--group`, `--force`). |
-| `remove [owner/repo]` | Stop, unregister and delete it (`--all`, `--force` if GitHub can't be reached). |
-| `stop` / `start [owner/repo]` | Pause a runner without unregistering it. |
+| `add [owner/repo]` | Download, register and start a runner for a repo (`--org` for an org, `--labels`, `--name`, `--group`, `--force`). `--another` adds one more runner to a repo that already has one (`--name` picks its name on GitHub). |
+| `remove [owner/repo]` | Stop, unregister and delete it (`--all`, `--force` if GitHub can't be reached, `--runner <name>` when the repo has several here). |
+| `stop` / `start [owner/repo]` | Pause a runner without unregistering it (every runner of the repo, or one with `--runner`). |
+| `labels [owner/repo]` | Show or change a runner's labels on GitHub, no re-registration (`--set`, `--add`, `--remove`, `--runner`). |
 | `list` | Local state (running, restarting, stopped) and GitHub state (online, busy, offline). `--json`. |
 | `sync` | Add a runner for every private repo you admin; `--dry-run`, `--auto on` to repeat hourly. |
 | `on-demand on\|off\|status` | Watch your repos and start a one-job runner when a matching job is queued (`--max`, `--owners`). |
@@ -193,7 +205,7 @@ only lands on a runner that has every label in its `runs-on:` list.
 | `menu` | Interactive menu in the terminal. |
 | `service install\|uninstall\|start\|stop\|restart\|status` | Run the daemon at login (`uninstall --keep-running` stops only the start at login). |
 | `shortcut install\|uninstall` | App-menu entry that opens the dashboard. |
-| `logs [owner/repo]` | Runner output; `--daemon` for the supervisor, `-f` to follow. |
+| `logs [owner/repo]` | Runner output (`--runner` to pick one); `--daemon` for the supervisor, `-f` to follow. |
 | `update` | Install the latest release now (`--check` only looks). The service also does this by itself. |
 | `doctor` | Check this machine. |
 | `login` | Save a personal access token (for machines without `gh`). |
@@ -203,6 +215,7 @@ only lands on a runner that has every label in its `runs-on:` list.
 
 - **State** lives in `~/.gh-runners` (override with `--home` or `GH_RUNNERS_HOME`):
   `config.json`, `runners/<owner>__<repo>/` (one actions/runner install each;
+  more runners of the same repo go in `runners/<owner>__<repo>__<name>/`;
   the dashboard can move this folder anywhere), a shared download cache, logs
   and the dashboard secret.
 - **Downloads** come from GitHub's official
@@ -297,8 +310,13 @@ GOOS=darwin go vet ./... && GOOS=linux go vet ./...
 CI runs tests, a service install/uninstall smoke test and the install scripts
 on Linux, macOS and Windows for every push. The manual `e2e` workflow registers
 real runners on hosted macOS and Linux (x64 and arm64) machines for a private
-test repo and waits for them to run a job (see the comments in
-`.github/workflows/e2e.yml`). Releases are built by the manually started `release`
+test repo, two per machine, waits for each to run a job and removes one (see
+the comments in `.github/workflows/e2e.yml`). `scripts/ui-test` drives the
+dashboard in headless Chrome (`npm install` there, then `node tour.js`,
+`node flow.js` or `node multi.js` with the unlock link, a screenshot folder and
+a test repo); run it against `gh-runners --home <temp dir> ui --no-browser`,
+never your real runners, and remove what it leaves with `service uninstall` and
+`shortcut uninstall` on that home. Releases are built by the manually started `release`
 workflow (`gh workflow run release.yml -f version=v0.2.0`).
 
 ## License

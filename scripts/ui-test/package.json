@@ -1,0 +1,14 @@
+{
+  "name": "gh-runners-ui-test",
+  "private": true,
+  "description": "Headless Chrome tests of the gh-runners dashboard",
+  "license": "MIT",
+  "scripts": {
+    "tour": "node tour.js",
+    "flow": "node flow.js",
+    "multi": "node multi.js"
+  },
+  "dependencies": {
+    "puppeteer-core": "^23.11.1"
+  }
+}

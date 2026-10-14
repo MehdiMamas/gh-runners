@@ -6,3 +6,4 @@
 graphify-out/
 *.test
 *.out
+/scripts/ui-test/node_modules/

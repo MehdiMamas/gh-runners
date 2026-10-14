@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -407,5 +408,54 @@ func TestAddTaskScopes(t *testing.T) {
 	}
 	if !strings.HasPrefix(scoped["octo/private"], "queued Add a runner to octo/private (heavy)") || !strings.HasPrefix(scoped["octo/public"], "queued") {
 		t.Fatalf("task scopes: %v", scoped)
+	}
+}
+
+func TestSeveralRunnersPerRepo(t *testing.T) {
+	s, h := setup(t)
+	api(t, h, "POST", "/api/login/token", `{"token":"good-token"}`, nil)
+	for _, r := range []store.Runner{
+		{ID: "octo__private", Kind: store.KindRepo, Owner: "octo", Repo: "private", Name: "laptop"},
+		{ID: "octo__private__laptop-2", Kind: store.KindRepo, Owner: "octo", Repo: "private", Name: "laptop-2", Labels: []string{"light"}},
+	} {
+		if err := store.Save(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var repos struct {
+		Repos []repoView `json:"repos"`
+	}
+	api(t, h, "GET", "/api/repos", "", &repos)
+	ids := map[string]string{}
+	for _, r := range repos.Repos {
+		ids[r.FullName] = r.RunnerID + " " + strings.Join(r.RunnerIDs, ",")
+	}
+	if ids["octo/private"] != "octo__private octo__private,octo__private__laptop-2" || ids["octo/public"] != " " {
+		t.Fatalf("runner ids: %v", ids)
+	}
+
+	var e apiError
+	if code := api(t, h, "POST", "/api/add", `{"repos":["octo/private","octo/public"],"another":true,"name":"x"}`, &e); code != 400 {
+		t.Fatalf("one name for two repos: %d %+v", code, e)
+	}
+	block := make(chan struct{})
+	s.startTask(httptest.NewRecorder(), "hold", func(io.Writer) error { <-block; return nil })
+	// Two clicks on Add runner in a row both queue.
+	for _, body := range []string{`{"repos":["octo/private"],"another":true,"labels":["light"]}`, `{"repos":["octo/private"],"another":true,"name":"small"}`} {
+		if code := api(t, h, "POST", "/api/add", body, nil); code != 202 && code != 200 {
+			t.Fatalf("add %s: %d", body, code)
+		}
+	}
+	var tasks []taskView
+	api(t, h, "GET", "/api/tasks", "", &tasks)
+	var titles []string
+	for _, tv := range tasks {
+		if tv.State == "queued" {
+			titles = append(titles, tv.Title)
+		}
+	}
+	sort.Strings(titles)
+	if strings.Join(titles, "|") != "Add another runner to octo/private (light)|Add another runner to octo/private named small" {
+		t.Fatalf("queued: %q", titles)
 	}
 }

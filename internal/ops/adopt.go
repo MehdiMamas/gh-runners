@@ -244,7 +244,10 @@ func Adopt(ctx context.Context, c *github.Client, dir string, log io.Writer) (st
 		fmt.Fprintln(log, "GitHub still shows it busy; the job it had will be retried or fail.")
 	}
 
-	id := freeID(store.IDFor(f.Kind, f.Owner, f.Repo), f.Name)
+	id, err := claimID(store.IDFor(f.Kind, f.Owner, f.Repo), f.Name)
+	if err != nil {
+		return store.Runner{}, err
+	}
 	r := store.Runner{
 		ID: id, Kind: f.Kind, Owner: f.Owner, Repo: f.Repo, Name: f.Name, Labels: labels,
 		CreatedAt: time.Now().UTC(), Source: "adopted", Version: runnerVersion(dir),
@@ -255,6 +258,7 @@ func Adopt(ctx context.Context, c *github.Client, dir string, log io.Writer) (st
 	}
 	fmt.Fprintf(log, "Moving %s to %s ...\n", dir, dst)
 	if err := moveDir(dir, dst); err != nil {
+		_ = os.Remove(dst) // the claimed folder, if still empty
 		return store.Runner{}, fmt.Errorf("could not move the folder (the runner is stopped; start it again from %s with run, or retry): %w", dir, err)
 	}
 	// svc.sh keeps the name of the service it installed here.
@@ -280,24 +284,30 @@ func remoteRunner(ctx context.Context, c *github.Client, scope github.Scope, nam
 	return github.Runner{}, fmt.Errorf("%q is not registered to %s on GitHub any more; delete its folder, or add a new runner instead", name, scope)
 }
 
-// freeID is base, or base plus the runner name when this machine already
-// has a runner for the same repository.
-func freeID(base, name string) string {
-	taken := func(id string) bool {
-		_, err := os.Stat(filepath.Join(store.RunnersDir(), id))
-		return err == nil
+// claimID claims the folder for a runner moved in: base, or base plus the
+// runner name when this machine already has a runner for the same
+// repository. Claiming creates the folder, so an Add running at the same
+// time picks another one.
+func claimID(base, name string) (string, error) {
+	id := store.IDWithName(base, name)
+	for i := 1; i <= 100; i++ {
+		cand := base
+		switch {
+		case i == 2:
+			cand = id
+		case i > 2:
+			cand = fmt.Sprintf("%s-%d", id, i-1)
+		}
+		ok, err := store.Claim(cand)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			return cand, nil
+		}
 	}
-	if !taken(base) {
-		return base
-	}
-	id := base + "__" + strings.Trim(unsafeID.ReplaceAllString(name, "-"), "-")
-	for i := 2; taken(id); i++ {
-		id = fmt.Sprintf("%s__%s-%d", base, strings.Trim(unsafeID.ReplaceAllString(name, "-"), "-"), i)
-	}
-	return id
+	return "", fmt.Errorf("no free folder for %s in %s", name, store.RunnersDir())
 }
-
-var unsafeID = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 // runnerVersion asks the runner in dir for its version.
 func runnerVersion(dir string) string {

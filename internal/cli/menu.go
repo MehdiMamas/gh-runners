@@ -150,7 +150,7 @@ func menuToggle() error {
 	}
 	var opts []huh.Option[string]
 	for _, r := range local {
-		opts = append(opts, huh.NewOption(fmt.Sprintf("%s  [%s]", r.Scope(), onOff(r.Disabled, "stopped", "on")), r.ID))
+		opts = append(opts, huh.NewOption(fmt.Sprintf("%s  [%s]", r.Display(), onOff(r.Disabled, "stopped", "on")), r.ID))
 	}
 	var id string
 	if err := huh.NewSelect[string]().Title("Toggle which runner?").Options(opts...).Value(&id).Run(); err != nil {
@@ -163,7 +163,7 @@ func menuToggle() error {
 	if err := ops.SetDisabled(r, !r.Disabled); err != nil {
 		return err
 	}
-	fmt.Printf("%s is now %s.\n", r.Scope(), onOff(!r.Disabled, "stopped", "on"))
+	fmt.Printf("%s is now %s.\n", r.Display(), onOff(!r.Disabled, "stopped", "on"))
 	return nil
 }
 
@@ -174,7 +174,7 @@ func menuRemove(ctx context.Context, local []store.Runner) error {
 	}
 	var opts []huh.Option[string]
 	for _, r := range local {
-		opts = append(opts, huh.NewOption(r.Scope(), r.ID))
+		opts = append(opts, huh.NewOption(r.Display(), r.ID))
 	}
 	var ids []string
 	if err := huh.NewMultiSelect[string]().Title("Remove which runners?").Options(opts...).Value(&ids).Run(); err != nil {
@@ -200,7 +200,7 @@ func menuRemove(ctx context.Context, local []store.Runner) error {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			continue
 		}
-		fmt.Printf("Removed %s.\n", r.Scope())
+		fmt.Printf("Removed %s.\n", r.Display())
 	}
 	return nil
 }

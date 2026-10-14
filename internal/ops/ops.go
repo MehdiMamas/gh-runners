@@ -65,6 +65,14 @@ type AddOptions struct {
 	AllowPublic bool
 	Force       bool   // reconfigure even if already registered
 	Source      string // "add" | "sync"
+	// Another adds one more runner to a scope that already has one here,
+	// in its own folder and under its own name (Name, or the machine name
+	// with -2, -3, ...). A runner runs one job at a time, so a second one
+	// lets light jobs run while a heavy one is busy.
+	Another bool
+	// Runner picks, by name or folder id, which runner of the scope Force
+	// re-registers when the scope has several.
+	Runner string
 	// RegistrationToken registers with a token from the repo's
 	// Settings > Actions > Runners page instead of calling the API, so no
 	// admin token is needed on this machine.
@@ -97,7 +105,6 @@ func Add(ctx context.Context, c *github.Client, scope github.Scope, o AddOptions
 		}
 	}
 	r := store.Runner{
-		ID:        store.IDFor(kind, scope.Owner, scope.Repo),
 		Kind:      kind,
 		Owner:     scope.Owner,
 		Repo:      scope.Repo,
@@ -108,22 +115,49 @@ func Add(ctx context.Context, c *github.Client, scope github.Scope, o AddOptions
 		Source:    o.Source,
 	}
 	if o.Name != "" {
-		r.Name = o.Name
+		r.Name = strings.TrimSpace(o.Name)
 	}
-	if existing, err := store.Load(r.ID); err == nil && existing.Configured() {
-		if !o.Force {
-			return existing, fmt.Errorf("%s %w (use --force to re-register)", scope, ErrExists)
-		}
-		r.CreatedAt = existing.CreatedAt
-		if err := stopAndWait(existing); err != nil {
+	local, err := store.ForScope(scope.String())
+	if err != nil {
+		return store.Runner{}, err
+	}
+	base := store.IDFor(kind, scope.Owner, scope.Repo)
+	fresh := false // the folder was claimed for this runner: delete it if Add fails
+	if o.Another && len(local) > 0 {
+		if r.ID, r.Name, err = claimAnother(ctx, c, scope, base, o, r.Name, local, log); err != nil {
 			return store.Runner{}, err
 		}
-		// config.sh refuses an already configured directory; --replace
-		// below takes over the old registration on GitHub by name.
-		for _, f := range []string{".runner", ".credentials", ".credentials_rsaparams"} {
-			_ = os.Remove(filepath.Join(r.Dir(), f))
+		fresh = true
+	} else {
+		existing, ok, err := addTarget(scope, local, o)
+		if err != nil {
+			return existing, err
+		}
+		r.ID = base
+		if ok {
+			r.ID = existing.ID
+			if o.Name == "" {
+				r.Name = existing.Name // --replace below must take over this runner, not another one
+			}
+		}
+		if ok && existing.Configured() {
+			r.CreatedAt = existing.CreatedAt
+			if err := stopAndWait(existing); err != nil {
+				return store.Runner{}, err
+			}
+			// config.sh refuses an already configured directory; --replace
+			// below takes over the old registration on GitHub by name.
+			for _, f := range []string{".runner", ".credentials", ".credentials_rsaparams"} {
+				_ = os.Remove(filepath.Join(r.Dir(), f))
+			}
 		}
 	}
+	added := false
+	defer func() {
+		if fresh && !added {
+			_ = removeDir(r.Dir())
+		}
+	}()
 
 	pkg, err := runner.EnsurePackage(ctx, c, scope, log)
 	if err != nil {
@@ -149,6 +183,9 @@ func Add(ctx context.Context, c *github.Client, scope github.Scope, o AddOptions
 	fmt.Fprintf(log, "Registering %q with %s ...\n", r.Name, scope.URL())
 	if err := runner.Configure(ctx, r.Dir(), runner.ConfigureOptions{
 		URL: scope.URL(), Token: token, Name: r.Name, Labels: r.Labels, Group: r.Group,
+		// One more runner must never take over a registration of the same
+		// name (another machine's, or one GitHub lists but we could not see).
+		NoReplace: fresh && !o.Force,
 	}, log); err != nil {
 		return store.Runner{}, err
 	}
@@ -156,8 +193,117 @@ func Add(ctx context.Context, c *github.Client, scope github.Scope, o AddOptions
 	if err := store.Save(r); err != nil {
 		return store.Runner{}, err
 	}
+	added = true
 	_ = control.Reload()
 	return r, nil
+}
+
+// addTarget picks the runner of the scope that Add (without Another)
+// installs into: none for a scope without one, else the only one or the one
+// o.Runner names. It returns ErrExists when that runner is registered and
+// Force is not set.
+func addTarget(scope github.Scope, local []store.Runner, o AddOptions) (store.Runner, bool, error) {
+	if o.Runner != "" {
+		r, err := SelectRunner(local, o.Runner)
+		if err != nil {
+			return store.Runner{}, false, err
+		}
+		local = []store.Runner{r}
+	}
+	if len(local) == 0 {
+		return store.Runner{}, false, nil
+	}
+	for _, r := range local {
+		if r.Configured() && !o.Force {
+			return r, false, fmt.Errorf("%s %w (use --another to add one more, or --force to re-register it)", scope, ErrExists)
+		}
+	}
+	if len(local) > 1 {
+		return store.Runner{}, false, fmt.Errorf("%s has %d runners here (%s); pick one with --runner", scope, len(local), runnerNames(local))
+	}
+	return local[0], true, nil
+}
+
+// claimAnother names one more runner for a scope and claims its folder,
+// base__<name>. Without a picked name it tries the machine name, then
+// name-2, name-3, ..., skipping names this scope already uses here or on
+// GitHub and folders another Add claimed a moment ago.
+func claimAnother(ctx context.Context, c *github.Client, scope github.Scope, base string, o AddOptions, name string, local []store.Runner, log io.Writer) (string, string, error) {
+	used := map[string]bool{}
+	for _, r := range local {
+		used[strings.ToLower(r.Name)] = true
+	}
+	remote := map[string]bool{}
+	if list, err := c.ListRunners(ctx, scope); err == nil {
+		for _, gr := range list {
+			remote[strings.ToLower(gr.Name)] = true
+		}
+	} else if o.Name == "" {
+		fmt.Fprintf(log, "Could not list the runners of %s on GitHub (%v); picking a name from the local ones.\n", scope, err)
+	}
+	if o.Name != "" {
+		switch {
+		case !validName(name):
+			return "", "", fmt.Errorf("%q is not a valid runner name (letters, digits, spaces, . _ - only, at most 64)", name)
+		case used[strings.ToLower(name)]:
+			return "", "", fmt.Errorf("%s already has a runner named %q on this machine", scope, name)
+		case remote[strings.ToLower(name)] && !o.Force:
+			return "", "", fmt.Errorf("a runner named %q is already registered to %s; pick another name (or --force to take over that registration)", name, scope)
+		}
+		id := store.IDWithName(base, name)
+		ok, err := store.Claim(id)
+		if err != nil {
+			return "", "", err
+		}
+		if !ok {
+			return "", "", fmt.Errorf("the folder %s exists already; pick another name, or delete it if no runner uses it", filepath.Join(store.RunnersDir(), id))
+		}
+		return id, name, nil
+	}
+	for n := 1; n <= 100; n++ {
+		cand := name
+		if n > 1 {
+			cand = fmt.Sprintf("%s-%d", name, n)
+		}
+		if used[strings.ToLower(cand)] || remote[strings.ToLower(cand)] {
+			continue
+		}
+		id := store.IDWithName(base, cand)
+		ok, err := store.Claim(id)
+		if err != nil {
+			return "", "", err
+		}
+		if ok {
+			return id, cand, nil
+		}
+	}
+	return "", "", fmt.Errorf("could not find a free runner name for %s; pick one with --name", scope)
+}
+
+var nameRe = regexp.MustCompile(`^[A-Za-z0-9._ -]{1,64}$`)
+
+func validName(name string) bool { return nameRe.MatchString(name) && strings.TrimSpace(name) == name }
+
+// SelectRunner returns the runner of list whose name or folder id is sel.
+func SelectRunner(list []store.Runner, sel string) (store.Runner, error) {
+	sel = strings.TrimSpace(sel)
+	for _, r := range list {
+		if strings.EqualFold(r.Name, sel) || strings.EqualFold(r.ID, sel) {
+			return r, nil
+		}
+	}
+	if len(list) == 0 {
+		return store.Runner{}, fmt.Errorf("no local runner named %q", sel)
+	}
+	return store.Runner{}, fmt.Errorf("no runner named %q for %s here (it has %s)", sel, list[0].Scope(), runnerNames(list))
+}
+
+func runnerNames(list []store.Runner) string {
+	names := make([]string, len(list))
+	for i, r := range list {
+		names[i] = r.Name
+	}
+	return strings.Join(names, ", ")
 }
 
 func configScript() string {
@@ -220,7 +366,7 @@ func Remove(ctx context.Context, c *github.Client, r store.Runner, force bool, l
 		}
 	}
 	if regErr != nil && !force {
-		return fmt.Errorf("could not unregister %s (runner left stopped; rerun with --force to delete it locally anyway): %w", r.Scope(), regErr)
+		return fmt.Errorf("could not unregister %q of %s (runner left stopped; rerun with --force to delete it locally anyway): %w", r.Name, r.Scope(), regErr)
 	}
 	return removeDir(r.Dir())
 }
@@ -316,10 +462,11 @@ func PlanSync(ctx context.Context, c *github.Client, s store.Sync) (SyncPlan, er
 	if err != nil {
 		return SyncPlan{}, err
 	}
-	have := map[string]store.Runner{}
+	have := map[string][]store.Runner{}
 	for _, r := range local {
 		if r.Kind == store.KindRepo {
-			have[strings.ToLower(r.Scope())] = r
+			key := strings.ToLower(r.Scope())
+			have[key] = append(have[key], r)
 		}
 	}
 	f := RepoFilter{Owners: s.Owners, Include: s.Include, Exclude: s.Exclude, IncludePublic: s.IncludePublic, IncludeForks: s.IncludeForks}
@@ -332,21 +479,32 @@ func PlanSync(ctx context.Context, c *github.Client, s store.Sync) (SyncPlan, er
 		}
 		key := strings.ToLower(repo.FullName)
 		wanted[key] = true
-		if r, exists := have[key]; exists && r.Configured() {
+		if anyConfigured(have[key]) {
 			plan.Have++
 			continue
 		}
 		plan.Add = append(plan.Add, repo)
 	}
 	if s.Prune {
-		for key, r := range have {
-			// Only prune what sync created; hand-added runners stay.
-			if !wanted[key] && r.Source == "sync" {
-				plan.Prune = append(plan.Prune, r)
+		for key, rs := range have {
+			for _, r := range rs {
+				// Only prune what sync created; hand-added runners stay.
+				if !wanted[key] && r.Source == "sync" {
+					plan.Prune = append(plan.Prune, r)
+				}
 			}
 		}
 	}
 	return plan, nil
+}
+
+func anyConfigured(rs []store.Runner) bool {
+	for _, r := range rs {
+		if r.Configured() {
+			return true
+		}
+	}
+	return false
 }
 
 // ApplySync adds and prunes per the plan, continuing past per-repo errors.

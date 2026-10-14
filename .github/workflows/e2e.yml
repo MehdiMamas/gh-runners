@@ -1,15 +1,17 @@
 name: e2e
 
 # End-to-end test on hosted macOS and Linux machines: install gh-runners,
-# register a runner for a test repo with a registration token, start it with
-# the login service, and wait until it has run a job from that repo.
+# register two runners for the same test repo with a registration token,
+# start them with the login service, wait until each has run a job from that
+# repo, then remove the second and check the first keeps running.
 #
 # 1. Put a registration token for the test repo in the E2E_REGISTRATION_TOKEN
 #    secret (POST /repos/{owner}/{repo}/actions/runners/registration-token;
 #    it expires after an hour).
 # 2. gh workflow run e2e.yml -f repo=owner/test-repo
 # 3. Once the runners are online, run a workflow in the test repo with
-#    runs-on: [self-hosted, e2e-<this run id>-<os>].
+#    runs-on: [self-hosted, e2e-<this run id>-<os>] and one with
+#    runs-on: [self-hosted, e2e-<this run id>-<os>-2].
 on:
   workflow_dispatch:
     inputs:
@@ -54,21 +56,35 @@ jobs:
         run: |
           ./gh-runners add "$REPO" --registration-token "$REG_TOKEN" --name "$LABEL" --labels "$LABEL"
           ./gh-runners service install
+          # A second runner for the same repo, added while the first runs.
+          ./gh-runners add "$REPO" --registration-token "$REG_TOKEN" --another --name "$LABEL-2" --labels "$LABEL-2"
           ./gh-runners list --offline
-      - name: wait for a job
+          ls "$GH_RUNNERS_HOME/runners"
+      - name: wait for a job on each runner
         env:
           WAIT: ${{ inputs.wait_minutes }}
+          REPO: ${{ inputs.repo }}
         run: |
-          log=$(ls "$GH_RUNNERS_HOME"/runners/*/gh-runners.log)
+          base="$GH_RUNNERS_HOME/runners/$(echo "$REPO" | sed 's|/|__|')"
           end=$(( $(date +%s) + WAIT * 60 ))
-          until grep -q "completed with result" "$log"; do
-            if [ "$(date +%s)" -gt "$end" ]; then
-              echo "no job within $WAIT minutes"; cat "$log"; exit 1
-            fi
-            sleep 10
+          for log in "$base/gh-runners.log" "${base}__$LABEL-2/gh-runners.log"; do
+            until grep -q "completed with result" "$log" 2>/dev/null; do
+              if [ "$(date +%s)" -gt "$end" ]; then
+                echo "no job within $WAIT minutes in $log"; cat "$log" || true; exit 1
+              fi
+              sleep 10
+            done
+            cat "$log"
+            grep -q "completed with result: Succeeded" "$log"
           done
-          cat "$log"
-          grep -q "completed with result: Succeeded" "$log"
+      - name: remove the second runner, the first keeps running
+        env:
+          REPO: ${{ inputs.repo }}
+        run: |
+          ./gh-runners remove "$REPO" --runner "$LABEL-2" --force
+          ./gh-runners list --offline
+          ./gh-runners list --offline --json > list.json
+          jq -e --arg n "$LABEL" 'length == 1 and .[0].name == $n and .[0].local == "running"' list.json
       - name: stop and clean up
         if: always()
         run: |

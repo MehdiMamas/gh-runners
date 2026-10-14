@@ -296,6 +296,18 @@ function signIn() {
 
 // ---------- repositories ----------
 function localRunner(id) { return S.state.runners.find((r) => r.id === id); }
+// localRunners lists the runners of a repository on this computer: a repo
+// can have several (say a heavy one and a light one).
+function localRunners(r) {
+  const ids = r.runner_ids || (r.runner_id ? [r.runner_id] : []);
+  return ids.map(localRunner).filter(Boolean);
+}
+// who names a runner in messages: the scope, plus the runner name when
+// the scope has more than one runner here.
+function who(r) {
+  const n = S.state.runners.filter((x) => x.scope.toLowerCase() === r.scope.toLowerCase()).length;
+  return n > 1 ? r.scope + ' (' + r.name + ')' : r.scope;
+}
 
 function renderRepos() {
   const el = $('tab-repos');
@@ -324,12 +336,12 @@ function renderRepos() {
     if (q && !r.full_name.toLowerCase().includes(q) && !(r.description || '').toLowerCase().includes(q)) return false;
     if (f.owner && r.owner !== f.owner) return false;
     if (f.show === 'private' && (!r.private || r.archived)) return false;
-    if (f.show === 'here' && !r.runner_id) return false;
-    if (f.show === 'none' && (r.runner_id || r.archived)) return false;
+    if (f.show === 'here' && !localRunners(r).length) return false;
+    if (f.show === 'none' && (localRunners(r).length || r.archived)) return false;
     return true;
   });
   const busy = busyScopes();
-  const addable = (r) => r.admin && !r.archived && !r.runner_id && !busy.has(r.full_name.toLowerCase());
+  const addable = (r) => r.admin && !r.archived && !localRunners(r).length && !busy.has(r.full_name.toLowerCase());
   for (const p of [...S.picked]) if (!repos.some((r) => r.full_name === p && addable(r))) S.picked.delete(p);
 
   // Keep focus and caret in the search box across re-renders.
@@ -364,10 +376,11 @@ function renderRepos() {
 }
 
 function repoRow(r, addable) {
-  const lr = r.runner_id ? localRunner(r.runner_id) : null;
+  const lrs = localRunners(r);
   const busy = repoBusy(r.full_name);
   const gh = S.ghRunners[r.full_name] || [];
-  const others = gh.filter((x) => !(lr && x.name === lr.name));
+  const mine = lower(lrs.map((x) => x.name));
+  const others = gh.filter((x) => !mine.includes(x.name.toLowerCase()));
   const hand = (S.found || []).find((f) => f.scope && f.scope.toLowerCase() === r.full_name.toLowerCase() && !f.problem);
   const ghLink = (text, cls) => h('button', { class: 'linkbtn', title: gh.map((x) => x.name + ': ' + stateText(ghState(x))).join(', '), onclick: () => repoRunnersDialog(r.full_name) }, h('span', { class: 'pill ' + cls }, text));
   let status = h('span', { class: 'muted small' }, r.archived ? 'Archived' : 'No runner here');
@@ -376,16 +389,17 @@ function repoRow(r, addable) {
     status = ghLink(gh.length === 1 ? '1 runner on GitHub' : gh.length + ' runners on GitHub', online ? 'ok' : '');
   }
   let actions = [];
-  if (busy && !lr) {
+  if (busy && !lrs.length) {
     status = h('span', { class: 'pill info' }, busyText(busy));
     actions = [h('button', { class: 'btn primary small', disabled: true }, busy.state === 'running' ? h('div', { class: 'spinner' }) : null, busyText(busy))];
-  } else if (lr) {
-    status = pill(lr.state);
-    actions = [lr.disabled
-      ? h('button', { class: 'btn small', onclick: () => startStop(lr, false) }, 'Start')
-      : h('button', { class: 'btn small', onclick: () => startStop(lr, true) }, 'Stop'),
-    h('button', { class: 'btn small', onclick: () => showLog(lr) }, 'Logs'),
-    h('button', { class: 'btn small danger', onclick: () => removeRunner(lr) }, 'Remove')];
+  } else if (lrs.length) {
+    // Each runner here gets its own row below; this one adds more. Adds
+    // queue one after another, so a click while one runs is fine.
+    status = busy ? h('span', { class: 'pill info' }, busyText(busy))
+      : h('span', { class: 'pill plain ok' }, lrs.length === 1 ? '1 runner here' : lrs.length + ' runners here');
+    actions = r.admin && !r.archived
+      ? [h('button', { class: 'btn small', title: 'Add one more runner for ' + r.full_name + ', say a light one next to a heavy one', onclick: () => addRepos([r.full_name], true) }, 'Add runner')]
+      : [];
   } else if (!r.admin) {
     actions = [h('span', { class: 'muted small', title: 'Only repository admins can add runners' }, 'Needs admin rights')];
   } else if (!r.archived && hand) {
@@ -394,8 +408,7 @@ function repoRow(r, addable) {
   } else if (!r.archived) {
     actions = [h('button', { class: 'btn primary small', onclick: () => addRepos([r.full_name]) }, 'Add runner')];
   }
-  const extraLabels = lr ? lr.labels.filter((l) => !lower(S.state.machine_labels).includes(l.toLowerCase())) : [];
-  return h('div', { class: 'item' + (r.archived ? ' dim' : '') },
+  const row = h('div', { class: 'item' + (r.archived ? ' dim' : '') + (lrs.length ? ' has-runners' : ''), 'data-repo': r.full_name },
     h('input', { type: 'checkbox', disabled: !addable, checked: S.picked.has(r.full_name), 'aria-label': 'Select ' + r.full_name,
       onchange: (e) => { e.target.checked ? S.picked.add(r.full_name) : S.picked.delete(r.full_name); renderRepos(); } }),
     h('div', {},
@@ -404,38 +417,63 @@ function repoRow(r, addable) {
       h('div', { class: 'meta' },
         h('span', { class: 'pill plain ' + (r.private ? '' : 'warn') }, r.private ? 'Private' : 'Public'),
         r.fork ? h('span', { class: 'pill plain' }, 'Fork') : null,
-        extraLabels.map((l) => h('span', { class: 'chip custom', title: 'Label of the runner here' }, l)),
-        lr && others.length ? h('button', { class: 'linkbtn small', onclick: () => repoRunnersDialog(r.full_name) }, '+' + others.length + ' more on GitHub') : null,
+        lrs.length && others.length ? h('button', { class: 'linkbtn small', onclick: () => repoRunnersDialog(r.full_name) }, '+' + others.length + ' more on GitHub') : null,
         r.pushed_at ? h('span', { class: 'muted small' }, 'pushed ' + ago(r.pushed_at)) : null)),
     h('div', { class: 'status' }, status),
     h('div', { class: 'actions' }, actions));
+  return [row, lrs.map(runnerRow)];
 }
 
-async function addRepos(names) {
-  names = names.filter((n) => !repoBusy(n));
+// runnerRow is one runner of a repository on this computer, under the
+// repository's row, with its own state, labels and buttons.
+function runnerRow(lr) {
+  const extra = lr.labels.filter((l) => !lower(S.state.machine_labels).includes(l.toLowerCase()));
+  return h('div', { class: 'item sub', 'data-runner': lr.id },
+    h('span', { class: 'branch', 'aria-hidden': 'true' }),
+    h('div', {},
+      h('div', { class: 'name' }, h('span', { class: 'muted' }, 'Runner '), lr.name),
+      h('div', { class: 'meta' },
+        extra.length ? extra.map((l) => h('span', { class: 'chip custom', title: 'Label of this runner' }, l))
+          : h('span', { class: 'muted small' }, 'No custom labels: takes any job for self-hosted ' + osName(S.state.os)))),
+    h('div', { class: 'status' }, pill(lr.state)),
+    h('div', { class: 'actions' },
+      lr.disabled
+        ? h('button', { class: 'btn small', onclick: () => startStop(lr, false) }, 'Start')
+        : h('button', { class: 'btn small', onclick: () => startStop(lr, true) }, 'Stop'),
+      h('button', { class: 'btn small', onclick: () => showLog(lr) }, 'Logs'),
+      S.state.auth.signed_in ? h('button', { class: 'btn small', onclick: () => editLocalLabels(lr) }, 'Edit labels') : null,
+      h('button', { class: 'btn small danger', onclick: () => removeRunner(lr) }, 'Remove')));
+}
+
+// addRepos adds a runner to each repository. another adds one more to
+// repositories that already have a runner here.
+async function addRepos(names, another) {
+  if (!another) names = names.filter((n) => !repoBusy(n));
   if (!names.length) return;
   const repos = (S.repos ? S.repos.repos : []).filter((r) => names.includes(r.full_name));
   const pub = repos.filter((r) => !r.private).map((r) => r.full_name);
-  if (pub.length) {
+  // The warning was already accepted when the first runner was added.
+  if (pub.length && !another) {
     const ok = await confirmDialog('Add a runner to a public repository?', [
       h('p', {}, h('b', {}, pub.join(', ')), pub.length === 1 ? ' is public.' : ' are public.'),
       h('p', {}, 'Anyone on GitHub can open a pull request whose workflow then runs on this computer, with your files in reach. GitHub recommends self-hosted runners only for private repositories.')],
     'Add anyway', true);
     if (!ok) return;
   }
-  const labels = await pickLabels(names);
-  if (labels === null) return;
+  const picked = await pickLabels(names, another);
+  if (picked === null) return;
+  const { labels, name } = picked;
   // Another add may have started while the dialog was open.
-  names = names.filter((n) => !repoBusy(n));
+  if (!another) names = names.filter((n) => !repoBusy(n));
   if (!names.length) return;
   const keys = names.map((n) => n.toLowerCase());
   keys.forEach((k) => S.pending.add(k));
   names.forEach((n) => S.picked.delete(n));
   renderRepos();
   await guard(async () => {
-    await api('POST', '/api/add', { repos: names, labels, allow_public: pub.length > 0 });
+    await api('POST', '/api/add', { repos: names, labels, allow_public: pub.length > 0, another: !!another, name: name || undefined });
     const tag = labels.length ? ' (' + labels.join(', ') + ')' : '';
-    toast((names.length === 1 ? 'Adding a runner to ' + names[0] : 'Adding ' + names.length + ' runners') + tag + ' ...');
+    toast((names.length === 1 ? (another ? 'Adding another runner to ' : 'Adding a runner to ') + names[0] : 'Adding ' + names.length + ' runners') + tag + ' ...');
   });
   await loadTasks();
   keys.forEach((k) => S.pending.delete(k));
@@ -536,10 +574,16 @@ function labelEditor(labels, fixed, onchange) {
 }
 
 // pickLabels asks which labels new runners get, suggesting the ones the
-// repositories' workflows ask for. It resolves to null when cancelled.
-function pickLabels(names) {
+// repositories' workflows ask for, and, for one more runner of a single
+// repository, its name. It resolves to {labels, name}, or null when
+// cancelled.
+function pickLabels(names, another) {
   const fixed = S.state.machine_labels.slice();
   const chosen = [];
+  const base = (S.state.config && S.state.config.runner_name) || S.state.hostname;
+  const nameInput = another && names.length === 1
+    ? h('input', { type: 'text', 'aria-label': 'Runner name', placeholder: base + '-2', maxlength: '64' })
+    : null;
   return new Promise((resolve) => {
     let answered = false;
     const done = (v) => { answered = true; closeDialog(); resolve(v); };
@@ -565,15 +609,18 @@ function pickLabels(names) {
     const editor = labelEditor(chosen, fixed, drawSets);
     const n = names.length;
     openDialog({
-      title: n === 1 ? 'Add a runner to ' + names[0] : 'Add runners to ' + n + ' repositories',
+      title: n === 1 ? (another ? 'Add another runner to ' : 'Add a runner to ') + names[0] : (another ? 'Add another runner to ' : 'Add runners to ') + n + ' repositories',
       body: [
+        another ? h('p', {}, 'A runner takes one job at a time. A second runner with other labels, say light next to heavy, lets short jobs run while a long one is busy. The runners already here keep running.') : null,
         h('p', { class: 'muted' }, 'A job runs on a runner that has every label in its runs-on. With runs-on: [self-hosted, heavy], only runners labelled heavy take it.'),
         setsBox,
         h('h3', {}, 'Labels of the new runner' + (n > 1 ? 's' : '')),
         editor.el,
-        h('p', { class: 'muted small' }, 'GitHub adds self-hosted, the OS and the CPU; gh-runners adds ' + list(fixed.slice(3)) + '. You can change labels later.')],
+        h('p', { class: 'muted small' }, 'GitHub adds self-hosted, the OS and the CPU; gh-runners adds ' + list(fixed.slice(3)) + '. You can change labels later.'),
+        nameInput ? [h('h3', {}, 'Name on GitHub'), nameInput,
+          h('p', { class: 'muted small' }, 'Leave it empty to get the next free name, like ' + base + '-2. It must not be taken by another runner of ' + names[0] + '.')] : null],
       foot: [h('button', { class: 'btn', onclick: () => done(null) }, 'Cancel'),
-        h('button', { class: 'btn primary', onclick: () => { editor.take(); done(chosen.slice()); } }, n === 1 ? 'Add runner' : 'Add ' + n + ' runners')],
+        h('button', { class: 'btn primary', onclick: () => { editor.take(); done({ labels: chosen.slice(), name: nameInput ? nameInput.value.trim() : '' }); } }, n === 1 ? 'Add runner' : 'Add ' + n + ' runners')],
       onclose: () => { if (!answered) resolve(null); },
     });
     const look = names.slice(0, 20);
@@ -742,14 +789,16 @@ async function addOrg(org) {
 async function startStop(r, stop) {
   await guard(async () => {
     await api('POST', `/api/runners/${encodeURIComponent(r.id)}/${stop ? 'stop' : 'start'}`);
-    toast(r.scope + (stop ? ' is stopping' : ' is starting'));
+    toast(who(r) + (stop ? ' is stopping' : ' is starting'));
     await refreshState();
   });
 }
 
 async function removeRunner(r) {
-  const body = [h('p', {}, 'This stops the runner, removes it from ', h('b', {}, r.scope), ' on GitHub and deletes its folder:'), h('p', {}, h('code', {}, r.dir))];
-  if (!await confirmDialog('Remove the runner?', body, 'Remove', true)) return;
+  const rest = S.state.runners.filter((x) => x.id !== r.id && x.scope.toLowerCase() === r.scope.toLowerCase());
+  const body = [h('p', {}, 'This stops the runner ', h('b', {}, r.name), ', removes it from ', h('b', {}, r.scope), ' on GitHub and deletes its folder:'), h('p', {}, h('code', {}, r.dir)),
+    rest.length ? h('p', { class: 'muted' }, 'The other runner' + (rest.length > 1 ? 's' : '') + ' of ' + r.scope + ' here (' + rest.map((x) => x.name).join(', ') + ') keep' + (rest.length > 1 ? '' : 's') + ' running.') : null];
+  if (!await confirmDialog('Remove the runner ' + r.name + '?', body, 'Remove', true)) return;
   await guard(async () => { await api('POST', `/api/runners/${encodeURIComponent(r.id)}/remove`); loadTasks(); });
 }
 
@@ -764,7 +813,7 @@ function showLog(r) {
       if (pre.textContent !== d.text) { pre.textContent = d.text; if (stick) pre.scrollTop = pre.scrollHeight; }
     } catch (e) { pre.textContent = e.message; }
   };
-  openDialog({ title: r ? 'Output of ' + r.scope : 'gh-runners background service log', body: pre, wide: true, onclose: () => clearInterval(timer) });
+  openDialog({ title: r ? 'Output of ' + who(r) :'gh-runners background service log', body: pre, wide: true, onclose: () => clearInterval(timer) });
   load();
   timer = setInterval(load, 2000);
 }
@@ -779,7 +828,7 @@ function renderMachine() {
     const runsOn = '[self-hosted, ' + (r.labels.find((l) => l !== 'gh-runners') || osName(st.os)) + ']';
     return h('div', { class: 'card runner' },
       h('div', { class: 'card-head' },
-        h('div', {}, h('div', { class: 'title' }, r.kind === 'org' ? r.scope + ' (organization)' : r.scope), h('div', { class: 'muted small' }, 'runner name: ' + r.name)),
+        h('div', {}, h('div', { class: 'title' }, r.kind === 'org' ? r.scope + ' (organization)' : who(r)), h('div', { class: 'muted small' }, 'runner name: ' + r.name)),
         pill(r.state)),
       h('dl', { class: 'kv' },
         h('dt', {}, 'GitHub'), h('dd', {}, remote ? pill(remote) : h('span', { class: 'muted' }, st.auth.signed_in ? 'checking ...' : 'sign in to see')),
