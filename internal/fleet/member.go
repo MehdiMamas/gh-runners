@@ -97,7 +97,7 @@ func (m *Member) Status() MemberStatus {
 	st, ok, err := loadMember(m.Dir)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	s := MemberStatus{Joined: ok, HostName: st.HostName, Connected: m.c != nil, Since: m.since, Addr: m.addr, Error: m.err}
+	s := MemberStatus{Joined: ok, HostName: st.HostName, Connected: ok && m.c != nil, Since: m.since, Addr: m.addr, Error: m.err}
 	if err != nil {
 		s.Error = err.Error()
 	}
@@ -276,13 +276,13 @@ func (m *Member) sendStatus(ctx context.Context, c *conn, st memberState, stop c
 
 // removed forgets the host after it removed this machine.
 func (m *Member) removed(st memberState) {
+	m.mu.Lock()
+	m.c, m.addr, m.err = nil, "", ErrRevoked.Error()
+	m.mu.Unlock()
 	cur, ok, _ := loadMember(m.Dir)
 	if ok && cur.MemberID == st.MemberID {
 		_ = os.Remove(statePath(m.Dir))
 	}
-	m.mu.Lock()
-	m.err = ErrRevoked.Error()
-	m.mu.Unlock()
 	m.logf("the main host %s removed this machine", st.HostName)
 	if m.OnChange != nil {
 		m.OnChange()
