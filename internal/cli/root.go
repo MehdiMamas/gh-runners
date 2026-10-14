@@ -33,19 +33,18 @@ func newRoot() *cobra.Command {
 		Use:   "gh-runners",
 		Short: "Self-hosted GitHub Actions runners on your own machines, without the busywork",
 		Long: `gh-runners registers GitHub Actions self-hosted runners on this machine and
-keeps them running: one command per repo (or none, with sync or on-demand
-mode), a background daemon that restarts them, and login autostart on
-macOS, Linux and Windows.
+keeps them running: one click or command per repo (or none, with sync or
+on-demand mode), a background daemon that restarts them, and login
+autostart on macOS, Linux and Windows.
 
-Run it with no arguments for an interactive menu.`,
+Run it with no arguments to open the dashboard in your browser, or use
+` + "`gh-runners menu`" + ` for a menu in the terminal.`,
 		Version:       Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Args:          cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !interactive() {
-				return cmd.Help()
-			}
-			return runMenu(cmd.Context())
+			return newUICmd().RunE(cmd, args)
 		},
 	}
 	var home string
@@ -58,7 +57,7 @@ Run it with no arguments for an interactive menu.`,
 	root.AddCommand(
 		newAddCmd(), newRemoveCmd(), newListCmd(), newStartStopCmd(true), newStartStopCmd(false),
 		newSyncCmd(), newOnDemandCmd(), newServiceCmd(), newDaemonCmd(), newLogsCmd(),
-		newDoctorCmd(), newLoginCmd(), newConfigCmd(),
+		newDoctorCmd(), newLoginCmd(), newConfigCmd(), newUICmd(), newMenuCmd(), newShortcutCmd(),
 	)
 	return root
 }

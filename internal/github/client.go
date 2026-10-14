@@ -62,9 +62,12 @@ func IsNotFound(err error) bool {
 	return errors.As(err, &ae) && ae.Status == http.StatusNotFound
 }
 
+// APIBase is the REST API that New points at; tests use a fake server.
+var APIBase = "https://api.github.com"
+
 // New returns a client using the token found by ResolveToken.
 func New(token string) *Client {
-	return &Client{Token: token, BaseURL: "https://api.github.com", HTTP: &http.Client{Timeout: 60 * time.Second}}
+	return &Client{Token: token, BaseURL: APIBase, HTTP: &http.Client{Timeout: 60 * time.Second}}
 }
 
 // TokenSource names where a token came from, for `doctor`.
@@ -74,19 +77,12 @@ type TokenSource struct {
 }
 
 // ResolveToken finds a token: GH_RUNNERS_TOKEN, GH_TOKEN, GITHUB_TOKEN, then
-// `gh auth token`, then the token saved by `gh-runners login` (savedPath).
+// the token saved by `gh-runners login` or the dashboard's sign-in
+// (savedPath), then `gh auth token`.
 func ResolveToken(savedPath string) (TokenSource, error) {
 	for _, env := range []string{"GH_RUNNERS_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"} {
 		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
 			return TokenSource{v, "$" + env}, nil
-		}
-	}
-	if gh, err := exec.LookPath("gh"); err == nil {
-		out, err := exec.Command(gh, "auth", "token", "--hostname", "github.com").Output()
-		if err == nil {
-			if t := strings.TrimSpace(string(out)); t != "" {
-				return TokenSource{t, "gh auth token"}, nil
-			}
 		}
 	}
 	if savedPath != "" {
@@ -96,7 +92,17 @@ func ResolveToken(savedPath string) (TokenSource, error) {
 			}
 		}
 	}
-	return TokenSource{}, errors.New("no GitHub token found: install the GitHub CLI and run `gh auth login`, or run `gh-runners login` with a personal access token")
+	if gh, err := exec.LookPath("gh"); err == nil {
+		cmd := exec.Command(gh, "auth", "token", "--hostname", "github.com")
+		hideWindow(cmd)
+		out, err := cmd.Output()
+		if err == nil {
+			if t := strings.TrimSpace(string(out)); t != "" {
+				return TokenSource{t, "gh auth token"}, nil
+			}
+		}
+	}
+	return TokenSource{}, errors.New("not signed in to GitHub: sign in from the dashboard (gh-runners ui), run `gh auth login`, or run `gh-runners login` with a personal access token")
 }
 
 func (c *Client) headers(req *http.Request) {
@@ -340,14 +346,16 @@ func (c *Client) GenerateJITConfig(ctx context.Context, s Scope, name string, la
 
 // Repo is the subset of repository fields gh-runners uses.
 type Repo struct {
-	FullName string `json:"full_name"`
-	Name     string `json:"name"`
-	Private  bool   `json:"private"`
-	Archived bool   `json:"archived"`
-	Fork     bool   `json:"fork"`
-	Disabled bool   `json:"disabled"`
-	PushedAt string `json:"pushed_at"`
-	Owner    struct {
+	FullName    string `json:"full_name"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	HTMLURL     string `json:"html_url"`
+	Private     bool   `json:"private"`
+	Archived    bool   `json:"archived"`
+	Fork        bool   `json:"fork"`
+	Disabled    bool   `json:"disabled"`
+	PushedAt    string `json:"pushed_at"`
+	Owner       struct {
 		Login string `json:"login"`
 		Type  string `json:"type"`
 	} `json:"owner"`
@@ -381,7 +389,9 @@ func (c *Client) ListMyRepos(ctx context.Context) ([]Repo, error) {
 
 // User is the authenticated user.
 type User struct {
-	Login string `json:"login"`
+	Login     string `json:"login"`
+	Name      string `json:"name"`
+	AvatarURL string `json:"avatar_url"`
 }
 
 // Me returns the authenticated user and the token's OAuth scopes (classic tokens only).

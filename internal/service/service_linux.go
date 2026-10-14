@@ -157,3 +157,10 @@ func status() Status {
 	}
 	return Status{Where: unitPath()}
 }
+
+func uninstallKeepRunning() error {
+	if err := uninstall(); err != nil {
+		return err
+	}
+	return StartDetached()
+}

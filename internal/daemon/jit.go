@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -53,9 +52,21 @@ type jitManager struct {
 	lastErr  string
 	enabled  bool
 	watching int
+	wakeUp   chan struct{}
 }
 
-func newJITManager(d *Daemon) *jitManager { return &jitManager{d: d} }
+func newJITManager(d *Daemon) *jitManager {
+	return &jitManager{d: d, wakeUp: make(chan struct{}, 1)}
+}
+
+// wake makes the loop re-read the config and the repository list now,
+// after the dashboard changed the on-demand settings.
+func (m *jitManager) wake() {
+	m.mu.Lock()
+	m.reposAt = time.Time{}
+	m.mu.Unlock()
+	nudge(m.wakeUp)
+}
 
 func (m *jitManager) states() []control.ProcState {
 	m.mu.Lock()
@@ -110,17 +121,14 @@ func (m *jitManager) loop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(poll):
+		case <-m.wakeUp:
 		}
 	}
 }
 
 // MachineLabels is the full label set a runner on this machine answers to:
 // what GitHub adds by default plus the configured custom labels.
-func MachineLabels(cfg store.Config) []string {
-	osLabel := map[string]string{"darwin": "macOS", "linux": "Linux", "windows": "Windows"}[runtime.GOOS]
-	archLabel := map[string]string{"amd64": "X64", "arm64": "ARM64", "arm": "ARM"}[runtime.GOARCH]
-	return append([]string{"self-hosted", osLabel, archLabel}, ops.Labels(cfg, nil)...)
-}
+func MachineLabels(cfg store.Config) []string { return ops.MachineLabels(cfg) }
 
 // JobMatches reports whether every runs-on label of a job is one we have.
 func JobMatches(jobLabels, ours []string) bool {

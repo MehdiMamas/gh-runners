@@ -3,6 +3,14 @@
 Self-hosted GitHub Actions runners on your own Mac, Linux box and Windows PC,
 without downloading a runner and running `config.sh` by hand for every repository.
 
+Run `gh-runners` and a dashboard opens in your browser: sign in to GitHub, see
+all your repositories, click **Add runner** next to one, and it downloads,
+registers and starts a runner on this computer. Everything else (stop, start,
+logs, a runner for every repo, on-demand runners, where the runners live, start
+at login) is a click away too.
+
+Prefer a terminal? Every action is also a command:
+
 ```sh
 gh-runners add MehdiMamas/my-app   # one repo
 gh-runners sync --auto on          # every private repo you own, now and in future
@@ -64,9 +72,37 @@ gh runners doctor
 (`gh-runners-darwin-universal` runs on every Mac). On macOS, a file downloaded
 with a browser is quarantined because it is not notarized; clear that once with
 `xattr -d com.apple.quarantine ./gh-runners-darwin-universal`, then
-`chmod +x` it. Double-clicking it opens the interactive menu in Terminal.
+`chmod +x` it. Double-clicking it opens the dashboard.
 
 **From source:** `go install github.com/MehdiMamas/gh-runners@latest`
+
+## Dashboard
+
+```sh
+gh-runners          # or: gh-runners ui
+```
+
+starts the background service if it isn't running and opens
+`http://127.0.0.1:47321` in your browser. The installers also add a
+**gh-runners** entry to the Start Menu (Windows), `~/Applications` (macOS) or
+your app menu (Linux) that does the same; `gh-runners shortcut install|uninstall`
+manages it.
+
+| Tab | What you do there |
+| --- | --- |
+| Repositories | Every repo you can reach, filter by owner and name, **Add runner** on one or tick several and add them all. Public repos ask first. |
+| This machine | Each runner here: state on this computer and on GitHub, labels, a `runs-on:` line to copy, **Stop**, **Start**, **Logs**, **Remove**. |
+| Automation | A runner for every repo that matches your rules (with preview), or on-demand runners. |
+| Activity | What the dashboard did, with the output of each step, and the service log. |
+| Settings | GitHub account (sign in, switch, sign out), the **runners folder** (pick any folder or disk; existing runners are moved there), runner name and labels, start at login. |
+| Health | The same checks as `gh-runners doctor`. |
+
+The dashboard only listens on `127.0.0.1`. The link `gh-runners ui` prints
+carries a secret that unlocks it in your browser once (it is kept in a cookie);
+other web pages and other users on the machine can't use it. On a remote
+machine, forward the port: `ssh -L 47321:127.0.0.1:47321 that-machine`, then
+open the link the command printed there. Change the port with
+`"dashboard_port"` in `~/.gh-runners/config.json`.
 
 ## Sign in
 
@@ -74,8 +110,13 @@ gh-runners needs a GitHub token with admin rights on the repos it manages. It
 uses the first of:
 
 1. `GH_RUNNERS_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN`
-2. the GitHub CLI (`gh auth login` once; nothing else to do)
-3. a token saved with `gh-runners login`
+2. a token you signed in with in the dashboard or with `gh-runners login`
+3. the GitHub CLI (`gh auth login` once; nothing else to do)
+
+In the dashboard, **Settings > GitHub account** takes a token you paste (the
+button opens GitHub's token page with the right scopes ticked). Builds with an
+OAuth app configured also offer **Sign in with GitHub**: you type a short code
+on github.com and never handle a token.
 
 For a classic token, the `repo` scope is enough for repo runners; organization
 runners also need `admin:org`. A fine-grained token needs *Administration: read
@@ -97,8 +138,8 @@ gh-runners service install        # start now and at every login
 gh-runners list                   # local and GitHub state of every runner
 ```
 
-Run `gh-runners` with no arguments for an interactive menu: pick repos from a
-list, see status, toggle sync and on-demand mode, install the service.
+Run `gh-runners` with no arguments for the dashboard, or `gh-runners menu` for
+an interactive menu in the terminal.
 
 Then target the runner in a workflow:
 
@@ -124,7 +165,10 @@ Every runner gets the labels GitHub adds (`self-hosted`, the OS, the CPU) plus
 | `list` | Local state (running, restarting, stopped) and GitHub state (online, busy, offline). `--json`. |
 | `sync` | Add a runner for every private repo you admin; `--dry-run`, `--auto on` to repeat hourly. |
 | `on-demand on\|off\|status` | Watch your repos and start a one-job runner when a matching job is queued (`--max`, `--owners`). |
-| `service install\|uninstall\|start\|stop\|status` | Run the daemon at login. |
+| `ui` | Open the dashboard (starts the service if needed; `--no-browser` only prints the link). |
+| `menu` | Interactive menu in the terminal. |
+| `service install\|uninstall\|start\|stop\|restart\|status` | Run the daemon at login (`uninstall --keep-running` stops only the start at login). |
+| `shortcut install\|uninstall` | App-menu entry that opens the dashboard. |
 | `logs [owner/repo]` | Runner output; `--daemon` for the supervisor, `-f` to follow. |
 | `doctor` | Check this machine. |
 | `login` | Save a personal access token (for machines without `gh`). |
@@ -133,14 +177,16 @@ Every runner gets the labels GitHub adds (`self-hosted`, the OS, the CPU) plus
 ## How it works
 
 - **State** lives in `~/.gh-runners` (override with `--home` or `GH_RUNNERS_HOME`):
-  `config.json`, `runners/<owner>__<repo>/` (one actions/runner install each),
-  a shared download cache, and logs.
+  `config.json`, `runners/<owner>__<repo>/` (one actions/runner install each;
+  the dashboard can move this folder anywhere), a shared download cache, logs
+  and the dashboard secret.
 - **Downloads** come from GitHub's official
   [actions/runner](https://github.com/actions/runner) releases and are checked
   against GitHub's SHA-256 checksums. Each runner updates itself, as usual.
 - **The daemon** (`gh-runners daemon`) starts each runner's `run.sh`/`run.cmd`,
   restarts it with backoff if it exits, rotates logs and listens only on
-  127.0.0.1 with a per-start secret. The CLI talks to it to start and stop runners.
+  127.0.0.1 with a per-start secret. The CLI talks to it to start and stop
+  runners, and it serves the dashboard on the same port.
 - **Service**: macOS LaunchAgent (`~/Library/LaunchAgents/io.github.mehdimamas.gh-runners.plist`),
   Linux systemd user unit (`~/.config/systemd/user/gh-runners.service`, with
   lingering enabled so it runs without a login; a `@reboot` crontab entry where
@@ -200,7 +246,8 @@ background service if it was running. Runners themselves auto-update.
 ```sh
 gh-runners remove --all
 gh-runners service uninstall
-rm -rf ~/.gh-runners   # and the binary
+gh-runners shortcut uninstall
+rm -rf ~/.gh-runners   # and the binary (and your runners folder, if you moved it)
 ```
 
 ## Development

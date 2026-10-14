@@ -111,3 +111,10 @@ func status() Status {
 	_, err := os.Stat(plistPath())
 	return Status{Installed: err == nil, Where: plistPath()}
 }
+
+func uninstallKeepRunning() error {
+	if err := uninstall(); err != nil {
+		return err
+	}
+	return StartDetached()
+}

@@ -20,6 +20,7 @@ import (
 	"github.com/MehdiMamas/gh-runners/internal/github"
 	"github.com/MehdiMamas/gh-runners/internal/ops"
 	"github.com/MehdiMamas/gh-runners/internal/service"
+	"github.com/MehdiMamas/gh-runners/internal/shortcut"
 	"github.com/MehdiMamas/gh-runners/internal/store"
 )
 
@@ -89,7 +90,7 @@ func afterChange() {
 		}
 		return
 	}
-	fmt.Println("Nothing runs it yet. Run `gh-runners service install` once on this machine to start runners now and at every login.")
+	fmt.Println("Nothing runs it yet. Run `gh-runners service install` once on this machine to start runners now and at every login (or turn on \"Start at login\" in `gh-runners ui`).")
 }
 
 func splitList(s string) []string {
@@ -236,10 +237,6 @@ func newListCmd() *cobra.Command {
 func collectRows(cmd *cobra.Command, offline bool) ([]listRow, control.Status, error) {
 	runners, _ := store.List()
 	st, derr := control.GetStatus()
-	procs := map[string]control.ProcState{}
-	for _, p := range st.Runners {
-		procs[p.ID] = p
-	}
 	var c *github.Client
 	if !offline {
 		c, _ = client()
@@ -248,21 +245,7 @@ func collectRows(cmd *cobra.Command, offline bool) ([]listRow, control.Status, e
 	rows := []listRow{}
 	for _, r := range runners {
 		row := listRow{Scope: r.Scope(), Name: r.Name, Labels: r.Labels, Dir: r.Dir(), GitHub: "?"}
-		switch p, ok := procs[r.ID]; {
-		case !r.Configured():
-			row.Local = "not registered"
-		case r.Disabled:
-			row.Local = "stopped"
-		case derr != nil:
-			row.Local = "no daemon"
-		case ok && p.State == "backoff":
-			row.Local = fmt.Sprintf("restarting in %s", time.Until(p.NextStart).Round(time.Second))
-			row.LastErr = p.LastExit
-		case ok:
-			row.Local = p.State
-		default:
-			row.Local = "starting"
-		}
+		row.Local, row.LastErr = ops.LocalState(r, st, derr == nil)
 		if c != nil {
 			byName, seen := remote[r.Scope()]
 			if !seen {
@@ -426,6 +409,22 @@ Target it from a workflow with labels this machine has, for example:
 }
 
 func newServiceCmd() *cobra.Command {
+	var keep bool
+	uninstall := &cobra.Command{Use: "uninstall", Short: "Stop the daemon and remove the login entry", RunE: func(*cobra.Command, []string) error {
+		if keep {
+			if err := service.UninstallKeepRunning(); err != nil {
+				return err
+			}
+			fmt.Println("Removed the login entry. The daemon keeps running until you log out or stop it.")
+			return nil
+		}
+		if err := service.Uninstall(); err != nil {
+			return err
+		}
+		fmt.Println("Uninstalled. Runners stay registered; `gh-runners service install` brings them back.")
+		return nil
+	}}
+	uninstall.Flags().BoolVar(&keep, "keep-running", false, "only remove the login entry; leave the daemon running for now")
 	cmd := &cobra.Command{
 		Use:   "service",
 		Short: "Start the daemon at login (launchd, systemd --user, or the Windows Run key)",
@@ -437,15 +436,12 @@ func newServiceCmd() *cobra.Command {
 				return err
 			}
 			fmt.Printf("Installed (%s). The daemon is running.\n", where)
-			return nil
-		}},
-		&cobra.Command{Use: "uninstall", Short: "Stop the daemon and remove the login entry", RunE: func(*cobra.Command, []string) error {
-			if err := service.Uninstall(); err != nil {
-				return err
+			if lnk, err := shortcut.Install(); err == nil {
+				fmt.Printf("Open the dashboard from %s or with `gh-runners ui`.\n", lnk)
 			}
-			fmt.Println("Uninstalled. Runners stay registered; `gh-runners service install` brings them back.")
 			return nil
 		}},
+		uninstall,
 		&cobra.Command{Use: "start", Short: "Start the daemon now", RunE: func(*cobra.Command, []string) error {
 			if err := service.Start(); err != nil {
 				return err
@@ -458,6 +454,13 @@ func newServiceCmd() *cobra.Command {
 				return err
 			}
 			fmt.Println("Stopped.")
+			return nil
+		}},
+		&cobra.Command{Use: "restart", Short: "Stop and start the daemon (after an update, for example)", RunE: func(*cobra.Command, []string) error {
+			if err := service.Restart(); err != nil {
+				return err
+			}
+			fmt.Println("The daemon is running.")
 			return nil
 		}},
 		&cobra.Command{Use: "status", Short: "Show whether the daemon is installed and running", RunE: func(*cobra.Command, []string) error {
@@ -541,7 +544,8 @@ func newLoginCmd() *cobra.Command {
 		Use:   "login",
 		Short: "Save a personal access token, for machines without the GitHub CLI",
 		Long: `gh-runners uses, in order: $GH_RUNNERS_TOKEN, $GH_TOKEN, $GITHUB_TOKEN,
-the GitHub CLI's token (gh auth token), then the token saved here.
+the token saved here (or by signing in from the dashboard), then the GitHub
+CLI's token (gh auth token).
 
 Create a classic token with the "repo" scope (add "admin:org" for org runners)
 at https://github.com/settings/tokens/new?scopes=repo&description=gh-runners`,
