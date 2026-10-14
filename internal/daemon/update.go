@@ -29,6 +29,9 @@ func (d *Daemon) updateLoop(ctx context.Context) {
 	if exe, err := service.Executable(); err == nil {
 		update.Cleanup(exe)
 	}
+	if !update.Releasable(d.Version) {
+		d.setUpdate(func(u *control.UpdateState) { u.Note = devNote(d.Version) })
+	}
 	timer := time.NewTimer(updateFirst)
 	defer timer.Stop()
 	pending := false // asked from the dashboard; retry until it is done
@@ -51,7 +54,7 @@ func (d *Daemon) updateLoop(ctx context.Context) {
 func (d *Daemon) checkUpdate(ctx context.Context, asked bool) (time.Duration, bool) {
 	if !update.Releasable(d.Version) {
 		d.setUpdate(func(u *control.UpdateState) {
-			u.Note = "this is a development build (" + d.Version + "); it doesn't update itself"
+			u.Note = devNote(d.Version)
 		})
 		return updateEvery, false
 	}
@@ -180,6 +183,10 @@ func (d *Daemon) busy(ctx context.Context) string {
 		}
 	}
 	return ""
+}
+
+func devNote(version string) string {
+	return "this is a development build (" + version + "); it doesn't update itself"
 }
 
 func (d *Daemon) setUpdate(f func(*control.UpdateState)) {

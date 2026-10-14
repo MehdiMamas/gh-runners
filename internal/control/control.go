@@ -40,9 +40,9 @@ type Status struct {
 
 // UpdateState is what the daemon knows about gh-runners releases.
 type UpdateState struct {
-	Latest  string    `json:"latest,omitempty"`  // newest release seen
-	Checked time.Time `json:"checked,omitempty"` // last successful check
-	Note    string    `json:"note,omitempty"`    // what it is doing or waiting for
+	Latest  string    `json:"latest,omitempty"` // newest release seen
+	Checked time.Time `json:"checked,omitzero"` // last successful check
+	Note    string    `json:"note,omitempty"`   // what it is doing or waiting for
 	Error   string    `json:"error,omitempty"`
 }
 
