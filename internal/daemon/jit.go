@@ -424,7 +424,7 @@ func (m *jitManager) stopAllNow() {
 		wg.Add(1)
 		go func(s *jitSlot) {
 			defer wg.Done()
-			proc.StopTree(s.cmd, s.done, pauseGrace)
+			proc.Stop(s.cmd, s.done, pauseGrace)
 		}(s)
 	}
 	wg.Wait()

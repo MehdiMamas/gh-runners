@@ -32,9 +32,13 @@ func LocalState(r store.Runner, st control.Status, daemonUp bool) (state, lastEx
 			p, ok = x, true
 		}
 	}
+	// Never "stopped" or "paused" while a process of the runner remains.
+	leftover := ok && (p.PID != 0 || p.Strays > 0) && (r.Disabled || st.Paused)
 	switch {
 	case !r.Configured():
 		return "not registered", ""
+	case leftover:
+		return "stopping", p.LastExit
 	case r.Disabled:
 		return "stopped", ""
 	case st.Paused:

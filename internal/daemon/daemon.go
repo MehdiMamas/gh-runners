@@ -32,12 +32,15 @@ import (
 	"github.com/MehdiMamas/gh-runners/internal/web"
 )
 
+// stopGrace is how long a stopping runner gets to exit on its own before its
+// whole process tree is killed (a variable so tests need not wait it out).
+var stopGrace = 30 * time.Second
+
 const (
 	tick        = 5 * time.Second
 	minBackoff  = 5 * time.Second
 	maxBackoff  = 5 * time.Minute
 	stableAfter = 10 * time.Minute
-	stopGrace   = 30 * time.Second
 	maxLogSize  = 10 << 20
 
 	// DefaultPort is where the dashboard listens, so its address (and the
@@ -48,6 +51,7 @@ const (
 type child struct {
 	cmd      *exec.Cmd
 	done     chan struct{}
+	dir      string
 	stopping bool
 	state    control.ProcState
 }
@@ -65,7 +69,10 @@ type Daemon struct {
 	lastSync time.Time
 	syncErr  string
 	jit      *jitManager
-	paused   atomic.Bool // see pause.go
+	paused   atomic.Bool    // see pause.go
+	strays   map[string]int // runner id -> processes left after a stop, see sweep.go
+	seen     map[int]bool   // strays the last sweep saw
+	sweeping atomic.Bool
 
 	updateNow chan struct{}
 	upd       control.UpdateState
@@ -90,6 +97,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.Log = log.New(os.Stderr, "", log.LstdFlags)
 	}
 	d.children = map[string]*child{}
+	d.strays, d.seen = map[string]int{}, map[int]bool{}
 	d.started = time.Now()
 	d.reload = make(chan struct{}, 1)
 	d.syncNow = make(chan struct{}, 1)
@@ -159,8 +167,16 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	t := time.NewTicker(tick)
 	defer t.Stop()
+	lastSweep := time.Now()
 	for {
 		d.reconcile()
+		if time.Since(lastSweep) >= sweepEvery && d.sweeping.CompareAndSwap(false, true) {
+			lastSweep = time.Now()
+			go func() {
+				defer d.sweeping.Store(false)
+				d.sweep()
+			}()
+		}
 		select {
 		case <-ctx.Done():
 			d.Log.Printf("stopping all runners")
@@ -258,8 +274,16 @@ func (d *Daemon) status() control.Status {
 	if s.Paused {
 		s.PausedSince = store.LoadPause().Since
 	}
-	for _, c := range d.children {
+	for id, c := range d.children {
 		s.Runners = append(s.Runners, c.state)
+		if n := d.strays[id]; n > 0 {
+			s.Runners[len(s.Runners)-1].Strays = n
+		}
+	}
+	for id, n := range d.strays {
+		if d.children[id] == nil && n > 0 {
+			s.Runners = append(s.Runners, control.ProcState{ID: id, State: "stopping", Strays: n})
+		}
 	}
 	d.mu.Unlock()
 	s.Runners = append(s.Runners, d.jit.states()...)
@@ -292,7 +316,7 @@ func (d *Daemon) reconcile() {
 			c.stopping = true
 			c.state.State = "stopping"
 			d.Log.Printf("[%s] stopping", id)
-			go proc.Stop(c.cmd, c.done, stopGrace)
+			go d.stopChild(id, c, stopGrace)
 		}
 		if c.cmd == nil {
 			delete(d.children, id)
@@ -320,6 +344,10 @@ func (d *Daemon) start(r store.Runner, c *child) error {
 	if err != nil {
 		return err
 	}
+	// A listener left by an older version or a crashed daemon would clash
+	// with the new one.
+	d.logKilled(r.ID, proc.KillStrays(r.Dir()))
+	delete(d.strays, r.ID)
 	cmd := runner.RunCommand(r.Dir(), "")
 	cmd.Stdout, cmd.Stderr = out, out
 	cmd.Stdin = nil
@@ -328,7 +356,7 @@ func (d *Daemon) start(r store.Runner, c *child) error {
 		out.Close()
 		return err
 	}
-	c.cmd, c.done, c.stopping = cmd, make(chan struct{}), false
+	c.cmd, c.done, c.dir, c.stopping = cmd, make(chan struct{}), r.Dir(), false
 	c.state.State, c.state.PID, c.state.Since = "running", cmd.Process.Pid, time.Now()
 	c.state.NextStart = time.Time{}
 	d.Log.Printf("[%s] started (pid %d)", r.ID, cmd.Process.Pid)
@@ -344,12 +372,12 @@ func (d *Daemon) start(r store.Runner, c *child) error {
 		}
 		d.Log.Printf("[%s] %s", r.ID, exit)
 		ranFor := time.Since(c.state.Since)
-		c.cmd, c.state.PID = nil, 0
 		if c.stopping {
-			c.state.State, c.state.LastExit, c.state.Since = "stopped", exit, time.Now()
-			delete(d.children, r.ID)
+			// stopChild finishes the stop once the whole tree is gone.
+			c.state.LastExit = exit
 			return
 		}
+		c.cmd, c.state.PID = nil, 0
 		if ranFor > stableAfter {
 			c.state.Restarts = 0
 		}
@@ -373,14 +401,14 @@ func (d *Daemon) backoff(c *child, reason string) {
 func (d *Daemon) stopAll() {
 	d.mu.Lock()
 	var wg sync.WaitGroup
-	for _, c := range d.children {
+	for id, c := range d.children {
 		if c.cmd != nil {
 			c.stopping = true
 			wg.Add(1)
-			go func(cmd *exec.Cmd, done chan struct{}) {
+			go func(id string, c *child) {
 				defer wg.Done()
-				proc.Stop(cmd, done, stopGrace)
-			}(c.cmd, c.done)
+				d.stopChild(id, c, stopGrace)
+			}(id, c)
 		}
 	}
 	d.mu.Unlock()

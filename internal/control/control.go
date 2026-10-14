@@ -17,9 +17,12 @@ const SecretHeader = "X-GH-Runners-Secret"
 
 // ProcState is the daemon's view of one supervised runner.
 type ProcState struct {
-	ID        string    `json:"id"`
-	State     string    `json:"state"` // running | stopped | backoff | jit-idle | jit-busy
-	PID       int       `json:"pid,omitempty"`
+	ID    string `json:"id"`
+	State string `json:"state"` // running | stopping | stopped | backoff | jit-idle | jit-busy
+	PID   int    `json:"pid,omitempty"`
+	// Strays counts leftover processes of the runner that nothing supervises;
+	// while there are some it is not "stopped".
+	Strays    int       `json:"strays,omitempty"`
 	Since     time.Time `json:"since"`
 	Restarts  int       `json:"restarts"`
 	LastExit  string    `json:"last_exit,omitempty"`

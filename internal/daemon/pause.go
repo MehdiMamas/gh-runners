@@ -1,11 +1,9 @@
 package daemon
 
 import (
-	"os/exec"
 	"sync"
 	"time"
 
-	"github.com/MehdiMamas/gh-runners/internal/proc"
 	"github.com/MehdiMamas/gh-runners/internal/store"
 )
 
@@ -35,15 +33,15 @@ func (d *Daemon) Pause() error {
 	d.Log.Printf("pausing: stopping all runners")
 	d.mu.Lock()
 	var wg sync.WaitGroup
-	for _, c := range d.children {
+	for id, c := range d.children {
 		if c.cmd != nil {
 			c.stopping = true
 			c.state.State = "stopping"
 			wg.Add(1)
-			go func(cmd *exec.Cmd, done chan struct{}) {
+			go func(id string, c *child) {
 				defer wg.Done()
-				proc.StopTree(cmd, done, pauseGrace)
-			}(c.cmd, c.done)
+				d.stopChild(id, c, pauseGrace)
+			}(id, c)
 		}
 	}
 	d.mu.Unlock()

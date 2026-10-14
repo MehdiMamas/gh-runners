@@ -390,11 +390,33 @@ func (s *Server) findRunner(w http.ResponseWriter, r *http.Request) (store.Runne
 	return rn, true
 }
 
+// postStartStop starts or stops a runner. Stopping kills the runner's job
+// processes, so like a restart it first answers 409 when GitHub says the
+// runner is running a job; confirm_busy=1 goes on.
 func (s *Server) postStartStop(disable bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rn, ok := s.findRunner(w, r)
 		if !ok {
 			return
+		}
+		if disable && !rn.Disabled && r.URL.Query().Get("confirm_busy") != "1" && s.runnerRunning(rn.ID) {
+			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+			states, err := s.remoteStates(ctx, true)
+			cancel()
+			switch {
+			case err != nil:
+				writeJSON(w, http.StatusConflict, map[string]any{
+					"error":   "could not check with GitHub whether a job is running here (" + err.Error() + ")",
+					"confirm": true,
+				})
+				return
+			case states[rn.ID] == "busy":
+				busy := []string{rn.Name + " (" + rn.Scope() + ")"}
+				writeJSON(w, http.StatusConflict, map[string]any{
+					"error": "running a job now: " + busy[0], "busy": busy, "confirm": true,
+				})
+				return
+			}
 		}
 		rn.Disabled = disable
 		if err := store.Save(rn); err != nil {
@@ -404,6 +426,16 @@ func (s *Server) postStartStop(disable bool) http.HandlerFunc {
 		s.h.Reload()
 		writeJSON(w, http.StatusOK, map[string]bool{"disabled": disable})
 	}
+}
+
+// runnerRunning reports whether the daemon has a process of the runner.
+func (s *Server) runnerRunning(id string) bool {
+	for _, p := range s.h.Status().Runners {
+		if p.ID == id && (p.PID != 0 || p.Strays > 0) {
+			return true
+		}
+	}
+	return false
 }
 
 // postRestart stops a runner, waits until the daemon has stopped it, and
