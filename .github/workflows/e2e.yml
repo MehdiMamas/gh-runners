@@ -1,0 +1,76 @@
+name: e2e
+
+# End-to-end test on hosted macOS and Linux machines: install gh-runners,
+# register a runner for a test repo with a registration token, start it with
+# the login service, and wait until it has run a job from that repo.
+#
+# 1. Put a registration token for the test repo in the E2E_REGISTRATION_TOKEN
+#    secret (POST /repos/{owner}/{repo}/actions/runners/registration-token;
+#    it expires after an hour).
+# 2. gh workflow run e2e.yml -f repo=owner/test-repo
+# 3. Once the runners are online, run a workflow in the test repo with
+#    runs-on: [self-hosted, e2e-<this run id>-<os>].
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: Test repository (owner/repo), private
+        required: true
+      wait_minutes:
+        description: How long to wait for a job
+        default: "15"
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macos
+          - os: ubuntu-latest
+            name: linux
+          - os: ubuntu-24.04-arm
+            name: linux-arm64
+    runs-on: ${{ matrix.os }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_RUNNERS_HOME: ${{ runner.temp }}/gh-runners-home
+      LABEL: e2e-${{ github.run_id }}-${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go build -o gh-runners .
+      - name: add runner
+        env:
+          REG_TOKEN: ${{ secrets.E2E_REGISTRATION_TOKEN }}
+          REPO: ${{ inputs.repo }}
+        run: |
+          ./gh-runners add "$REPO" --registration-token "$REG_TOKEN" --name "$LABEL" --labels "$LABEL"
+          ./gh-runners service install
+          ./gh-runners list --offline
+      - name: wait for a job
+        env:
+          WAIT: ${{ inputs.wait_minutes }}
+        run: |
+          log=$(ls "$GH_RUNNERS_HOME"/runners/*/gh-runners.log)
+          end=$(( $(date +%s) + WAIT * 60 ))
+          until grep -q "completed with result" "$log"; do
+            if [ "$(date +%s)" -gt "$end" ]; then
+              echo "no job within $WAIT minutes"; cat "$log"; exit 1
+            fi
+            sleep 10
+          done
+          cat "$log"
+          grep -q "completed with result: Succeeded" "$log"
+      - name: stop and clean up
+        if: always()
+        run: |
+          ./gh-runners service uninstall || true
+          ./gh-runners remove --all --force || true
+          cat "$GH_RUNNERS_HOME/daemon.log" || true
