@@ -16,10 +16,13 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/control"
+	"github.com/MehdiMamas/gh-runners/internal/service"
+	"github.com/MehdiMamas/gh-runners/internal/store"
 )
 
 //go:embed assets
@@ -36,6 +39,7 @@ type Hooks struct {
 	SyncNow     func()
 	WakeJIT     func()
 	ResetClient func()
+	UpdateNow   func()
 	Log         *log.Logger
 }
 
@@ -57,7 +61,7 @@ func New(h Hooks, secret string) *Server {
 	if h.Log == nil {
 		h.Log = log.New(log.Writer(), "", log.LstdFlags)
 	}
-	for _, f := range []*func(){&h.Reload, &h.SyncNow, &h.WakeJIT, &h.ResetClient} {
+	for _, f := range []*func(){&h.Reload, &h.SyncNow, &h.WakeJIT, &h.ResetClient, &h.UpdateNow} {
 		if *f == nil {
 			*f = func() {}
 		}
@@ -66,7 +70,9 @@ func New(h Hooks, secret string) *Server {
 		h.Status = func() control.Status { return control.Status{} }
 	}
 	s := &Server{h: h, secret: secret, tasks: newTaskQueue(h.Log)}
-	s.spawn = spawnSelf
+	s.spawn = func(logName string, args ...string) error {
+		return service.Spawn(filepath.Join(store.Home(), logName), args...)
+	}
 	return s
 }
 
@@ -186,6 +192,7 @@ func (s *Server) api() http.Handler {
 	mux.HandleFunc("POST /api/fs/mkdir", s.postMkdir)
 	mux.HandleFunc("POST /api/service/{action}", s.postService)
 	mux.HandleFunc("GET /api/doctor", s.getDoctor)
+	mux.HandleFunc("POST /api/update", s.postUpdate)
 	mux.HandleFunc("POST /api/login/device", s.postDeviceLogin)
 	mux.HandleFunc("GET /api/login/device", s.getDeviceLogin)
 	mux.HandleFunc("POST /api/login/token", s.postTokenLogin)

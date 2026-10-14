@@ -170,6 +170,7 @@ Every runner gets the labels GitHub adds (`self-hosted`, the OS, the CPU) plus
 | `service install\|uninstall\|start\|stop\|restart\|status` | Run the daemon at login (`uninstall --keep-running` stops only the start at login). |
 | `shortcut install\|uninstall` | App-menu entry that opens the dashboard. |
 | `logs [owner/repo]` | Runner output; `--daemon` for the supervisor, `-f` to follow. |
+| `update` | Install the latest release now (`--check` only looks). The service also does this by itself. |
 | `doctor` | Check this machine. |
 | `login` | Save a personal access token (for machines without `gh`). |
 | `config` | Print the config file. |
@@ -236,10 +237,21 @@ March 2026 and then postponed it after feedback; check
 [GitHub's pricing](https://docs.github.com/en/billing/managing-billing-for-your-products/managing-billing-for-github-actions/about-billing-for-github-actions)
 for the current state.
 
-## Upgrading
+## Updates
 
-Run the install command again. It replaces the binary and restarts the
-background service if it was running. Runners themselves auto-update.
+gh-runners updates itself. The background service checks for a new release
+every few hours, downloads it, checks it against the release's SHA-256
+checksums, replaces its own binary and restarts. It only does this while no
+runner on the machine is running a job (it asks GitHub whether your runners
+are busy), so jobs are never cut off; a pending update waits and retries.
+Runners themselves auto-update too, as GitHub's runner program always does.
+
+- Turn it off, or update right away, under **Settings > Updates** in the
+  dashboard, or run `gh-runners update` (`--check` only looks).
+- Versions before v0.3.0 don't have the updater: run the install command
+  once more to get it. After that, updates are automatic.
+- The install command still works any time and always installs the latest
+  release.
 
 ## Uninstall
 

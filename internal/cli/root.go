@@ -57,7 +57,7 @@ Run it with no arguments to open the dashboard in your browser, or use
 	root.AddCommand(
 		newAddCmd(), newRemoveCmd(), newListCmd(), newStartStopCmd(true), newStartStopCmd(false),
 		newSyncCmd(), newOnDemandCmd(), newServiceCmd(), newDaemonCmd(), newLogsCmd(),
-		newDoctorCmd(), newLoginCmd(), newConfigCmd(), newUICmd(), newMenuCmd(), newShortcutCmd(),
+		newDoctorCmd(), newLoginCmd(), newConfigCmd(), newUICmd(), newMenuCmd(), newShortcutCmd(), newUpdateCmd(),
 	)
 	return root
 }

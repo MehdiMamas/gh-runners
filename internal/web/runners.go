@@ -20,7 +20,6 @@ import (
 	"github.com/MehdiMamas/gh-runners/internal/doctor"
 	"github.com/MehdiMamas/gh-runners/internal/github"
 	"github.com/MehdiMamas/gh-runners/internal/ops"
-	"github.com/MehdiMamas/gh-runners/internal/proc"
 	"github.com/MehdiMamas/gh-runners/internal/service"
 	"github.com/MehdiMamas/gh-runners/internal/store"
 )
@@ -65,6 +64,7 @@ type stateView struct {
 	SyncErr       string              `json:"sync_error,omitempty"`
 	Config        store.Config        `json:"config"`
 	TasksBusy     int                 `json:"tasks_busy"`
+	Update        control.UpdateState `json:"update"`
 }
 
 type serviceView struct {
@@ -107,6 +107,7 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 		Service: serviceView{svc.Installed, svc.Where}, Auth: s.authView(r.Context()),
 		Runners: s.runnerViews(st), OnDemand: st.OnDemand, LastSync: since(st.LastSync),
 		SyncErr: st.SyncErr, Config: cfg, TasksBusy: s.tasks.busy(), OnDemandProcs: []control.ProcState{},
+		Update: st.Update,
 	}
 	for _, p := range st.Runners {
 		if strings.HasPrefix(p.State, "jit") {
@@ -505,6 +506,7 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	turnedOnSync := in.Sync.Auto && !cfg.Sync.Auto
 	cfg.Labels, cfg.RunnerName, cfg.Sync, cfg.OnDemand = clean(in.Labels), strings.TrimSpace(in.RunnerName), in.Sync, in.OnDemand
+	cfg.AutoUpdate = in.AutoUpdate
 	cfg.Sync.Owners, cfg.Sync.Include, cfg.Sync.Exclude = clean(cfg.Sync.Owners), clean(cfg.Sync.Include), clean(cfg.Sync.Exclude)
 	cfg.OnDemand.Owners, cfg.OnDemand.Include, cfg.OnDemand.Exclude = clean(cfg.OnDemand.Owners), clean(cfg.OnDemand.Include), clean(cfg.OnDemand.Exclude)
 	if err := store.SaveConfig(cfg); err != nil {
@@ -576,25 +578,11 @@ func (s *Server) postService(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"ok": "started"})
 }
 
-// spawnSelf runs this executable with args, detached, logging to Home/logName.
-func spawnSelf(logName string, args ...string) error {
-	exe, err := service.Executable()
-	if err != nil {
-		return err
-	}
-	f, err := os.Create(filepath.Join(store.Home(), logName))
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	cmd := helperCommand(exe, args...)
-	cmd.Stdout, cmd.Stderr = f, f
-	proc.Detach(cmd)
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	go func() { _ = cmd.Wait() }()
-	return nil
+// postUpdate asks the daemon to install the latest release now (once no
+// job is running); the page follows it in the state's update field.
+func (s *Server) postUpdate(w http.ResponseWriter, r *http.Request) {
+	s.h.UpdateNow()
+	writeJSON(w, http.StatusAccepted, map[string]string{"ok": "started"})
 }
 
 func (s *Server) getDoctor(w http.ResponseWriter, r *http.Request) {
