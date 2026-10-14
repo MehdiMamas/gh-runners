@@ -1,0 +1,8 @@
+/gh-runners
+/gh-runners.exe
+/gh-runners.exe~
+/dist/
+/.worktrees/
+graphify-out/
+*.test
+*.out

@@ -1,0 +1,39 @@
+name: release
+
+# Manual: Actions > release > Run workflow, or
+#   gh workflow run release.yml -f version=v0.1.0
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version tag to create, e.g. v0.1.0
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: check version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: echo "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'
+      - run: go test ./...
+      - run: sh scripts/build-release.sh "$VERSION"
+        env:
+          VERSION: ${{ inputs.version }}
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          gh release create "$VERSION" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
+            --generate-notes

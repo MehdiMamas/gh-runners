@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        if: runner.os != 'Windows'
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go test -race ./...
+        if: runner.os != 'Windows'
+      - run: go test ./...
+        if: runner.os == 'Windows'
+      - name: build
+        run: go build -o gh-runners$([ "$RUNNER_OS" = Windows ] && echo .exe) .
+      - name: smoke test
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_RUNNERS_HOME: ${{ runner.temp }}/gh-runners-home
+        run: |
+          set -x
+          ./gh-runners --version
+          ./gh-runners --help
+          ./gh-runners list --offline
+          ./gh-runners config
+          ./gh-runners doctor || true
+      - name: background service install, status, uninstall
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_RUNNERS_HOME: ${{ runner.temp }}/gh-runners-home
+        run: |
+          set -x
+          ./gh-runners service install
+          ./gh-runners service status
+          ./gh-runners list
+          ./gh-runners service uninstall
+          ./gh-runners service status
+      - name: daemon log
+        if: always()
+        run: cat "$RUNNER_TEMP/gh-runners-home/daemon.log" || true
+
+  release-build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: sh scripts/build-release.sh ci-${GITHUB_SHA::7}
+      - run: |
+          file dist/gh-runners-darwin-universal
+          dist/gh-runners-darwin-universal --version
