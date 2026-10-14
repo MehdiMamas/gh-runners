@@ -517,14 +517,35 @@ async function workflowSets(names) {
   return { sets: [...byKey.values()].sort((a, b) => b.jobs - a.jobs), errors };
 }
 
-// labelEditor is a chip list with an input to add more. It edits labels
-// in place.
+// COMMON_LABELS are offered as tick boxes in every label editor.
+const COMMON_LABELS = [
+  { name: 'heavy', hint: 'long jobs: builds, tests, packaging' },
+  { name: 'light', hint: 'short jobs: triage, checks, bots' },
+];
+
+// labelEditor is a tick box per common label, then a chip list with an
+// input to add any other label. It edits labels in place.
 function labelEditor(labels, fixed, onchange) {
   const chips = h('div', { class: 'chips' });
-  const input = h('input', { type: 'text', placeholder: 'heavy', 'aria-label': 'New label', onkeydown: (e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); take(); } } });
-  const draw = () => mount(chips,
-    fixed.map((l) => h('span', { class: 'chip fixed', title: 'Set by GitHub or gh-runners' }, l)),
-    labels.map((l) => h('span', { class: 'chip custom' }, l, h('button', { class: 'x', title: 'Remove ' + l, 'aria-label': 'Remove ' + l, onclick: (e) => { e.preventDefault(); labels.splice(labels.indexOf(l), 1); draw(); onchange(); } }, '×'))));
+  const common = h('div', { class: 'common-labels' });
+  const input = h('input', { type: 'text', placeholder: 'Other label, e.g. gpu', 'aria-label': 'New label', onkeydown: (e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); take(); } } });
+  const toggle = (name, on) => {
+    const i = lower(labels).indexOf(name);
+    if (on && i < 0) labels.push(name);
+    if (!on && i >= 0) labels.splice(i, 1);
+    draw(); onchange();
+  };
+  const draw = () => {
+    mount(common, COMMON_LABELS.map((c) => {
+      const isFixed = lower(fixed).includes(c.name);
+      return h('label', { class: 'check common-label' + (isFixed ? ' dim' : '') },
+        h('input', { type: 'checkbox', 'aria-label': c.name, checked: isFixed || lower(labels).includes(c.name), disabled: isFixed, onchange: (e) => toggle(c.name, e.target.checked) }),
+        h('span', {}, h('b', {}, c.name), h('span', { class: 'muted small' }, ' ' + c.hint)));
+    }));
+    mount(chips,
+      fixed.map((l) => h('span', { class: 'chip fixed', title: 'Set by GitHub or gh-runners' }, l)),
+      labels.map((l) => h('span', { class: 'chip custom' }, l, h('button', { class: 'x', title: 'Remove ' + l, 'aria-label': 'Remove ' + l, onclick: (e) => { e.preventDefault(); labels.splice(labels.indexOf(l), 1); draw(); onchange(); } }, '×'))));
+  };
   const take = () => {
     const have = lower(fixed.concat(labels));
     for (const l of split(input.value)) if (!have.includes(l.toLowerCase())) { labels.push(l); have.push(l.toLowerCase()); }
@@ -532,7 +553,7 @@ function labelEditor(labels, fixed, onchange) {
     draw(); onchange();
   };
   draw();
-  return { el: h('div', { class: 'stack' }, chips, h('div', { class: 'row' }, input, h('button', { class: 'btn small', onclick: take }, 'Add label'))), take, redraw: draw };
+  return { el: h('div', { class: 'stack' }, common, chips, h('div', { class: 'row' }, input, h('button', { class: 'btn small', onclick: take }, 'Add label'))), take, redraw: draw };
 }
 
 // pickLabels asks which labels new runners get, suggesting the ones the

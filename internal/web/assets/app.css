@@ -195,6 +195,10 @@ label.check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; c
 .set .grow { min-width: 0; }
 .set .muted { overflow-wrap: anywhere; }
 @media (max-width: 600px) { .set { flex-wrap: wrap; } }
+.common-labels { display: flex; flex-wrap: wrap; gap: 8px; }
+.common-label { padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.common-label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.common-label.dim { opacity: .7; cursor: default; }
 .gh-runner { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: 1px solid var(--border); }
 .gh-runner:first-child { border-top: 0; padding-top: 0; }
 .found-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
