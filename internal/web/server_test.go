@@ -53,6 +53,31 @@ func fakeGitHub(t *testing.T) *httptest.Server {
 		}
 		_, _ = io.WriteString(w, `{"access_token":"device-token","token_type":"bearer","scope":"repo"}`)
 	})
+	mux.HandleFunc("GET /repos/octo/private/actions/runners", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"total_count":1,"runners":[{"id":7,"name":"laptop","os":"Windows","status":"online","busy":false,
+			"labels":[{"name":"self-hosted","type":"read-only"},{"name":"Windows","type":"read-only"},{"name":"light","type":"custom"}]}]}`)
+	})
+	mux.HandleFunc("PUT /repos/octo/private/actions/runners/7/labels", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Labels []string `json:"labels"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if strings.Join(body.Labels, ",") != "heavy" {
+			t.Errorf("labels sent: %v", body.Labels)
+		}
+		_, _ = io.WriteString(w, `{"labels":[{"name":"self-hosted","type":"read-only"},{"name":"heavy","type":"custom"}]}`)
+	})
+	mux.HandleFunc("GET /repos/octo/private/contents/.github/workflows", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `[{"name":"ci.yml","type":"file"},{"name":"README.md","type":"file"}]`)
+	})
+	mux.HandleFunc("GET /repos/octo/private/contents/.github/workflows/ci.yml", func(w http.ResponseWriter, r *http.Request) {
+		// A runs-on: [self-hosted, heavy] job in base64, wrapped as GitHub does.
+		_, _ = io.WriteString(w, `{"encoding":"base64","content":"am9iczoKICB0OgogICAgcnVucy1vbjog\nW3NlbGYtaG9zdGVkLCBoZWF2eV0K\n"}`)
+	})
+	mux.HandleFunc("GET /repos/octo/public/contents/.github/workflows", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"message":"Not Found"}`)
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
@@ -307,5 +332,80 @@ func TestServiceActionsSpawnHelper(t *testing.T) {
 	}
 	if strings.Join(parts, "|") != want {
 		t.Fatalf("spawned %q, want %q", parts, want)
+	}
+}
+
+func TestRunnerLabels(t *testing.T) {
+	_, h := setup(t)
+	api(t, h, "POST", "/api/login/token", `{"token":"good-token"}`, nil)
+
+	var wf struct {
+		Sets []struct {
+			Labels []string `json:"labels"`
+			Files  []string `json:"files"`
+		} `json:"sets"`
+	}
+	if code := api(t, h, "GET", "/api/workflow-labels?repo=octo/private", "", &wf); code != 200 || len(wf.Sets) != 1 ||
+		strings.Join(wf.Sets[0].Labels, ",") != "self-hosted,heavy" || strings.Join(wf.Sets[0].Files, ",") != "ci.yml" {
+		t.Fatalf("workflow labels: %d %+v", code, wf)
+	}
+	if code := api(t, h, "GET", "/api/workflow-labels?repo=octo/public", "", &wf); code != 200 || len(wf.Sets) != 0 {
+		t.Fatalf("no workflows folder: %d %+v", code, wf)
+	}
+
+	var rr struct {
+		Runners map[string][]ghRunnerView `json:"runners"`
+		Errors  map[string]string         `json:"errors"`
+	}
+	if code := api(t, h, "POST", "/api/repo-runners", `{"repos":["octo/private","bad"]}`, &rr); code != 200 {
+		t.Fatalf("repo runners: %d", code)
+	}
+	got := rr.Runners["octo/private"]
+	if len(got) != 1 || got[0].ID != 7 || strings.Join(got[0].Custom, ",") != "light" || rr.Errors["bad"] == "" {
+		t.Fatalf("repo runners: %+v", rr)
+	}
+
+	var e apiError
+	if code := api(t, h, "PUT", "/api/runner-labels", `{"repo":"octo/private","runner_id":7,"labels":["two words"]}`, &e); code != 400 {
+		t.Fatalf("bad label: %d %+v", code, e)
+	}
+	var lv struct {
+		Labels []string `json:"labels"`
+	}
+	if code := api(t, h, "PUT", "/api/runner-labels", `{"repo":"octo/private","runner_id":7,"labels":["heavy","self-hosted"]}`, &lv); code != 200 ||
+		strings.Join(lv.Labels, ",") != "self-hosted,heavy" {
+		t.Fatalf("set labels: %d %+v", code, lv)
+	}
+	if code := api(t, h, "PUT", "/api/runner-labels", `{"repo":"octo/private","runner_id":99,"labels":["heavy"]}`, &e); code == 200 {
+		t.Fatal("labels set on a runner that does not exist")
+	}
+}
+
+func TestAddTaskScopes(t *testing.T) {
+	s, h := setup(t)
+	api(t, h, "POST", "/api/login/token", `{"token":"good-token"}`, nil)
+	var e apiError
+	if code := api(t, h, "POST", "/api/add", `{"repos":["octo/private"],"labels":["two words"]}`, &e); code != 400 {
+		t.Fatalf("bad label accepted: %d %+v", code, e)
+	}
+	// Hold the queue for good so both adds stay listed as waiting and never
+	// run against a fake GitHub that is gone.
+	block := make(chan struct{})
+	s.startTask(httptest.NewRecorder(), "hold", func(io.Writer) error { <-block; return nil })
+	for _, repo := range []string{"octo/private", "octo/public"} {
+		if code := api(t, h, "POST", "/api/add", `{"repos":["`+repo+`"],"labels":["heavy"],"allow_public":true}`, nil); code != 202 && code != 200 {
+			t.Fatalf("add %s: %d", repo, code)
+		}
+	}
+	var tasks []taskView
+	api(t, h, "GET", "/api/tasks", "", &tasks)
+	scoped := map[string]string{}
+	for _, tv := range tasks {
+		for _, sc := range tv.Scopes {
+			scoped[sc] = tv.State + " " + tv.Title
+		}
+	}
+	if !strings.HasPrefix(scoped["octo/private"], "queued Add a runner to octo/private (heavy)") || !strings.HasPrefix(scoped["octo/public"], "queued") {
+		t.Fatalf("task scopes: %v", scoped)
 	}
 }

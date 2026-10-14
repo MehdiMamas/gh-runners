@@ -285,11 +285,23 @@ func (s *Server) postAdd(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, errors.New("pick at least one repository"))
 		return
 	}
+	labels, err := ops.CleanLabels(body.Labels)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err)
+		return
+	}
 	title := "Add a runner to " + scopes[0].String()
 	if len(scopes) > 1 {
 		title = fmt.Sprintf("Add runners to %d repositories", len(scopes))
 	}
-	s.startTask(w, title, func(out io.Writer) error {
+	if len(labels) > 0 {
+		title += " (" + strings.Join(labels, ", ") + ")"
+	}
+	names := make([]string, len(scopes))
+	for i, sc := range scopes {
+		names[i] = sc.String()
+	}
+	s.startScopedTask(w, title, names, func(out io.Writer) error {
 		ctx := context.Background()
 		c, _, err := s.client(ctx)
 		if err != nil {
@@ -298,7 +310,7 @@ func (s *Server) postAdd(w http.ResponseWriter, r *http.Request) {
 		failed := 0
 		for _, sc := range scopes {
 			fmt.Fprintf(out, "== %s\n", sc)
-			_, err := ops.Add(ctx, c, sc, ops.AddOptions{Source: "add", Labels: body.Labels, AllowPublic: body.AllowPublic}, out)
+			_, err := ops.Add(ctx, c, sc, ops.AddOptions{Source: "add", Labels: labels, AllowPublic: body.AllowPublic}, out)
 			switch {
 			case errors.Is(err, ops.ErrExists):
 				fmt.Fprintln(out, err)
@@ -312,6 +324,7 @@ func (s *Server) postAdd(w http.ResponseWriter, r *http.Request) {
 		}
 		s.repos.reset()
 		s.remote.reset()
+		s.ghRunners.reset()
 		s.h.Reload()
 		s.ensureService(out)
 		if failed > 0 {

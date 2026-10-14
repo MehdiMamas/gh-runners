@@ -12,6 +12,9 @@ const S = {
   picked: new Set(),
   tasks: [], seenDone: new Set(), firstTasks: true,
   offline: false,
+  ghRunners: {}, // owner/repo -> runners GitHub has for it
+  found: [], foundHidden: false, // runners set up by hand on this computer
+  pending: new Set(), // repos whose add request is on its way
 };
 
 // ---------- helpers ----------
@@ -157,6 +160,7 @@ async function loadRepos(force) {
   } catch (e) { S.reposErr = e.message; }
   S.reposLoading = false;
   renderRepos();
+  loadGhRunners(force);
 }
 
 async function loadRemote() {
@@ -177,11 +181,14 @@ async function loadTasks() {
           else toast(t.title + ': ' + (t.error || 'failed'), true);
           refreshState();
           if (S.repos) loadRepos(false);
+          loadFound(false);
         }
       }
     }
     S.firstTasks = false;
+    const before = busySig();
     S.tasks = list;
+    if (busySig() !== before && S.tab === 'repos') renderRepos();
   } catch { return; }
   renderDock();
   if (S.tab === 'activity') renderActivity(false);
@@ -321,7 +328,8 @@ function renderRepos() {
     if (f.show === 'none' && (r.runner_id || r.archived)) return false;
     return true;
   });
-  const addable = (r) => r.admin && !r.archived && !r.runner_id;
+  const busy = busyScopes();
+  const addable = (r) => r.admin && !r.archived && !r.runner_id && !busy.has(r.full_name.toLowerCase());
   for (const p of [...S.picked]) if (!repos.some((r) => r.full_name === p && addable(r))) S.picked.delete(p);
 
   // Keep focus and caret in the search box across re-renders.
@@ -349,7 +357,7 @@ function renderRepos() {
   mount(el,
     h('div', { class: 'toolbar' }, search, ownerSel, showSel,
       h('button', { class: 'btn', onclick: () => loadRepos(true), disabled: S.reposLoading }, S.reposLoading ? 'Loading ...' : 'Refresh')),
-    orgHint, bulk,
+    foundBanner(), orgHint, bulk,
     h('div', { class: 'row muted small' }, allBox, `${shown.length} of ${repos.length} repositories`, S.repos.fetched ? ' · updated ' + ago(S.repos.fetched) : ''),
     h('div', { class: 'list' }, rows.length ? rows : h('div', { class: 'empty' }, f.show === 'private' && !q ? 'No private repositories. Choose "All repos" to see public ones.' : 'Nothing matches.')));
   if (prev !== null) { const s = $('repo-q'); s.focus(); s.setSelectionRange(prev, prev); }
@@ -357,9 +365,21 @@ function renderRepos() {
 
 function repoRow(r, addable) {
   const lr = r.runner_id ? localRunner(r.runner_id) : null;
+  const busy = repoBusy(r.full_name);
+  const gh = S.ghRunners[r.full_name] || [];
+  const others = gh.filter((x) => !(lr && x.name === lr.name));
+  const hand = (S.found || []).find((f) => f.scope && f.scope.toLowerCase() === r.full_name.toLowerCase() && !f.problem);
+  const ghLink = (text, cls) => h('button', { class: 'linkbtn', title: gh.map((x) => x.name + ': ' + stateText(ghState(x))).join(', '), onclick: () => repoRunnersDialog(r.full_name) }, h('span', { class: 'pill ' + cls }, text));
   let status = h('span', { class: 'muted small' }, r.archived ? 'Archived' : 'No runner here');
+  if (!r.archived && gh.length) {
+    const online = gh.filter((x) => x.status === 'online').length;
+    status = ghLink(gh.length === 1 ? '1 runner on GitHub' : gh.length + ' runners on GitHub', online ? 'ok' : '');
+  }
   let actions = [];
-  if (lr) {
+  if (busy && !lr) {
+    status = h('span', { class: 'pill info' }, busyText(busy));
+    actions = [h('button', { class: 'btn primary small', disabled: true }, busy.state === 'running' ? h('div', { class: 'spinner' }) : null, busyText(busy))];
+  } else if (lr) {
     status = pill(lr.state);
     actions = [lr.disabled
       ? h('button', { class: 'btn small', onclick: () => startStop(lr, false) }, 'Start')
@@ -368,9 +388,13 @@ function repoRow(r, addable) {
     h('button', { class: 'btn small danger', onclick: () => removeRunner(lr) }, 'Remove')];
   } else if (!r.admin) {
     actions = [h('span', { class: 'muted small', title: 'Only repository admins can add runners' }, 'Needs admin rights')];
+  } else if (!r.archived && hand) {
+    status = h('span', { class: 'pill warn', title: hand.dir }, 'Set up by hand here');
+    actions = [h('button', { class: 'btn primary small', onclick: () => adopt(hand) }, 'Move into gh-runners')];
   } else if (!r.archived) {
     actions = [h('button', { class: 'btn primary small', onclick: () => addRepos([r.full_name]) }, 'Add runner')];
   }
+  const extraLabels = lr ? lr.labels.filter((l) => !lower(S.state.machine_labels).includes(l.toLowerCase())) : [];
   return h('div', { class: 'item' + (r.archived ? ' dim' : '') },
     h('input', { type: 'checkbox', disabled: !addable, checked: S.picked.has(r.full_name), 'aria-label': 'Select ' + r.full_name,
       onchange: (e) => { e.target.checked ? S.picked.add(r.full_name) : S.picked.delete(r.full_name); renderRepos(); } }),
@@ -380,12 +404,16 @@ function repoRow(r, addable) {
       h('div', { class: 'meta' },
         h('span', { class: 'pill plain ' + (r.private ? '' : 'warn') }, r.private ? 'Private' : 'Public'),
         r.fork ? h('span', { class: 'pill plain' }, 'Fork') : null,
+        extraLabels.map((l) => h('span', { class: 'chip custom', title: 'Label of the runner here' }, l)),
+        lr && others.length ? h('button', { class: 'linkbtn small', onclick: () => repoRunnersDialog(r.full_name) }, '+' + others.length + ' more on GitHub') : null,
         r.pushed_at ? h('span', { class: 'muted small' }, 'pushed ' + ago(r.pushed_at)) : null)),
     h('div', { class: 'status' }, status),
     h('div', { class: 'actions' }, actions));
 }
 
 async function addRepos(names) {
+  names = names.filter((n) => !repoBusy(n));
+  if (!names.length) return;
   const repos = (S.repos ? S.repos.repos : []).filter((r) => names.includes(r.full_name));
   const pub = repos.filter((r) => !r.private).map((r) => r.full_name);
   if (pub.length) {
@@ -395,11 +423,314 @@ async function addRepos(names) {
     'Add anyway', true);
     if (!ok) return;
   }
+  const labels = await pickLabels(names);
+  if (labels === null) return;
+  // Another add may have started while the dialog was open.
+  names = names.filter((n) => !repoBusy(n));
+  if (!names.length) return;
+  const keys = names.map((n) => n.toLowerCase());
+  keys.forEach((k) => S.pending.add(k));
+  names.forEach((n) => S.picked.delete(n));
+  renderRepos();
   await guard(async () => {
-    await api('POST', '/api/add', { repos: names, allow_public: pub.length > 0 });
-    S.picked.clear();
-    toast(names.length === 1 ? 'Adding a runner to ' + names[0] + ' ...' : 'Adding ' + names.length + ' runners ...');
-    loadTasks();
+    await api('POST', '/api/add', { repos: names, labels, allow_public: pub.length > 0 });
+    const tag = labels.length ? ' (' + labels.join(', ') + ')' : '';
+    toast((names.length === 1 ? 'Adding a runner to ' + names[0] : 'Adding ' + names.length + ' runners') + tag + ' ...');
+  });
+  await loadTasks();
+  keys.forEach((k) => S.pending.delete(k));
+  renderRepos();
+}
+
+// ---------- busy repositories ----------
+// Repositories a queued or running task works on, and ones whose request
+// is still on its way, show as busy so a second click cannot start the
+// same work twice.
+function busyScopes() {
+  const m = new Map();
+  for (const t of S.tasks) {
+    if (t.state !== 'queued' && t.state !== 'running') continue;
+    const verb = t.title.startsWith('Move') ? 'Moving in' : 'Adding';
+    for (const sc of t.scopes || []) {
+      const k = sc.toLowerCase();
+      const prev = m.get(k);
+      if (!prev || prev.state !== 'running') m.set(k, { state: t.state, verb });
+    }
+  }
+  for (const k of S.pending) if (!m.has(k)) m.set(k, { state: 'queued', verb: 'Adding' });
+  return m;
+}
+function repoBusy(full) { return busyScopes().get(full.toLowerCase()) || null; }
+function busyText(b) { return b.state === 'running' ? b.verb + ' ...' : 'Queued'; }
+function busySig() { return [...busyScopes()].map(([k, v]) => k + ':' + v.state).sort().join(','); }
+
+// ---------- labels ----------
+const OS_LABELS = ['linux', 'macos', 'windows'];
+const ARCH_LABELS = ['x64', 'arm64', 'arm'];
+const BUILTIN = ['self-hosted'].concat(OS_LABELS, ARCH_LABELS);
+function lower(v) { return (v || []).map((l) => l.toLowerCase()); }
+function customOf(labels) { return labels.filter((l) => !BUILTIN.includes(l.toLowerCase())); }
+function setKey(set) { return lower(set.labels).sort().join(','); }
+// setFits: a runner with these fixed labels (self-hosted, OS, CPU) can take
+// the jobs once it has the set's custom labels.
+function setFits(set, fixed) {
+  const have = lower(fixed);
+  return set.labels.every((l) => { const k = l.toLowerCase(); return !(OS_LABELS.includes(k) || ARCH_LABELS.includes(k)) || have.includes(k); });
+}
+function setTakes(set, labels) { const have = lower(labels); return lower(set.labels).every((l) => have.includes(l)); }
+function setNeeds(set, fixed) {
+  const have = lower(fixed);
+  const miss = set.labels.filter((l) => { const k = l.toLowerCase(); return (OS_LABELS.includes(k) || ARCH_LABELS.includes(k)) && !have.includes(k); });
+  return 'Needs a ' + miss.join(' ') + ' runner';
+}
+
+// setsList shows the runs-on label sets of the workflows and whether a
+// runner with these labels takes them. pick, when given, adds a checkbox.
+function setsList(sets, fixed, labels, pick) {
+  return h('div', { class: 'sets' }, sets.map((set) => {
+    const fits = setFits(set, fixed);
+    const takes = setTakes(set, labels);
+    const custom = customOf(set.labels);
+    return h('label', { class: 'set' + (fits ? '' : ' dim') },
+      pick ? h('input', { type: 'checkbox', checked: takes && custom.length > 0, disabled: !fits || !custom.length, onchange: (e) => pick(set, e.target.checked) }) : null,
+      h('div', { class: 'grow' },
+        h('div', { class: 'chips' }, h('span', { class: 'muted small' }, 'runs-on:'), set.labels.map((l) => h('span', { class: 'chip' + (custom.includes(l) ? ' custom' : '') }, l))),
+        h('div', { class: 'muted small' }, set.jobs + (set.jobs === 1 ? ' job' : ' jobs') + ' in ' + set.files.join(', '))),
+      h('span', { class: 'pill ' + (takes ? 'ok' : fits ? '' : 'bad') }, takes ? 'Takes these jobs' : fits ? 'Not these jobs' : setNeeds(set, fixed)));
+  }));
+}
+
+async function workflowSets(names) {
+  const results = await Promise.all(names.map((n) => api('GET', '/api/workflow-labels?repo=' + encodeURIComponent(n))
+    .then((d) => ({ n, sets: d.sets || [] }), (e) => ({ n, err: e.message }))));
+  const byKey = new Map();
+  const errors = [];
+  for (const r of results) {
+    if (r.err) { errors.push(r.n + ': ' + r.err); continue; }
+    for (const set of r.sets) {
+      const k = setKey(set);
+      const files = set.files.map((f) => (names.length > 1 ? r.n.split('/')[1] + '/' + f : f));
+      const cur = byKey.get(k);
+      if (cur) { cur.jobs += set.jobs; cur.files.push(...files); } else byKey.set(k, { labels: set.labels, jobs: set.jobs, files });
+    }
+  }
+  return { sets: [...byKey.values()].sort((a, b) => b.jobs - a.jobs), errors };
+}
+
+// labelEditor is a chip list with an input to add more. It edits labels
+// in place.
+function labelEditor(labels, fixed, onchange) {
+  const chips = h('div', { class: 'chips' });
+  const input = h('input', { type: 'text', placeholder: 'heavy', 'aria-label': 'New label', onkeydown: (e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); take(); } } });
+  const draw = () => mount(chips,
+    fixed.map((l) => h('span', { class: 'chip fixed', title: 'Set by GitHub or gh-runners' }, l)),
+    labels.map((l) => h('span', { class: 'chip custom' }, l, h('button', { class: 'x', title: 'Remove ' + l, 'aria-label': 'Remove ' + l, onclick: (e) => { e.preventDefault(); labels.splice(labels.indexOf(l), 1); draw(); onchange(); } }, '×'))));
+  const take = () => {
+    const have = lower(fixed.concat(labels));
+    for (const l of split(input.value)) if (!have.includes(l.toLowerCase())) { labels.push(l); have.push(l.toLowerCase()); }
+    input.value = '';
+    draw(); onchange();
+  };
+  draw();
+  return { el: h('div', { class: 'stack' }, chips, h('div', { class: 'row' }, input, h('button', { class: 'btn small', onclick: take }, 'Add label'))), take, redraw: draw };
+}
+
+// pickLabels asks which labels new runners get, suggesting the ones the
+// repositories' workflows ask for. It resolves to null when cancelled.
+function pickLabels(names) {
+  const fixed = S.state.machine_labels.slice();
+  const chosen = [];
+  return new Promise((resolve) => {
+    let answered = false;
+    const done = (v) => { answered = true; closeDialog(); resolve(v); };
+    let found = null;
+    const setsBox = h('div', {}, h('div', { class: 'row muted' }, h('div', { class: 'spinner' }), 'Reading the workflows ...'));
+    const drawSets = () => {
+      if (!found) return;
+      const pick = (set, on) => {
+        for (const l of customOf(set.labels)) {
+          const i = lower(chosen).indexOf(l.toLowerCase());
+          if (on && i < 0 && !lower(fixed).includes(l.toLowerCase())) chosen.push(l);
+          if (!on && i >= 0) chosen.splice(i, 1);
+        }
+        editor.redraw(); drawSets();
+      };
+      mount(setsBox,
+        found.sets.length
+          ? [h('p', {}, 'Your workflows ask for these runners. Tick the jobs this computer should take:'), setsList(found.sets, fixed, fixed.concat(chosen), pick)]
+          : h('p', { class: 'muted' }, 'No workflow in ' + (names.length === 1 ? names[0] : 'these repositories') + ' asks for a self-hosted runner yet. Add the labels your jobs will use, or none.'),
+        found.more ? h('p', { class: 'muted small' }, 'Looked at the workflows of the first ' + found.more + ' repositories.') : null,
+        found.errors.length ? h('p', { class: 'err' }, 'Could not read: ' + found.errors.join('; ')) : null);
+    };
+    const editor = labelEditor(chosen, fixed, drawSets);
+    const n = names.length;
+    openDialog({
+      title: n === 1 ? 'Add a runner to ' + names[0] : 'Add runners to ' + n + ' repositories',
+      body: [
+        h('p', { class: 'muted' }, 'A job runs on a runner that has every label in its runs-on. With runs-on: [self-hosted, heavy], only runners labelled heavy take it.'),
+        setsBox,
+        h('h3', {}, 'Labels of the new runner' + (n > 1 ? 's' : '')),
+        editor.el,
+        h('p', { class: 'muted small' }, 'GitHub adds self-hosted, the OS and the CPU; gh-runners adds ' + list(fixed.slice(3)) + '. You can change labels later.')],
+      foot: [h('button', { class: 'btn', onclick: () => done(null) }, 'Cancel'),
+        h('button', { class: 'btn primary', onclick: () => { editor.take(); done(chosen.slice()); } }, n === 1 ? 'Add runner' : 'Add ' + n + ' runners')],
+      onclose: () => { if (!answered) resolve(null); },
+    });
+    const look = names.slice(0, 20);
+    workflowSets(look).then((r) => {
+      found = Object.assign(r, { more: names.length > look.length ? look.length : 0 });
+      // Preselect the labels of the most used set this computer can take.
+      const extra = (s) => customOf(s.labels).filter((l) => !lower(fixed).includes(l.toLowerCase()));
+      const best = found.sets.find((s) => setFits(s, fixed) && extra(s).length);
+      if (best && !chosen.length) chosen.push(...extra(best));
+      editor.redraw();
+      drawSets();
+    });
+  });
+}
+
+// editLabels changes the custom labels of a runner on GitHub.
+function editLabels(scope, x, after) {
+  const fixed = x.labels.filter((l) => !x.custom.includes(l));
+  const labels = x.custom.slice();
+  const setsBox = h('div', {});
+  let sets = null;
+  const drawSets = () => {
+    if (!sets || !sets.length) { mount(setsBox); return; }
+    mount(setsBox, h('p', {}, 'What the workflows of ' + scope + ' ask for:'), setsList(sets, fixed, fixed.concat(labels), (set, on) => {
+      for (const l of customOf(set.labels)) {
+        const i = lower(labels).indexOf(l.toLowerCase());
+        if (on && i < 0) labels.push(l);
+        if (!on && i >= 0) labels.splice(i, 1);
+      }
+      editor.redraw(); drawSets();
+    }));
+  };
+  const editor = labelEditor(labels, fixed, drawSets);
+  const save = h('button', { class: 'btn primary', onclick: () => guard(async () => {
+    editor.take();
+    save.disabled = true;
+    try {
+      await api('PUT', '/api/runner-labels', { repo: scope, runner_id: x.id, labels });
+    } finally { save.disabled = false; }
+    closeDialog();
+    toast('Labels of ' + x.name + ' saved');
+    refreshState();
+    if (scope.includes('/')) loadGhRunners(false, [scope]);
+    if (after) after();
+  }) }, 'Save labels');
+  openDialog({
+    title: 'Labels of ' + x.name,
+    body: [h('p', { class: 'muted' }, 'Runner ' + x.name + ' of ' + scope + '. A job runs on it when it has every label in the job\'s runs-on.'),
+      editor.el, setsBox,
+      h('p', { class: 'muted small' }, 'The grey labels come from GitHub and stay. Changes apply right away; the runner does not restart.')],
+    foot: [h('button', { class: 'btn', onclick: closeDialog }, 'Cancel'), save],
+  });
+  if (scope.includes('/')) workflowSets([scope]).then((r) => { sets = r.sets; drawSets(); });
+}
+
+// ---------- runners GitHub knows ----------
+async function loadGhRunners(refresh, only) {
+  if (!S.repos || !S.state || !S.state.auth.signed_in) return;
+  const repos = only || S.repos.repos.filter((r) => r.admin && !r.archived)
+    .sort((a, b) => (b.private - a.private)).map((r) => r.full_name).slice(0, 200);
+  if (!repos.length) return;
+  try {
+    const d = await api('POST', '/api/repo-runners', { repos, refresh: !!refresh });
+    Object.assign(S.ghRunners, d.runners || {});
+  } catch { return; }
+  if (S.tab === 'repos') renderRepos();
+}
+
+function ghState(x) { return x.status === 'online' ? (x.busy ? 'busy' : 'online') : 'offline'; }
+
+async function repoRunnersDialog(full) {
+  const body = h('div', {}, h('div', { class: 'row muted' }, h('div', { class: 'spinner' }), 'Asking GitHub ...'));
+  openDialog({ title: 'Runners of ' + full, body });
+  let runners;
+  try {
+    const d = await api('POST', '/api/repo-runners', { repos: [full], refresh: true });
+    if (d.errors && d.errors[full]) throw new Error(d.errors[full]);
+    runners = (d.runners && d.runners[full]) || [];
+    S.ghRunners[full] = runners;
+  } catch (e) { mount(body, h('p', { class: 'err' }, e.message)); return; }
+  if (S.tab === 'repos') renderRepos();
+  mount(body,
+    runners.length ? runners.map((x) => h('div', { class: 'gh-runner' },
+      h('div', { class: 'row' }, h('b', { class: 'grow' }, x.name),
+        x.local ? h('span', { class: 'pill plain ok' }, 'This computer') : x.found ? h('span', { class: 'pill plain warn' }, 'This computer, set up by hand') : h('span', { class: 'pill plain' }, 'Another computer'),
+        pill(ghState(x))),
+      h('div', { class: 'chips' }, x.labels.map((l) => h('span', { class: 'chip' + (x.custom.includes(l) ? ' custom' : '') }, l))),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn small', onclick: () => editLabels(full, x, () => repoRunnersDialog(full)) }, 'Edit labels'),
+        x.found ? h('button', { class: 'btn small primary', onclick: () => adopt(S.found.find((f) => f.dir === x.found) || { dir: x.found, name: x.name, scope: full }) }, 'Move into gh-runners') : null)))
+      : h('p', { class: 'muted' }, 'No runners are registered to ' + full + '.'),
+    h('p', { class: 'muted small' }, 'GitHub sends a job to an online runner that has every label in its runs-on.'));
+}
+
+// ---------- runners set up by hand ----------
+async function loadFound(refresh) {
+  try { S.found = (await api('GET', '/api/found' + (refresh ? '?refresh=1' : ''))) || []; } catch { return; }
+  if (S.tab === 'repos') renderRepos();
+  if (S.tab === 'machine') renderMachine();
+}
+
+function foundHere() {
+  const dirs = new Set(S.state.runners.map((r) => r.dir));
+  return (S.found || []).filter((f) => !dirs.has(f.dir));
+}
+
+function foundBanner() {
+  const items = foundHere();
+  if (!items.length || S.foundHidden) return null;
+  return h('div', { class: 'notice info' },
+    h('div', { class: 'grow' },
+      h('b', {}, items.length === 1 ? 'Found a runner set up without gh-runners' : 'Found ' + items.length + ' runners set up without gh-runners'),
+      h('div', { class: 'muted small' }, 'Move them in and gh-runners keeps them running, restarts them after a crash and shows them here.'),
+      h('div', { class: 'found-list' }, items.map((f) => {
+        const busy = f.scope ? repoBusy(f.scope) : null;
+        return h('div', { class: 'found' },
+          h('div', { class: 'grow' }, h('b', {}, f.name || '?'), f.scope ? h('span', { class: 'muted' }, ' · ' + f.scope) : null,
+            h('div', { class: 'mono small muted' }, f.dir)),
+          f.running ? h('span', { class: 'pill ok' }, 'Running') : h('span', { class: 'pill' }, 'Not running'),
+          f.problem ? h('span', { class: 'err' }, f.problem)
+            : h('button', { class: 'btn small primary', disabled: !!busy, onclick: () => adopt(f) }, busy ? busyText(busy) : 'Move into gh-runners'));
+      }))),
+    h('button', { class: 'btn ghost small', onclick: () => { S.foundHidden = true; render(); } }, 'Hide'));
+}
+
+async function adopt(f) {
+  const st = S.state;
+  const starts = f.starter && f.starter.length;
+  const body = [
+    h('p', {}, 'gh-runners takes over ', h('b', {}, f.name), f.scope ? ' (' + f.scope + ')' : '', ':'),
+    h('ol', { class: 'steps' },
+      h('li', {}, starts ? 'stops it and removes what starts it now: ' + f.starter.join(', ') : 'stops it if it runs'),
+      h('li', {}, 'moves its folder from ', h('code', {}, f.dir), ' into ', h('code', {}, st.runners_dir)),
+      h('li', {}, 'starts it from there, like the runners it set up itself')),
+    h('p', {}, 'Its name, labels and registration on GitHub stay the same. It only works while the runner is not running a job.'),
+    st.os === 'windows' && starts ? h('p', { class: 'muted small' }, 'Removing a Windows service needs administrator rights: Windows may ask you to allow it.') : null,
+    st.os === 'darwin' ? h('p', { class: 'muted small' }, 'If it was installed with sudo as a launch daemon, gh-runners shows the commands to run first.') : null,
+    st.os === 'linux' ? h('p', { class: 'muted small' }, 'If it was installed as a system service, gh-runners shows the commands to run first.') : null,
+  ].filter(Boolean);
+  if (!await confirmDialog('Move this runner into gh-runners?', body, 'Move it in')) return;
+  const key = (f.scope || '').toLowerCase();
+  if (key) { S.pending.add(key); render(); }
+  await guard(async () => {
+    await api('POST', '/api/adopt', { dir: f.dir });
+    toast('Moving ' + f.name + ' into gh-runners ...');
+  });
+  await loadTasks();
+  if (key) { S.pending.delete(key); render(); }
+}
+
+async function editLocalLabels(r) {
+  await guard(async () => {
+    const d = await api('POST', '/api/repo-runners', { repos: [r.scope], refresh: true });
+    if (d.errors && d.errors[r.scope]) throw new Error(d.errors[r.scope]);
+    const x = ((d.runners && d.runners[r.scope]) || []).find((g) => g.name === r.name);
+    if (!x) throw new Error(r.name + ' is not registered to ' + r.scope + ' on GitHub');
+    editLabels(r.scope, x);
   });
 }
 
@@ -461,6 +792,7 @@ function renderMachine() {
       h('div', { class: 'row', 'data-gap': '1' },
         r.disabled ? h('button', { class: 'btn', onclick: () => startStop(r, false) }, 'Start') : h('button', { class: 'btn', onclick: () => startStop(r, true) }, 'Stop'),
         h('button', { class: 'btn', onclick: () => showLog(r) }, 'Logs'),
+        r.kind !== 'org' && st.auth.signed_in ? h('button', { class: 'btn', onclick: () => editLocalLabels(r) }, 'Edit labels') : null,
         h('div', { class: 'grow' }),
         h('button', { class: 'btn danger', onclick: () => removeRunner(r) }, 'Remove')));
   });
@@ -470,6 +802,7 @@ function renderMachine() {
   mount(el,
     h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Runners on ' + st.hostname),
       h('span', { class: 'muted small' }, 'Folder: ', h('code', {}, st.runners_dir))),
+    foundBanner(),
     h('p', { class: 'muted' }, 'Target any runner of this computer from a workflow with ', h('code', {}, 'runs-on: [self-hosted, ' + st.machine_labels[3 + (st.config.labels || []).length] + ']'), ' or by its OS: ', h('code', {}, 'runs-on: [self-hosted, ' + osName(st.os) + ']'), '.'),
     od,
     cards.length ? h('div', { class: 'grid' }, cards) : h('div', { class: 'card empty' },
@@ -743,6 +1076,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await refreshState();
   await loadTasks();
   selectTab(tab);
+  loadFound(false);
   setInterval(() => { if (!document.hidden) refreshState(); }, 3000);
   setInterval(() => { if (!document.hidden || S.tasks.some((t) => t.state === 'running')) loadTasks(); }, 1500);
   setInterval(() => { if (!document.hidden && S.tab === 'machine') loadRemote(); }, 15000);
