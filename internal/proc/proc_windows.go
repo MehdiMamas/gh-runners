@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strconv"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -47,4 +48,55 @@ func env() []string {
 		return nil
 	}
 	return mergeEnv(os.Environ(), fresh)
+}
+
+// descendants lists the processes below pid, from a snapshot of the
+// process table. Windows has no process group to kill, and taskkill /T
+// finds nothing once the parent has exited, so the tree is noted first.
+func descendants(pid int) []int {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil
+	}
+	defer windows.CloseHandle(snap)
+	parent := map[uint32][]uint32{}
+	var e windows.ProcessEntry32
+	e.Size = uint32(unsafe.Sizeof(e))
+	for err := windows.Process32First(snap, &e); err == nil; err = windows.Process32Next(snap, &e) {
+		parent[e.ParentProcessID] = append(parent[e.ParentProcessID], e.ProcessID)
+	}
+	var out []int
+	seen := map[uint32]bool{uint32(pid): true}
+	queue := []uint32{uint32(pid)}
+	for len(queue) > 0 {
+		p := queue[0]
+		queue = queue[1:]
+		for _, c := range parent[p] {
+			if !seen[c] {
+				seen[c] = true
+				out = append(out, int(c))
+				queue = append(queue, c)
+			}
+		}
+	}
+	return out
+}
+
+func killPIDs(pids []int) {
+	for _, pid := range pids {
+		if h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, uint32(pid)); err == nil {
+			_ = windows.TerminateProcess(h, 1)
+			windows.CloseHandle(h)
+		}
+	}
+}
+
+func alive(pid int) bool {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(h)
+	var code uint32
+	return windows.GetExitCodeProcess(h, &code) == nil && code == 259 // STILL_ACTIVE
 }

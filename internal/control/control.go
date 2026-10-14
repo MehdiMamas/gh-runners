@@ -36,6 +36,9 @@ type Status struct {
 	SyncErr  string      `json:"sync_error,omitempty"`
 	OnDemand string      `json:"on_demand,omitempty"`
 	Update   UpdateState `json:"update"`
+	// Paused is the machine-level pause: nothing runs until Resume.
+	Paused      bool      `json:"paused,omitempty"`
+	PausedSince time.Time `json:"paused_since,omitzero"`
 }
 
 // UpdateState is what the daemon knows about gh-runners releases.
@@ -51,7 +54,14 @@ var ErrNotRunning = errors.New("the gh-runners daemon is not running (start it w
 
 var client = &http.Client{Timeout: 5 * time.Second}
 
-func call(method, path string, out any) error {
+// slowClient is for calls that wait for processes to stop.
+var slowClient = &http.Client{Timeout: 90 * time.Second}
+
+func call(method, path string, out any) error { return do(client, method, path, out) }
+
+func callSlow(method, path string, out any) error { return do(slowClient, method, path, out) }
+
+func do(client *http.Client, method, path string, out any) error {
 	info, err := store.LoadDaemonInfo()
 	if err != nil || info.Addr == "" {
 		return ErrNotRunning
@@ -94,6 +104,15 @@ func Sync() error { return call(http.MethodPost, "/sync", nil) }
 
 // Update makes the daemon install the latest release as soon as no job runs.
 func Update() error { return call(http.MethodPost, "/update", nil) }
+
+// Pause stops every runner on this machine, with its processes, and holds
+// on-demand runners, sync and updates until Resume. It returns once they
+// are down.
+func Pause() error { return callSlow(http.MethodPost, "/pause", nil) }
+
+// Resume starts the runners that were running before Pause and turns
+// on-demand, sync and updates back on.
+func Resume() error { return call(http.MethodPost, "/resume", nil) }
 
 // Shutdown stops the daemon and every runner it supervises.
 func Shutdown() error { return call(http.MethodPost, "/shutdown", nil) }

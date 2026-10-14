@@ -43,7 +43,10 @@ type Hooks struct {
 	WakeJIT     func()
 	ResetClient func()
 	UpdateNow   func()
-	Log         *log.Logger
+	// Pause stops everything gh-runners runs here; Resume undoes it.
+	Pause  func() error
+	Resume func() error
+	Log    *log.Logger
 	// Host is this machine as a main host; Member is its link to one.
 	// Either may be nil (no daemon, in tests).
 	Host   *fleet.Host
@@ -225,6 +228,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/service/{action}", s.postService)
 	mux.HandleFunc("GET /api/doctor", s.getDoctor)
 	mux.HandleFunc("POST /api/update", s.postUpdate)
+	mux.HandleFunc("POST /api/pause", s.postPause)
+	mux.HandleFunc("POST /api/resume", s.postResume)
 	mux.HandleFunc("POST /api/login/device", s.postDeviceLogin)
 	mux.HandleFunc("GET /api/login/device", s.getDeviceLogin)
 	mux.HandleFunc("POST /api/login/token", s.postTokenLogin)

@@ -83,6 +83,10 @@ func osLabel() string {
 
 // afterChange tells the user whether something will actually run the runner.
 func afterChange() {
+	if store.IsPaused() {
+		fmt.Println("This machine is paused, so nothing runs yet: `gh-runners resume` starts the runners.")
+		return
+	}
 	if _, err := control.GetStatus(); err == nil {
 		fmt.Println("The gh-runners daemon picked it up and is running it.")
 		return
@@ -345,6 +349,9 @@ func newListCmd() *cobra.Command {
 				if st.SyncErr != "" {
 					fmt.Printf("Last sync failed: %s\n", st.SyncErr)
 				}
+			}
+			if l := pausedLine(); l != "" {
+				fmt.Println(l)
 			}
 			if len(rows) == 0 {
 				fmt.Println("\nNo runners yet. Add one with `gh-runners add owner/repo` (or `gh-runners` for the menu).")

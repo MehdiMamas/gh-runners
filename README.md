@@ -199,6 +199,24 @@ How the PCs talk, in plain words:
   registration, runner lists and labels, workflow files for the label hints,
   queued jobs for on-demand runners).
 
+## Pause a machine
+
+Pause stops everything gh-runners runs on one machine at once: every runner and
+the processes of its job (a running job is cancelled, so you are asked first),
+on-demand runners, auto-sync and the update check. The background service and
+the link to the main host stay up, so a main host still shows the machine and
+can resume it.
+
+- **This machine:** **Pause this machine** at the top of the dashboard, or
+  `gh-runners pause` / `gh-runners resume`. It works when you are not joined
+  to a main host and when the host is unreachable.
+- **From the main host:** **Pause machine** / **Resume machine** on a machine
+  in the Machines tab, including the host itself.
+- **Resume** starts exactly the runners that were running before; one you
+  stopped by hand stays stopped.
+- The pause is kept across restarts, sleep and reboots until you resume.
+  `list` and `doctor` show it.
+
 ## Sign in
 
 gh-runners needs a GitHub token with admin rights on the repos it manages. It
@@ -272,6 +290,7 @@ only lands on a runner that has every label in its `runs-on:` list.
 | `logs [owner/repo]` | Runner output (`--runner` to pick one); `--daemon` for the supervisor, `-f` to follow. |
 | `update` | Install the latest release now (`--check` only looks). The service also does this by itself. |
 | `join <code>` / `leave` | Let a main host manage this PC (the code is from **Add a machine** on its dashboard), or stop that. |
+| `pause` / `resume` | Stop everything gh-runners runs on this machine, or turn it back on (`--force` skips the question about a running job). |
 | `doctor` | Check this machine. |
 | `login` | Save a personal access token (for machines without `gh`). |
 | `config` | Print the config file. |

@@ -37,6 +37,8 @@ func LocalState(r store.Runner, st control.Status, daemonUp bool) (state, lastEx
 		return "not registered", ""
 	case r.Disabled:
 		return "stopped", ""
+	case st.Paused:
+		return "paused", ""
 	case !daemonUp:
 		return "no daemon", ""
 	case ok && p.State == "backoff":

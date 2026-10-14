@@ -195,6 +195,11 @@ func TestCallAndAllowlist(t *testing.T) {
 	if err != nil || status != http.StatusAccepted || string(body) != `{"x":1}` {
 		t.Fatalf("Call = %d %s %v", status, body, err)
 	}
+	for _, p := range []string{"/api/pause", "/api/resume"} {
+		if status, _, err := h.Call(ctx, id, "POST", p, nil); err != nil || status != http.StatusAccepted {
+			t.Fatalf("Call %s = %d %v", p, status, err)
+		}
+	}
 	for _, c := range [][2]string{
 		{"POST", "/api/login/token"},
 		{"POST", "/api/logout"},
@@ -218,7 +223,7 @@ func TestCallAndAllowlist(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(got) != 1 {
+	if len(got) != 3 {
 		t.Fatalf("member API got %v", got)
 	}
 	if _, _, err := h.Call(ctx, "nope", "GET", "/api/state", nil); err != ErrOffline {

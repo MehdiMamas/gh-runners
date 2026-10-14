@@ -216,6 +216,7 @@ func TestMachineAllowlist(t *testing.T) {
 		{"GET", "/api/doctor"},
 		{"POST", "/api/sync/apply"},
 		{"POST", "/api/machines/leave"},
+		{"POST", "/api/machines/x/pause"},
 	} {
 		if code := f.remote(t, c[0], c[1], `{"token":"x"}`, nil); code != http.StatusForbidden {
 			t.Errorf("host passed on %s %s: %d", c[0], c[1], code)

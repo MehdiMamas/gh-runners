@@ -86,6 +86,10 @@ func Run(ctx context.Context, st *control.Status) []Check {
 		add(Fix, "background service not installed: gh-runners service install")
 	}
 
+	if p := store.LoadPause(); p.Paused {
+		add(Note, "this machine is paused: no runner, on-demand runner, sync or update runs; gh-runners resume turns them back on")
+	}
+
 	cfg, _ := store.LoadConfig()
 	add(OK, "labels this machine answers to: %s", strings.Join(ops.MachineLabels(cfg), ", "))
 	add(OK, "runners folder: %s", store.RunnersDir())

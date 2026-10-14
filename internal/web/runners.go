@@ -45,6 +45,8 @@ type runnerView struct {
 }
 
 type stateView struct {
+	Paused        bool                `json:"paused"`
+	PausedSince   string              `json:"paused_since,omitempty"`
 	Version       string              `json:"version"`
 	OS            string              `json:"os"`
 	Arch          string              `json:"arch"`
@@ -101,6 +103,7 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 		svc = *inst
 	}
 	v := stateView{
+		Paused: st.Paused, PausedSince: since(st.PausedSince),
 		Version: s.h.Version, OS: runtime.GOOS, Arch: runtime.GOARCH, Hostname: host,
 		MachineLabels: ops.MachineLabels(cfg), Home: store.Home(), RunnersDir: store.RunnersDir(),
 		DefaultDir: store.DefaultRunnersDir(), PID: st.PID, Started: since(st.Started),
@@ -217,17 +220,26 @@ func (c *remoteCache) reset() {
 }
 
 func (s *Server) getRemote(w http.ResponseWriter, r *http.Request) {
-	s.remote.mu.Lock()
-	defer s.remote.mu.Unlock()
 	// fresh=1 asks GitHub now: the main host checks for running jobs.
-	if !s.remote.at.IsZero() && time.Since(s.remote.at) < 15*time.Second && r.URL.Query().Get("fresh") != "1" {
-		writeJSON(w, http.StatusOK, s.remote.byID)
-		return
-	}
-	c, _, err := s.client(r.Context())
+	out, err := s.remoteStates(r.Context(), r.URL.Query().Get("fresh") == "1")
 	if err != nil {
 		fail(w, http.StatusUnauthorized, err)
 		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// remoteStates is what GitHub says about each local runner; fresh skips the
+// answer cached for 15 seconds.
+func (s *Server) remoteStates(ctx context.Context, fresh bool) (map[string]string, error) {
+	s.remote.mu.Lock()
+	defer s.remote.mu.Unlock()
+	if !s.remote.at.IsZero() && time.Since(s.remote.at) < 15*time.Second && !fresh {
+		return s.remote.byID, nil
+	}
+	c, _, err := s.client(ctx)
+	if err != nil {
+		return nil, err
 	}
 	local, _ := store.List()
 	byScope := map[string][]github.Runner{}
@@ -236,7 +248,7 @@ func (s *Server) getRemote(w http.ResponseWriter, r *http.Request) {
 	for _, l := range local {
 		key := l.Scope()
 		if _, seen := byScope[key]; !seen && !failed[key] {
-			list, err := c.ListRunners(r.Context(), github.Scope{Owner: l.Owner, Repo: l.Repo})
+			list, err := c.ListRunners(ctx, github.Scope{Owner: l.Owner, Repo: l.Repo})
 			if err != nil {
 				failed[key] = true
 			} else {
@@ -258,7 +270,7 @@ func (s *Server) getRemote(w http.ResponseWriter, r *http.Request) {
 		out[l.ID] = state
 	}
 	s.remote.byID, s.remote.at = out, time.Now()
-	writeJSON(w, http.StatusOK, out)
+	return out, nil
 }
 
 func (s *Server) postAdd(w http.ResponseWriter, r *http.Request) {
@@ -682,6 +694,10 @@ func (s *Server) postService(w http.ResponseWriter, r *http.Request) {
 // postUpdate asks the daemon to install the latest release now (once no
 // job is running); the page follows it in the state's update field.
 func (s *Server) postUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.h.Status().Paused {
+		fail(w, http.StatusConflict, errors.New("this machine is paused: resume it before updating"))
+		return
+	}
 	s.h.UpdateNow()
 	writeJSON(w, http.StatusAccepted, map[string]string{"ok": "started"})
 }
