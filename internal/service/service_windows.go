@@ -27,15 +27,15 @@ func install() (string, error) {
 	if h := os.Getenv("GH_RUNNERS_HOME"); h != "" {
 		cmdline = `"` + exe + `" --home "` + h + `" daemon --detach`
 	}
-	if err := k.SetStringValue(Name, cmdline); err != nil {
+	if err := k.SetStringValue(name(), cmdline); err != nil {
 		return "", err
 	}
-	return `HKCU\` + runKey + `\` + Name, StartDetached()
+	return `HKCU\` + runKey + `\` + name(), StartDetached()
 }
 
 func uninstall() error {
 	if k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.SET_VALUE); err == nil {
-		_ = k.DeleteValue(Name)
+		_ = k.DeleteValue(name())
 		k.Close()
 	}
 	return stop()
@@ -50,9 +50,9 @@ func stop() error {
 }
 
 func status() Status {
-	s := Status{Where: `HKCU\` + runKey + `\` + Name}
+	s := Status{Where: `HKCU\` + runKey + `\` + name()}
 	if k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE); err == nil {
-		_, _, err := k.GetStringValue(Name)
+		_, _, err := k.GetStringValue(name())
 		s.Installed = err == nil
 		k.Close()
 	}
@@ -61,7 +61,7 @@ func status() Status {
 
 func uninstallKeepRunning() error {
 	if k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.SET_VALUE); err == nil {
-		_ = k.DeleteValue(Name)
+		_ = k.DeleteValue(name())
 		k.Close()
 	}
 	return nil

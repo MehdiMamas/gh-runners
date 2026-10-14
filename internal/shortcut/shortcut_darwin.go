@@ -1,14 +1,17 @@
 package shortcut
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/MehdiMamas/gh-runners/internal/service"
 )
 
 func path() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Applications", "gh-runners.app")
+	return filepath.Join(home, "Applications", "gh-runners"+service.Suffix()+".app")
 }
 
 func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
@@ -21,7 +24,7 @@ const info = `<?xml version="1.0" encoding="UTF-8"?>
 <dict>
   <key>CFBundleName</key><string>gh-runners</string>
   <key>CFBundleDisplayName</key><string>gh-runners</string>
-  <key>CFBundleIdentifier</key><string>io.github.mehdimamas.gh-runners.app</string>
+  <key>CFBundleIdentifier</key><string>io.github.mehdimamas.gh-runners%s.app</string>
   <key>CFBundleExecutable</key><string>gh-runners</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
@@ -36,7 +39,7 @@ func install(exe string, args []string) (string, error) {
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(app, "Contents", "Info.plist"), []byte(info), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(app, "Contents", "Info.plist"), []byte(fmt.Sprintf(info, service.Suffix())), 0o644); err != nil {
 		return "", err
 	}
 	line := "exec " + shQuote(exe)

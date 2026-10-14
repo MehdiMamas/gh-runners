@@ -14,7 +14,7 @@ import (
 
 func plistPath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Library", "LaunchAgents", Label+".plist")
+	return filepath.Join(home, "Library", "LaunchAgents", label()+".plist")
 }
 
 func domain() string { return fmt.Sprintf("gui/%d", os.Getuid()) }
@@ -51,7 +51,7 @@ func Plist(exe, path, home string) string {
 	<key>StandardErrorPath</key><string>%s</string>
 </dict>
 </plist>
-`, Label, esc(exe), env, esc(filepath.Join(store.Home(), "launchd.err.log")))
+`, Label+SuffixFor(home), esc(exe), env, esc(filepath.Join(store.Home(), "launchd.err.log")))
 }
 
 func install() (string, error) {
@@ -65,7 +65,7 @@ func install() (string, error) {
 	if err := os.WriteFile(plistPath(), []byte(Plist(exe, os.Getenv("PATH"), os.Getenv("GH_RUNNERS_HOME"))), 0o644); err != nil {
 		return "", err
 	}
-	_ = run("launchctl", "bootout", domain()+"/"+Label)
+	_ = run("launchctl", "bootout", domain()+"/"+label())
 	// A daemon started by hand would make the agent exit right away.
 	_ = control.Shutdown()
 	waitStopped(60 * time.Second)
@@ -76,7 +76,7 @@ func install() (string, error) {
 }
 
 func uninstall() error {
-	_ = run("launchctl", "bootout", domain()+"/"+Label)
+	_ = run("launchctl", "bootout", domain()+"/"+label())
 	_ = control.Shutdown()
 	waitStopped(60 * time.Second)
 	if err := os.Remove(plistPath()); err != nil && !os.IsNotExist(err) {
@@ -89,7 +89,7 @@ func start() error {
 	if _, err := os.Stat(plistPath()); err != nil {
 		return StartDetached()
 	}
-	if err := run("launchctl", "kickstart", domain()+"/"+Label); err != nil {
+	if err := run("launchctl", "kickstart", domain()+"/"+label()); err != nil {
 		if err := run("launchctl", "bootstrap", domain(), plistPath()); err != nil {
 			return err
 		}
@@ -100,7 +100,7 @@ func start() error {
 func stop() error {
 	if _, err := os.Stat(plistPath()); err == nil {
 		// bootout, not kill: KeepAlive would restart a killed daemon.
-		_ = run("launchctl", "bootout", domain()+"/"+Label)
+		_ = run("launchctl", "bootout", domain()+"/"+label())
 	}
 	_ = control.Shutdown()
 	waitStopped(90 * time.Second)

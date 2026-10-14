@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/MehdiMamas/gh-runners/internal/service"
 )
 
 func path() string {
@@ -12,7 +14,7 @@ func path() string {
 		home, _ := os.UserHomeDir()
 		dir = filepath.Join(home, ".local", "share")
 	}
-	return filepath.Join(dir, "applications", "gh-runners.desktop")
+	return filepath.Join(dir, "applications", "gh-runners"+service.Suffix()+".desktop")
 }
 
 // execArg quotes one argument of a desktop entry's Exec key.

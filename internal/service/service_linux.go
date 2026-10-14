@@ -18,7 +18,7 @@ func unitPath() string {
 		home, _ := os.UserHomeDir()
 		dir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(dir, "systemd", "user", Name+".service")
+	return filepath.Join(dir, "systemd", "user", name()+".service")
 }
 
 func hasSystemd() bool {
@@ -65,13 +65,13 @@ func install() (string, error) {
 		return "", err
 	}
 	// A daemon started by hand would make the unit exit right away.
-	_ = run("systemctl", "--user", "stop", Name+".service")
+	_ = run("systemctl", "--user", "stop", name()+".service")
 	_ = control.Shutdown()
 	waitStopped(60 * time.Second)
 	if err := run("systemctl", "--user", "daemon-reload"); err != nil {
 		return "", err
 	}
-	if err := run("systemctl", "--user", "enable", "--now", Name+".service"); err != nil {
+	if err := run("systemctl", "--user", "enable", "--now", name()+".service"); err != nil {
 		return "", err
 	}
 	// Lingering keeps user services running without an open login session
@@ -84,18 +84,34 @@ func install() (string, error) {
 	return unitPath(), waitRunning(15 * time.Second)
 }
 
-const cronTag = "# gh-runners"
+// cronTag ends the crontab line of this copy of gh-runners.
+func cronTag() string { return "# " + name() }
+
+// hasCron tells whether crontab text has this copy's line. The tag must end
+// the line: "# gh-runners" is also the start of another copy's tag.
+func hasCron(text string) bool {
+	for _, l := range strings.Split(text, "\n") {
+		if strings.HasSuffix(strings.TrimSpace(l), cronTag()) {
+			return true
+		}
+	}
+	return false
+}
 
 // installCron is the fallback without a systemd user session (WSL, some
 // containers): an @reboot crontab line, and start the daemon now.
 func installCron(exe string) (string, error) {
 	existing, _ := exec.Command("crontab", "-l").Output()
-	if !strings.Contains(string(existing), cronTag) {
+	if !hasCron(string(existing)) {
 		next := strings.TrimRight(string(existing), "\n")
 		if next != "" {
 			next += "\n"
 		}
-		next += "@reboot " + quote(exe) + " daemon >/dev/null 2>&1 " + cronTag + "\n"
+		args := ""
+		if h := os.Getenv("GH_RUNNERS_HOME"); h != "" {
+			args = " --home " + quote(h)
+		}
+		next += "@reboot " + quote(exe) + args + " daemon >/dev/null 2>&1 " + cronTag() + "\n"
 		cmd := exec.Command("crontab", "-")
 		cmd.Stdin = strings.NewReader(next)
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -107,16 +123,16 @@ func installCron(exe string) (string, error) {
 
 func uninstall() error {
 	if _, err := os.Stat(unitPath()); err == nil {
-		_ = run("systemctl", "--user", "disable", "--now", Name+".service")
+		_ = run("systemctl", "--user", "disable", "--now", name()+".service")
 		if err := os.Remove(unitPath()); err != nil {
 			return err
 		}
 		_ = run("systemctl", "--user", "daemon-reload")
 	}
-	if existing, err := exec.Command("crontab", "-l").Output(); err == nil && strings.Contains(string(existing), cronTag) {
+	if existing, err := exec.Command("crontab", "-l").Output(); err == nil && hasCron(string(existing)) {
 		var keep []string
 		for _, l := range strings.Split(string(existing), "\n") {
-			if l != "" && !strings.Contains(l, cronTag) {
+			if l != "" && !hasCron(l) {
 				keep = append(keep, l)
 			}
 		}
@@ -131,7 +147,7 @@ func uninstall() error {
 
 func start() error {
 	if _, err := os.Stat(unitPath()); err == nil && hasSystemd() {
-		if err := run("systemctl", "--user", "start", Name+".service"); err != nil {
+		if err := run("systemctl", "--user", "start", name()+".service"); err != nil {
 			return err
 		}
 		return waitRunning(15 * time.Second)
@@ -141,7 +157,7 @@ func start() error {
 
 func stop() error {
 	if _, err := os.Stat(unitPath()); err == nil && hasSystemd() {
-		_ = run("systemctl", "--user", "stop", Name+".service")
+		_ = run("systemctl", "--user", "stop", name()+".service")
 	}
 	_ = control.Shutdown()
 	waitStopped(90 * time.Second)
@@ -152,7 +168,7 @@ func status() Status {
 	if _, err := os.Stat(unitPath()); err == nil {
 		return Status{Installed: true, Where: unitPath()}
 	}
-	if existing, err := exec.Command("crontab", "-l").Output(); err == nil && strings.Contains(string(existing), cronTag) {
+	if existing, err := exec.Command("crontab", "-l").Output(); err == nil && hasCron(string(existing)) {
 		return Status{Installed: true, Where: "crontab @reboot"}
 	}
 	return Status{Where: unitPath()}

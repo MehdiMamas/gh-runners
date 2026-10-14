@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/MehdiMamas/gh-runners/internal/service"
 )
 
 func path() string {
-	return filepath.Join(os.Getenv("APPDATA"), `Microsoft\Windows\Start Menu\Programs`, "gh-runners.lnk")
+	return filepath.Join(os.Getenv("APPDATA"), `Microsoft\Windows\Start Menu\Programs`, "gh-runners"+service.Suffix()+".lnk")
 }
 
 // psQuote makes s a PowerShell single-quoted string.
