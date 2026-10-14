@@ -49,6 +49,10 @@ func DaemonLog() string    { return filepath.Join(Home(), "daemon.log") }
 func CacheDir() string     { return filepath.Join(Home(), "cache") }
 func UISecretPath() string { return filepath.Join(Home(), "ui-secret") }
 
+// FleetDir holds the main host's certificate and members, or this
+// machine's link to its main host.
+func FleetDir() string { return filepath.Join(Home(), "fleet") }
+
 // DefaultRunnersDir is where runners go unless config.json says otherwise.
 func DefaultRunnersDir() string { return filepath.Join(Home(), "runners") }
 
@@ -268,6 +272,11 @@ type Config struct {
 	// AutoUpdate installs new gh-runners releases when no job is running;
 	// unset means on.
 	AutoUpdate *bool `json:"auto_update,omitempty"`
+	// MainHost makes this machine the main host: it listens on FleetPort so
+	// other machines can join and be managed from this dashboard.
+	MainHost bool `json:"main_host,omitempty"`
+	// FleetPort is the main host's port for its machines (default 47322).
+	FleetPort int `json:"fleet_port,omitempty"`
 }
 
 // AutoUpdateOn reports whether the daemon installs new releases itself.
@@ -391,6 +400,12 @@ func readJSON(path string, v any) error {
 	}
 	return nil
 }
+
+// ReadJSON reads a JSON file, waiting out a writer that holds it.
+func ReadJSON(path string, v any) error { return readJSON(path, v) }
+
+// WriteJSON writes a JSON file atomically.
+func WriteJSON(path string, v any, perm os.FileMode) error { return writeJSON(path, v, perm) }
 
 // writeJSON writes atomically so a reader never sees half a file.
 func writeJSON(path string, v any, perm os.FileMode) error {

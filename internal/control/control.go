@@ -85,6 +85,10 @@ func GetStatus() (Status, error) {
 // Reload makes the daemon rescan runners now instead of at its next tick.
 func Reload() error { return call(http.MethodPost, "/reload", nil) }
 
+// Fleet makes the daemon look at its main host link again (after join or
+// leave).
+func Fleet() error { return call(http.MethodPost, "/fleet", nil) }
+
 // Sync makes the daemon run auto-sync now.
 func Sync() error { return call(http.MethodPost, "/sync", nil) }
 

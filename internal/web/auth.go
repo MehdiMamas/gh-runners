@@ -22,6 +22,10 @@ type authCache struct {
 	user   github.User
 	scopes string
 	err    error
+	gh     *github.Client
+	// brokered, when set and this machine has a main host, gives a client
+	// whose calls the main host makes, for a machine not signed in itself.
+	brokered func() (*github.Client, string)
 }
 
 type authView struct {
@@ -43,6 +47,11 @@ func (a *authCache) reset() {
 }
 
 func (a *authCache) get(ctx context.Context) (github.TokenSource, github.User, string, error) {
+	src, user, scopes, _, err := a.getClient(ctx)
+	return src, user, scopes, err
+}
+
+func (a *authCache) getClient(ctx context.Context) (github.TokenSource, github.User, string, *github.Client, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	ttl := 5 * time.Minute
@@ -50,15 +59,22 @@ func (a *authCache) get(ctx context.Context) (github.TokenSource, github.User, s
 		ttl = 20 * time.Second
 	}
 	if !a.at.IsZero() && time.Since(a.at) < ttl {
-		return a.src, a.user, a.scopes, a.err
+		return a.src, a.user, a.scopes, a.gh, a.err
 	}
 	a.at = time.Now()
 	a.src, a.err = github.ResolveToken(store.TokenPath())
-	a.user, a.scopes = github.User{}, ""
+	a.user, a.scopes, a.gh = github.User{}, "", nil
+	if a.err == nil {
+		a.gh = github.New(a.src.Token)
+	} else if a.brokered != nil {
+		if c, host := a.brokered(); c != nil {
+			a.gh, a.src, a.err = c, github.TokenSource{Source: "main host " + host}, nil
+		}
+	}
 	if a.err == nil {
 		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
-		a.user, a.scopes, a.err = github.New(a.src.Token).Me(ctx)
+		a.user, a.scopes, a.err = a.gh.Me(ctx)
 		if a.err != nil {
 			var ae *github.APIError
 			if errors.As(a.err, &ae) && ae.Status == http.StatusUnauthorized {
@@ -66,7 +82,7 @@ func (a *authCache) get(ctx context.Context) (github.TokenSource, github.User, s
 			}
 		}
 	}
-	return a.src, a.user, a.scopes, a.err
+	return a.src, a.user, a.scopes, a.gh, a.err
 }
 
 func (s *Server) authView(ctx context.Context) authView {
@@ -88,11 +104,11 @@ func (s *Server) authView(ctx context.Context) authView {
 
 // client is a GitHub client for the signed-in user.
 func (s *Server) client(ctx context.Context) (*github.Client, string, error) {
-	src, user, _, err := s.auth.get(ctx)
+	_, user, _, c, err := s.auth.getClient(ctx)
 	if err != nil {
 		return nil, "", err
 	}
-	return github.New(src.Token), user.Login, nil
+	return c, user.Login, nil
 }
 
 func (s *Server) saveToken(token string) error {
