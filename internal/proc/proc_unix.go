@@ -24,3 +24,5 @@ func interrupt(cmd *exec.Cmd) {
 func kill(cmd *exec.Cmd) {
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 }
+
+func env() []string { return nil }

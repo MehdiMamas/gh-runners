@@ -90,8 +90,8 @@ manages it.
 
 | Tab | What you do there |
 | --- | --- |
-| Repositories | Every repo you can reach, filter by owner and name, **Add runner** on one or tick several and add them all. Each repo shows the runners GitHub already has for it (from any machine) and their labels, and under it one row per runner on this machine with its labels, **Stop**/**Start**, **Logs**, **Edit labels** and **Remove**. Public repos ask first. |
-| This machine | Each runner here: state on this computer and on GitHub, labels (**Edit labels**), a `runs-on:` line to copy, **Stop**, **Start**, **Logs**, **Remove**. |
+| Repositories | Every repo you can reach, filter by owner and name, **Add runner** on one or tick several and add them all. Each repo shows the runners GitHub already has for it (from any machine) and their labels, and under it one row per runner on this machine with its labels, **Stop**/**Start**, **Restart**, **Logs**, **Edit labels** and **Remove**. Public repos ask first. |
+| This machine | Each runner here: state on this computer and on GitHub, labels (**Edit labels**), a `runs-on:` line to copy, **Stop**, **Start**, **Restart**, **Logs**, **Remove**. Installed a tool (Swift, an SDK) after a runner started? **Restart** it: on Windows every runner start reads PATH and the other variables afresh from the registry, so jobs see the new tool. |
 | Automation | A runner for every repo that matches your rules (with preview), or on-demand runners. |
 | Activity | What the dashboard did, with the output of each step, and the service log. |
 | Settings | GitHub account (sign in, switch, sign out), the **runners folder** (pick any folder or disk; existing runners are moved there), runner name and labels, start at login. |

@@ -393,6 +393,71 @@ func (s *Server) postStartStop(disable bool) http.HandlerFunc {
 	}
 }
 
+// postRestart stops a runner, waits until the daemon has stopped it, and
+// starts it again with a fresh environment (a new PATH, say). A stopped
+// runner just starts.
+func (s *Server) postRestart(w http.ResponseWriter, r *http.Request) {
+	rn, ok := s.findRunner(w, r)
+	if !ok {
+		return
+	}
+	s.startScopedTask(w, "Restart the runner "+rn.Display(), []string{rn.Scope()}, func(out io.Writer) error {
+		if !rn.Disabled {
+			fmt.Fprintf(out, "Stopping %s ...\n", rn.Display())
+			if err := s.setDisabled(rn.ID, true); err != nil {
+				return err
+			}
+			if err := s.waitStopped(rn.ID, restartTimeout); err != nil {
+				return err
+			}
+		}
+		fmt.Fprintf(out, "Starting %s ...\n", rn.Display())
+		if err := s.setDisabled(rn.ID, false); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Restarted %s.\n", rn.Display())
+		return nil
+	})
+}
+
+// restartTimeout is how long a restart waits for the runner to stop: the
+// runner gets 30 seconds to close its session before it is killed.
+var restartTimeout = 90 * time.Second
+
+// setDisabled reloads the runner first, so a label edit or another change
+// made since the request came in is kept.
+func (s *Server) setDisabled(id string, disabled bool) error {
+	rn, err := store.Load(id)
+	if err != nil {
+		return err
+	}
+	rn.Disabled = disabled
+	if err := store.Save(rn); err != nil {
+		return err
+	}
+	s.h.Reload()
+	return nil
+}
+
+func (s *Server) waitStopped(id string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		running := false
+		for _, p := range s.h.Status().Runners {
+			if p.ID == id && p.PID != 0 {
+				running = true
+			}
+		}
+		if !running {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the runner is still running after %s", timeout)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 func (s *Server) postRemove(w http.ResponseWriter, r *http.Request) {
 	rn, ok := s.findRunner(w, r)
 	if !ok {

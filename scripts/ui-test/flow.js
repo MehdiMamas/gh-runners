@@ -1,5 +1,5 @@
 // Drives the dashboard like a person: add a runner to a repo, stop/start it,
-// open its logs, move the runners folder, remove it. It registers a real
+// restart it, open its logs, move the runners folder, remove it. It registers a real
 // runner: use a test repository and a throwaway --home.
 // Usage: node flow.js <unlock-url> <outdir> <owner/repo>
 const path = require('path');
@@ -33,6 +33,14 @@ const [url, out, repo] = process.argv.slice(2);
   await t.shot('3-stopped');
   await t.click('#tab-machine .card.runner', 'Start');
   await t.waitFor('running again', async () => (await mine()).state === 'running', 120);
+
+  // 3b. Restart: the runner stops and comes back on its own.
+  await t.click('#tab-machine .card.runner', 'Restart');
+  const task = await t.waitFor('restart task done', async () => (await t.get('/api/tasks')).find((k) => /^Restart the runner/.test(k.title) && (k.state === 'done' || k.state === 'failed')), 120);
+  if (task.state !== 'done') throw new Error('restart failed: ' + task.error);
+  await t.waitFor('running after restart', async () => (await mine()).state === 'running', 60);
+  await sleep(500);
+  await t.shot('3b-restarted');
 
   // 4. Logs dialog.
   await t.click('#tab-machine .card.runner', 'Logs');
