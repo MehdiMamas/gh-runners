@@ -27,9 +27,11 @@ func kill(cmd *exec.Cmd) {
 
 func env() []string { return nil }
 
-// descendants is only needed where the tree has no process group to aim at.
-func descendants(pid int) []int { return nil }
+type procRef = int
 
-func killPIDs([]int) {}
+// descendants is only needed where the tree has no process group to aim at.
+func descendants(pid int) []procRef { return nil }
+
+func killPIDs([]procRef) {}
 
 func alive(pid int) bool { return syscall.Kill(pid, 0) == nil }
