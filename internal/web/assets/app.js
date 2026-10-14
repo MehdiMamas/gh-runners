@@ -1030,7 +1030,7 @@ function machineCard(m) {
     h('div', { class: 'card-head' },
       h('div', {}, h('div', { class: 'row' }, h('h2', {}, machineName(m)), m.online ? h('span', { class: 'pill ok' }, 'Online') : h('span', { class: 'pill' }, 'Offline')),
         h('div', { class: 'muted small' }, ['gh-runners ' + (info.version || '?'), osName(info.os) + (info.arch ? ' · ' + info.arch : ''),
-          m.online ? (m.since ? 'connected ' + ago(m.since) : 'connected') : (m.last_seen ? 'last seen ' + ago(m.last_seen) : 'never connected')].join(' · '))),
+          m.online ? 'live' : (m.last_seen ? 'last seen ' + ago(m.last_seen) : 'never connected')].join(' · '))),
       h('div', { class: 'row' },
         btn('Add runner', () => addToMachine(m)),
         btn('Update gh-runners', () => updateMachine(m)),
