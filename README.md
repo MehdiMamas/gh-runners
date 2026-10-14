@@ -94,7 +94,8 @@ manages it.
 | This machine | Each runner here: state on this computer and on GitHub, labels (**Edit labels**), a `runs-on:` line to copy, **Stop**, **Start**, **Restart**, **Logs**, **Remove**. Installed a tool (Swift, an SDK) after a runner started? **Restart** it: on Windows every runner start reads PATH and the other variables afresh from the registry, so jobs see the new tool. |
 | Automation | A runner for every repo that matches your rules (with preview), or on-demand runners. |
 | Activity | What the dashboard did, with the output of each step, and the service log. |
-| Settings | GitHub account (sign in, switch, sign out), the **runners folder** (pick any folder or disk; existing runners are moved there), runner name and labels, start at login. |
+| Machines | Only on the main host (see [Machines](#machines)): this PC and every PC that joined it, online or not, busy, version, OS and runners, with the same actions as here. |
+| Settings | GitHub account (sign in, switch, sign out), the **runners folder** (pick any folder or disk; existing runners are moved there), runner name and labels, start at login, **Main host**. |
 | Health | The same checks as `gh-runners doctor`. |
 
 **Labels.** Before adding a runner the dashboard asks which labels it gets. It
@@ -137,6 +138,67 @@ machine, forward the port: `ssh -L 47321:127.0.0.1:47321 that-machine`, then
 open the link the command printed there. Change the port with
 `"dashboard_port"` in `~/.gh-runners/config.json`.
 
+## Machines
+
+Runners on several PCs, one dashboard. Pick one PC as the **main host**
+(**Settings > Main host > Make this the main host**); a **Machines** tab
+appears there. **Add a machine** shows two commands with a one-time code in
+them; paste the one for the other PC into a terminal there:
+
+```powershell
+# Windows (PowerShell)
+$env:GH_RUNNERS_JOIN='ghr1-...'; irm https://raw.githubusercontent.com/MehdiMamas/gh-runners/main/install.ps1 | iex
+```
+
+```sh
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/MehdiMamas/gh-runners/main/install.sh | sh -s -- --join ghr1-...
+```
+
+It installs gh-runners (or updates it), runs `gh-runners join <code>`, starts
+the background service at login and connects to the main host. On a PC that
+already has gh-runners, `gh-runners join <code>` alone does the same.
+
+The Machines tab lists the main host first, then every PC that joined it:
+online or offline (and when it was last seen), which runners are running a
+job, its gh-runners version, OS and runners. For each one you can **Add
+runner** (repo, heavy/light and your own labels), **Edit labels**,
+**Stop**/**Start**, **Restart**, **Logs**, **Remove**, **Update
+gh-runners** and **Remove machine**. Restart, Remove and Update first ask
+GitHub whether a runner on that PC is running a job; if one is, the dashboard
+says so and only goes on when you confirm, because it would cancel the job.
+
+A PC that joined doesn't need to sign in to GitHub: the main host makes its
+GitHub calls for it. If you sign in on it anyway, it uses its own sign-in and
+keeps working on its own when the main host is off. `gh-runners leave` (or
+**Leave** in its Settings) ends it; its runners stay and keep running.
+**Remove machine** on the main host does the same from the other side.
+
+How the PCs talk, in plain words:
+
+- Only the main host opens a port to the network, and only after you turn it
+  on: TCP 47322 (`"fleet_port"` in `config.json`), separate from the
+  dashboard, which stays on `127.0.0.1` everywhere. The other PCs connect out
+  to it and reconnect by themselves, so they open no port.
+- The connection is TLS with a certificate the main host makes for itself.
+  The code carries that certificate's fingerprint, and the other PCs accept
+  only that certificate: nobody in between can pose as the main host, and no
+  certificate authority is involved.
+- The code also carries the main host's addresses (LAN, and Tailscale if it
+  runs there) and a secret that works once, for one hour. Joining swaps it for
+  a long-lived key that only that PC has; the main host keeps only its hash
+  and forgets it on **Remove machine**.
+- The main host can only do what the dashboard does with runners: add, start,
+  stop, restart, remove and relabel them, read their logs, update gh-runners.
+  The other PC checks every request against that list itself. Signing in or
+  out, the start-at-login entry, files and folders (so the runners folder
+  can't be changed remotely), shutting down and running commands are not on
+  it.
+- The main host's GitHub token never leaves it. It makes the GitHub calls
+  itself, and only the ones gh-runners needs (your repos, runner
+  registration, runner lists and labels, workflow files for the label hints,
+  queued jobs for on-demand runners).
+
 ## Sign in
 
 gh-runners needs a GitHub token with admin rights on the repos it manages. It
@@ -145,6 +207,8 @@ uses the first of:
 1. `GH_RUNNERS_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN`
 2. a token you signed in with in the dashboard or with `gh-runners login`
 3. the GitHub CLI (`gh auth login` once; nothing else to do)
+4. on a PC that joined a main host: the main host's sign-in (in the dashboard
+   and the background service; the CLI commands need one of the above)
 
 In the dashboard, **Settings > GitHub account** takes a token you paste (the
 button opens GitHub's token page with the right scopes ticked). Builds with an
@@ -207,6 +271,7 @@ only lands on a runner that has every label in its `runs-on:` list.
 | `shortcut install\|uninstall` | App-menu entry that opens the dashboard. |
 | `logs [owner/repo]` | Runner output (`--runner` to pick one); `--daemon` for the supervisor, `-f` to follow. |
 | `update` | Install the latest release now (`--check` only looks). The service also does this by itself. |
+| `join <code>` / `leave` | Let a main host manage this PC (the code is from **Add a machine** on its dashboard), or stop that. |
 | `doctor` | Check this machine. |
 | `login` | Save a personal access token (for machines without `gh`). |
 | `config` | Print the config file. |
@@ -268,6 +333,9 @@ Tune sync and on-demand in `config.json` (`gh-runners config` prints it):
   run workflows you trust; consider a separate user account or a VM.
 - The token is read from the GitHub CLI or the environment when possible;
   `gh-runners login` stores it in `~/.gh-runners/token` with mode 0600.
+- A main host can add and run runners on the PCs that joined it, so a PC
+  that joined trusts whoever controls the main host. See [Machines](#machines)
+  for what it can and can't do there.
 
 ## Cost
 

@@ -246,6 +246,18 @@ label.check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; c
 .snippet code { flex: 1; overflow-x: auto; white-space: nowrap; }
 .err { color: var(--bad); font-size: 12.5px; overflow-wrap: anywhere; }
 
+/* machines */
+.mrunners { border-top: 1px solid var(--border); margin-top: 10px; }
+.mrunner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 0; border-top: 1px solid var(--border); }
+.mrunner:first-child { border-top: 0; }
+.mrunner .who { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.mrunner .name { font-weight: 600; overflow-wrap: anywhere; }
+.mrunner .acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.machine-card .card-head { flex-wrap: wrap; }
+.cmd-row { align-items: flex-start; }
+.snippet .cmd { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-all; overflow-x: visible; user-select: all; }
+.item.pick { grid-template-columns: minmax(0, 1fr) auto; }
+
 /* logs */
 pre.log {
   background: #0d1117; color: #d6dde6; padding: 12px; border-radius: 8px; margin: 0;

@@ -1,6 +1,8 @@
 # Installs gh-runners on Windows:
 #   irm https://raw.githubusercontent.com/MehdiMamas/gh-runners/main/install.ps1 | iex
 # Options (environment): GH_RUNNERS_VERSION=v0.1.0, GH_RUNNERS_BIN=<folder>
+# To join a main host, set the code from Add a machine on its dashboard first:
+#   $env:GH_RUNNERS_JOIN='<code>'; irm .../install.ps1 | iex
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
@@ -51,7 +53,18 @@ try {
     }
     # Best effort: a Start Menu entry that opens the dashboard.
     try { & $exe shortcut install | Out-Null } catch { }
-    Write-Host 'Next: run gh-runners to open the dashboard in your browser (or find gh-runners in the Start Menu)'
+    if ($env:GH_RUNNERS_JOIN) {
+        # The code works once: drop it from this shell before using it.
+        $code = $env:GH_RUNNERS_JOIN
+        Remove-Item Env:GH_RUNNERS_JOIN
+        # Pairs with the main host and starts the daemon at login.
+        & $exe join $code
+        if ($LASTEXITCODE -ne 0) { throw 'gh-runners join failed (see above)' }
+        Write-Host 'Done: the main host manages this machine now.'
+    }
+    else {
+        Write-Host 'Next: run gh-runners to open the dashboard in your browser (or find gh-runners in the Start Menu)'
+    }
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

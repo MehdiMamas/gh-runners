@@ -219,7 +219,8 @@ func (c *remoteCache) reset() {
 func (s *Server) getRemote(w http.ResponseWriter, r *http.Request) {
 	s.remote.mu.Lock()
 	defer s.remote.mu.Unlock()
-	if !s.remote.at.IsZero() && time.Since(s.remote.at) < 15*time.Second {
+	// fresh=1 asks GitHub now: the main host checks for running jobs.
+	if !s.remote.at.IsZero() && time.Since(s.remote.at) < 15*time.Second && r.URL.Query().Get("fresh") != "1" {
 		writeJSON(w, http.StatusOK, s.remote.byID)
 		return
 	}

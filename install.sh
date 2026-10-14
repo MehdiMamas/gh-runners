@@ -2,7 +2,18 @@
 # Installs gh-runners on macOS or Linux:
 #   curl -fsSL https://raw.githubusercontent.com/MehdiMamas/gh-runners/main/install.sh | sh
 # Options (environment): GH_RUNNERS_VERSION=v0.1.0, GH_RUNNERS_BIN=~/.local/bin
+# To join a main host, add the code from Add a machine on its dashboard:
+#   curl -fsSL .../install.sh | sh -s -- --join <code>
 set -eu
+
+join=${GH_RUNNERS_JOIN:-}
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--join) [ $# -ge 2 ] || { echo "gh-runners: --join needs the code" >&2; exit 1; }; join=$2; shift 2 ;;
+	--join=*) join=${1#--join=}; shift ;;
+	*) echo "gh-runners: unknown option $1" >&2; exit 1 ;;
+	esac
+done
 
 repo=MehdiMamas/gh-runners
 bin=${GH_RUNNERS_BIN:-$HOME/.local/bin}
@@ -62,4 +73,10 @@ if "$bin/gh-runners" service status 2>/dev/null | grep -q "running: *true"; then
 fi
 # Best effort: an app-menu entry that opens the dashboard.
 "$bin/gh-runners" shortcut install >/dev/null 2>&1 || true
-echo "Next: run gh-runners to open the dashboard in your browser"
+if [ -n "$join" ]; then
+	# Pairs with the main host and starts the daemon at login.
+	"$bin/gh-runners" join "$join"
+	echo "Done: the main host manages this machine now."
+else
+	echo "Next: run gh-runners to open the dashboard in your browser"
+fi

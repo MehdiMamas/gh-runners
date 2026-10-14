@@ -15,6 +15,9 @@ const S = {
   ghRunners: {}, // owner/repo -> runners GitHub has for it
   found: [], foundHidden: false, // runners set up by hand on this computer
   pending: new Set(), // repos whose add request is on its way
+  fleet: null, // GET /api/machines: the main host's view of its machines
+  mgh: {}, // machine id -> runner id -> state GitHub reports, for that machine's runners
+  mwatch: new Set(), // "machine:task" pairs being followed
 };
 
 // ---------- helpers ----------
@@ -55,7 +58,7 @@ async function api(method, path, body) {
   let data = null;
   const text = await res.text();
   try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
-  if (!res.ok) throw new Error((data && data.error) || res.statusText);
+  if (!res.ok) throw Object.assign(new Error((data && data.error) || res.statusText), { status: res.status, data });
   return data;
 }
 
@@ -88,8 +91,13 @@ function osName(os) { return { darwin: 'macOS', linux: 'Linux', windows: 'Window
 function list(v) { return (v || []).join(', '); }
 function split(v) { return v.split(',').map((x) => x.trim()).filter(Boolean); }
 
-async function copy(text) {
-  try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { toast('Copy failed: select the text and copy it', true); }
+// copy puts text on the clipboard. When that is refused, it selects el (if
+// given) so Ctrl+C works.
+async function copy(text, el) {
+  try { await navigator.clipboard.writeText(text); toast('Copied'); } catch {
+    if (el) { const r = document.createRange(); r.selectNodeContents(el); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+    toast('Copy failed: select the text and copy it', true);
+  }
 }
 
 function stateClass(s) {
@@ -136,6 +144,30 @@ function confirmDialog(title, text, okLabel, danger) {
   });
 }
 
+// confirmBusy warns that runners are running a job and asks to go on
+// anyway. gerund is "Restarting", "Removing" or "Updating".
+const BUSY_VERBS = { Restarting: 'Restart', Removing: 'Remove', Updating: 'Update' };
+function confirmBusy(names, gerund) {
+  const one = names.length === 1;
+  return confirmDialog(gerund + ' will cancel a job',
+    [h('p', {}, h('b', {}, names.join(', ')), (one ? ' is' : ' are') + ' running a job now. ' + gerund + ' will cancel that job.')], BUSY_VERBS[gerund] + ' anyway', true);
+}
+
+// confirmedPost posts to a machine's dashboard. When that machine says a
+// runner is running a job (409 with confirm), it asks and, on yes, sends
+// the same request again with confirm_busy=1. It resolves to null when the
+// answer is no.
+async function confirmedPost(path, gerund) {
+  try { return await api('POST', path); } catch (e) {
+    if (!(e.data && e.data.confirm)) throw e;
+    const busy = e.data.busy || [];
+    const ok = busy.length ? await confirmBusy(busy, gerund)
+      : await confirmDialog('Could not check for running jobs', [h('p', {}, e.message), h('p', {}, gerund + ' may cancel a job that is running.')], BUSY_VERBS[gerund] + ' anyway', true);
+    if (!ok) return null;
+    return api('POST', path + (path.includes('?') ? '&' : '?') + 'confirm_busy=1');
+  }
+}
+
 // ---------- state polling ----------
 function setOffline(v) {
   if (v === S.offline) return;
@@ -167,6 +199,7 @@ async function loadRemote() {
   if (!S.state || !S.state.auth.signed_in || !S.state.runners.length) return;
   try { S.remote = await api('GET', '/api/github-runners'); } catch { /* shown as unknown */ }
   if (S.tab === 'machine') renderMachine();
+  if (S.tab === 'machines') renderMachines();
 }
 
 async function loadTasks() {
@@ -202,6 +235,7 @@ function render() {
   $('count-runners').textContent = n ? String(n) : '';
   if (S.tab === 'repos') renderRepos();
   if (S.tab === 'machine') renderMachine();
+  if (S.tab === 'machines') renderMachines();
   if (S.tab === 'automation' && !document.querySelector('#tab-automation [data-dirty="1"]')) renderAutomation();
   if (S.tab === 'settings' && !document.querySelector('#tab-settings [data-dirty="1"]')) renderSettings();
 }
@@ -539,8 +573,8 @@ function setsList(sets, fixed, labels, pick) {
   }));
 }
 
-async function workflowSets(names) {
-  const results = await Promise.all(names.map((n) => api('GET', '/api/workflow-labels?repo=' + encodeURIComponent(n))
+async function workflowSets(names, base = '') {
+  const results = await Promise.all(names.map((n) => api('GET', base + '/api/workflow-labels?repo=' + encodeURIComponent(n))
     .then((d) => ({ n, sets: d.sets || [] }), (e) => ({ n, err: e.message }))));
   const byKey = new Map();
   const errors = [];
@@ -598,11 +632,12 @@ function labelEditor(labels, fixed, onchange) {
 // pickLabels asks which labels new runners get, suggesting the ones the
 // repositories' workflows ask for, and, for one more runner of a single
 // repository, its name. It resolves to {labels, name}, or null when
-// cancelled.
-function pickLabels(names, another) {
-  const fixed = S.state.machine_labels.slice();
+// cancelled. st and api are the dashboard state and API prefix of the
+// machine the runners go on: this one by default.
+function pickLabels(names, another, st = S.state, apiBase = '') {
+  const fixed = st.machine_labels.slice();
   const chosen = [];
-  const base = (S.state.config && S.state.config.runner_name) || S.state.hostname;
+  const base = (st.config && st.config.runner_name) || st.hostname;
   const nameInput = another && names.length === 1
     ? h('input', { type: 'text', 'aria-label': 'Runner name', placeholder: base + '-2', maxlength: '64' })
     : null;
@@ -646,7 +681,7 @@ function pickLabels(names, another) {
       onclose: () => { if (!answered) resolve(null); },
     });
     const look = names.slice(0, 20);
-    workflowSets(look).then((r) => {
+    workflowSets(look, apiBase).then((r) => {
       found = Object.assign(r, { more: names.length > look.length ? look.length : 0 });
       // Preselect the labels of the most used set this computer can take.
       const extra = (s) => customOf(s.labels).filter((l) => !lower(fixed).includes(l.toLowerCase()));
@@ -659,7 +694,7 @@ function pickLabels(names, another) {
 }
 
 // editLabels changes the custom labels of a runner on GitHub.
-function editLabels(scope, x, after) {
+function editLabels(scope, x, after, base = '') {
   const fixed = x.labels.filter((l) => !x.custom.includes(l));
   const labels = x.custom.slice();
   const setsBox = h('div', {});
@@ -680,12 +715,12 @@ function editLabels(scope, x, after) {
     editor.take();
     save.disabled = true;
     try {
-      await api('PUT', '/api/runner-labels', { repo: scope, runner_id: x.id, labels });
+      await api('PUT', base + '/api/runner-labels', { repo: scope, runner_id: x.id, labels });
     } finally { save.disabled = false; }
     closeDialog();
     toast('Labels of ' + x.name + ' saved');
-    refreshState();
-    if (scope.includes('/')) loadGhRunners(false, [scope]);
+    if (base) loadFleet(); else refreshState();
+    if (!base && scope.includes('/')) loadGhRunners(false, [scope]);
     if (after) after();
   }) }, 'Save labels');
   openDialog({
@@ -695,7 +730,7 @@ function editLabels(scope, x, after) {
       h('p', { class: 'muted small' }, 'The grey labels come from GitHub and stay. Changes apply right away; the runner does not restart.')],
     foot: [h('button', { class: 'btn', onclick: closeDialog }, 'Cancel'), save],
   });
-  if (scope.includes('/')) workflowSets([scope]).then((r) => { sets = r.sets; drawSets(); });
+  if (scope.includes('/')) workflowSets([scope], base).then((r) => { sets = r.sets; drawSets(); });
 }
 
 // ---------- runners GitHub knows ----------
@@ -793,13 +828,13 @@ async function adopt(f) {
   if (key) { S.pending.delete(key); render(); }
 }
 
-async function editLocalLabels(r) {
+async function editLocalLabels(r, base = '') {
   await guard(async () => {
-    const d = await api('POST', '/api/repo-runners', { repos: [r.scope], refresh: true });
+    const d = await api('POST', base + '/api/repo-runners', { repos: [r.scope], refresh: true });
     if (d.errors && d.errors[r.scope]) throw new Error(d.errors[r.scope]);
     const x = ((d.runners && d.runners[r.scope]) || []).find((g) => g.name === r.name);
     if (!x) throw new Error(r.name + ' is not registered to ' + r.scope + ' on GitHub');
-    editLabels(r.scope, x);
+    editLabels(r.scope, x, null, base);
   });
 }
 
@@ -819,8 +854,7 @@ async function startStop(r, stop) {
 // restartRunner stops the runner and starts it again, so it picks up tools
 // installed since it started. A job it is running is cancelled.
 async function restartRunner(r) {
-  if (S.remote[r.id] === 'busy' && !await confirmDialog('Restart the runner ' + r.name + '?',
-    [h('p', {}, h('b', {}, r.name), ' is running a job. Restarting it cancels that job.')], 'Restart anyway', true)) return;
+  if (S.remote[r.id] === 'busy' && !await confirmBusy([r.name], 'Restarting')) return;
   await guard(async () => { await api('POST', `/api/runners/${encodeURIComponent(r.id)}/restart`); loadTasks(); });
 }
 
@@ -829,21 +863,22 @@ async function removeRunner(r) {
   const body = [h('p', {}, 'This stops the runner ', h('b', {}, r.name), ', removes it from ', h('b', {}, r.scope), ' on GitHub and deletes its folder:'), h('p', {}, h('code', {}, r.dir)),
     rest.length ? h('p', { class: 'muted' }, 'The other runner' + (rest.length > 1 ? 's' : '') + ' of ' + r.scope + ' here (' + rest.map((x) => x.name).join(', ') + ') keep' + (rest.length > 1 ? '' : 's') + ' running.') : null];
   if (!await confirmDialog('Remove the runner ' + r.name + '?', body, 'Remove', true)) return;
+  if (S.remote[r.id] === 'busy' && !await confirmBusy([r.name], 'Removing')) return;
   await guard(async () => { await api('POST', `/api/runners/${encodeURIComponent(r.id)}/remove`); loadTasks(); });
 }
 
-function showLog(r) {
+function showLog(r, base = '', title) {
   const pre = h('pre', { class: 'log' }, 'Loading ...');
   let timer = null;
   let stick = true;
   pre.addEventListener('scroll', () => { stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20; });
   const load = async () => {
     try {
-      const d = await api('GET', r ? `/api/runners/${encodeURIComponent(r.id)}/log?lines=500` : '/api/daemon-log?lines=500');
+      const d = await api('GET', r ? `${base}/api/runners/${encodeURIComponent(r.id)}/log?lines=500` : '/api/daemon-log?lines=500');
       if (pre.textContent !== d.text) { pre.textContent = d.text; if (stick) pre.scrollTop = pre.scrollHeight; }
     } catch (e) { pre.textContent = e.message; }
   };
-  openDialog({ title: r ? 'Output of ' + who(r) :'gh-runners background service log', body: pre, wide: true, onclose: () => clearInterval(timer) });
+  openDialog({ title: r ? 'Output of ' + (title || who(r)) : 'gh-runners background service log', body: pre, wide: true, onclose: () => clearInterval(timer) });
   load();
   timer = setInterval(load, 2000);
 }
@@ -889,6 +924,217 @@ function renderMachine() {
       h('h2', {}, 'No runners on this computer yet'),
       h('p', {}, 'Go to Repositories and click "Add runner" next to a repository, or turn on on-demand runners under Automation.'),
       h('button', { class: 'btn primary', onclick: () => selectTab('repos') }, 'Pick repositories')));
+}
+
+// ---------- machines ----------
+// The main host manages other computers through their own dashboards:
+// everything for machine <id> goes to /api/machines/<id> + the path the
+// machine's dashboard knows.
+function mbase(m) { return '/api/machines/' + encodeURIComponent(m.id); }
+
+async function loadFleet() {
+  try { S.fleet = await api('GET', '/api/machines'); } catch { return; }
+  syncMachinesTab();
+  if (S.tab === 'machines') { renderMachines(); loadMachineGh(); }
+}
+
+// syncMachinesTab shows the Machines tab only on a main host.
+function syncMachinesTab() {
+  const on = !!(S.fleet && S.fleet.main_host);
+  document.querySelector('#tabs button[data-tab="machines"]').classList.toggle('hidden', !on);
+  $('count-machines').textContent = on && S.fleet.machines.length ? String(S.fleet.machines.length) : '';
+  if (!on && S.tab === 'machines') selectTab('machine');
+}
+
+// loadMachineGh asks each online machine which of its runners GitHub sees
+// as busy.
+async function loadMachineGh() {
+  if (!S.fleet) return;
+  await Promise.all(S.fleet.machines.filter((m) => m.online).map(async (m) => {
+    try { S.mgh[m.id] = await api('GET', mbase(m) + '/api/github-runners'); } catch { /* shown as unknown */ }
+  }));
+  if (S.tab === 'machines') renderMachines();
+}
+
+// watchTask follows a task of a machine and reports how it ended.
+function watchTask(m, res, title) {
+  if (!res || !res.task) return;
+  const key = m.id + ':' + res.task;
+  if (S.mwatch.has(key)) return;
+  S.mwatch.add(key);
+  const poll = async () => {
+    let t;
+    try { t = await api('GET', mbase(m) + '/api/tasks/' + res.task); } catch (e) {
+      if (e.status === 503) { S.mwatch.delete(key); return; } // the machine restarted: it shows up again when back
+      return setTimeout(poll, 3000);
+    }
+    if (t.state === 'done') toast(machineName(m) + ': ' + (t.title || title) + ': done');
+    else if (t.state === 'failed') toast(machineName(m) + ': ' + (t.title || title) + ': ' + (t.error || 'failed'), true);
+    else return setTimeout(poll, 1500);
+    S.mwatch.delete(key);
+    loadFleet(); loadMachineGh();
+  };
+  setTimeout(poll, 1000);
+}
+
+function machineName(m) { return (m.info && m.info.hostname) || m.id; }
+
+function renderMachines() {
+  const el = $('tab-machines');
+  const st = S.state;
+  const f = S.fleet;
+  if (!st || !f) return;
+  const members = f.machines || [];
+  const mine = h('div', { class: 'card' },
+    h('div', { class: 'card-head' },
+      h('div', {}, h('div', { class: 'row' }, h('h2', {}, st.hostname), h('span', { class: 'pill plain info' }, 'Main host')),
+        h('div', { class: 'muted small' }, 'gh-runners ' + st.version + ' · ' + osName(st.os) + ' · ' + st.arch + ' · this computer')),
+      h('button', { class: 'btn', onclick: () => selectTab('machine') }, 'Manage runners')),
+    st.runners.length ? h('div', { class: 'mrunners' }, st.runners.map((r) => h('div', { class: 'mrunner' },
+      h('div', { class: 'who' }, h('div', { class: 'name' }, r.kind === 'org' ? r.scope + ' (organization)' : who(r)), h('div', { class: 'muted small' }, r.name)),
+      h('div', { class: 'row' }, S.remote[r.id] ? pill(S.remote[r.id]) : null, pill(r.state)))))
+      : h('p', { class: 'muted' }, 'No runners on this computer.'));
+  mount(el,
+    h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Machines'),
+      h('button', { class: 'btn primary', onclick: addMachine }, 'Add a machine')),
+    f.listening ? null : h('div', { class: 'notice bad' }, h('div', { class: 'grow' }, 'Not listening for machines' + (f.error ? ': ' + f.error : '') + '.'), h('button', { class: 'btn', onclick: () => selectTab('settings') }, 'Open settings')),
+    mine,
+    members.length ? members.map(machineCard) : h('div', { class: 'card empty' },
+      h('h2', {}, 'No other machines yet'),
+      h('p', {}, 'Add a machine to see and manage its runners from here.'),
+      h('button', { class: 'btn primary', onclick: addMachine }, 'Add a machine')));
+}
+
+function machineCard(m) {
+  const info = m.info || { runners: [] };
+  const gh = S.mgh[m.id] || {};
+  const off = !m.online;
+  const why = 'Offline: this PC is not connected to the main host';
+  const btn = (text, fn, cls) => h('button', { class: 'btn small' + (cls ? ' ' + cls : ''), disabled: off, title: off ? why : null, onclick: fn }, text);
+  const rows = (info.runners || []).map((r) => {
+    const stopped = r.state === 'stopped';
+    const extra = (r.labels || []).filter((l) => !BUILTIN.includes(l.toLowerCase()));
+    return h('div', { class: 'mrunner', 'data-runner': r.id },
+      h('div', { class: 'who' },
+        h('div', { class: 'name' }, r.scope.includes('/') ? r.scope : r.scope + ' (organization)', h('span', { class: 'muted small' }, ' · ' + r.name)),
+        h('div', { class: 'chips' }, extra.length ? extra.map((l) => h('span', { class: 'chip custom' }, l)) : h('span', { class: 'muted small' }, 'No custom labels'))),
+      h('div', { class: 'row' }, off ? null : (gh[r.id] ? pill(gh[r.id]) : null), pill(r.state)),
+      h('div', { class: 'acts' },
+        stopped ? btn('Start', () => machineRunnerAction(m, r, 'start')) : btn('Stop', () => machineRunnerAction(m, r, 'stop')),
+        stopped ? null : btn('Restart', () => machineRunnerAction(m, r, 'restart')),
+        btn('Logs', () => showLog(r, mbase(m), machineName(m) + ' · ' + r.name)),
+        r.scope.includes('/') ? btn('Edit labels', () => editLocalLabels({ scope: r.scope, name: r.name }, mbase(m))) : null,
+        btn('Remove', () => machineRunnerAction(m, r, 'remove'), 'danger')));
+  });
+  return h('div', { class: 'card machine-card', 'data-machine': m.id },
+    h('div', { class: 'card-head' },
+      h('div', {}, h('div', { class: 'row' }, h('h2', {}, machineName(m)), m.online ? h('span', { class: 'pill ok' }, 'Online') : h('span', { class: 'pill' }, 'Offline')),
+        h('div', { class: 'muted small' }, ['gh-runners ' + (info.version || '?'), osName(info.os) + (info.arch ? ' · ' + info.arch : ''),
+          m.online ? (m.since ? 'connected ' + ago(m.since) : 'connected') : (m.last_seen ? 'last seen ' + ago(m.last_seen) : 'never connected')].join(' · '))),
+      h('div', { class: 'row' },
+        btn('Add runner', () => addToMachine(m)),
+        btn('Update gh-runners', () => updateMachine(m)),
+        h('button', { class: 'btn small danger', onclick: () => removeMachine(m) }, 'Remove machine'))),
+    off ? h('p', { class: 'muted small' }, 'Offline: its runners keep running, but you can change them here only when it is back.') : null,
+    rows.length ? h('div', { class: 'mrunners' }, rows) : h('p', { class: 'muted' }, 'No runners on this machine yet.'));
+}
+
+// machineRunnerAction runs start, stop, restart or remove on a runner of
+// a machine. Restart and remove ask first when GitHub says it runs a job.
+async function machineRunnerAction(m, r, verb) {
+  const path = `${mbase(m)}/api/runners/${encodeURIComponent(r.id)}/${verb}`;
+  if (verb === 'remove') {
+    const body = [h('p', {}, 'This stops the runner ', h('b', {}, r.name), ' on ', h('b', {}, machineName(m)), ', removes it from ', h('b', {}, r.scope), ' on GitHub and deletes its folder there.')];
+    if (!await confirmDialog('Remove the runner ' + r.name + '?', body, 'Remove', true)) return;
+  }
+  await guard(async () => {
+    const res = verb === 'restart' || verb === 'remove' ? await confirmedPost(path, verb === 'restart' ? 'Restarting' : 'Removing') : await api('POST', path);
+    if (res === null) return;
+    toast(r.name + ' on ' + machineName(m) + ': ' + { start: 'starting', stop: 'stopping', restart: 'restarting', remove: 'removing' }[verb] + ' ...');
+    watchTask(m, res, verb + ' ' + r.name);
+    setTimeout(loadFleet, 1500);
+  });
+}
+
+async function updateMachine(m) {
+  await guard(async () => {
+    const res = await confirmedPost(mbase(m) + '/api/update', 'Updating');
+    if (res === null) return;
+    toast('Updating gh-runners on ' + machineName(m) + ' ...');
+    watchTask(m, res, 'Update gh-runners');
+  });
+}
+
+async function removeMachine(m) {
+  const ok = await confirmDialog('Remove ' + machineName(m) + '?', [
+    h('p', {}, 'The runners on ', h('b', {}, machineName(m)), ' stay on that PC and keep running, but this main host can no longer manage them or make GitHub calls for it.'),
+    h('p', { class: 'muted' }, 'To manage it again, add it as a machine again.')], 'Remove machine', true);
+  if (!ok) return;
+  await guard(async () => { await api('POST', mbase(m) + '/remove'); toast(machineName(m) + ' removed'); await loadFleet(); });
+}
+
+// addToMachine picks a repository of the machine's GitHub account, then
+// its labels, and asks the machine to add the runner.
+async function addToMachine(m) {
+  await guard(async () => {
+    const base = mbase(m);
+    const [rs, st] = await Promise.all([api('GET', base + '/api/repos'), api('GET', base + '/api/state')]);
+    const have = new Set((m.info.runners || []).map((r) => r.scope.toLowerCase()));
+    const repos = (rs.repos || []).filter((r) => r.admin && !r.archived);
+    const q = h('input', { type: 'search', placeholder: 'Filter repositories', 'aria-label': 'Filter repositories' });
+    const box = h('div', { class: 'list' });
+    const draw = () => {
+      const needle = q.value.toLowerCase();
+      const shown = repos.filter((r) => !needle || r.full_name.toLowerCase().includes(needle)).slice(0, 100);
+      mount(box, shown.length ? shown.map((r) => {
+        const has = have.has(r.full_name.toLowerCase());
+        return h('div', { class: 'item pick', 'data-repo': r.full_name },
+          h('div', {}, h('div', { class: 'name' }, r.full_name),
+            h('div', { class: 'meta' }, h('span', { class: 'pill plain ' + (r.private ? '' : 'warn') }, r.private ? 'Private' : 'Public'), has ? h('span', { class: 'pill plain ok' }, 'Has a runner there') : null)),
+          h('div', { class: 'actions' }, h('button', { class: 'btn small primary', onclick: () => { closeDialog(); addRunnerTo(m, st, r, has); } }, has ? 'Add another' : 'Add runner')));
+      }) : h('div', { class: 'empty small' }, repos.length ? 'Nothing matches.' : 'No repositories this machine can add runners to.'));
+    };
+    q.addEventListener('input', draw);
+    draw();
+    openDialog({ title: 'Add a runner on ' + machineName(m), body: [h('p', { class: 'muted' }, 'Pick a repository. The runner is set up on ' + machineName(m) + '.'), h('div', { class: 'toolbar' }, q), box], foot: [h('button', { class: 'btn', onclick: closeDialog }, 'Cancel')] });
+    setTimeout(() => q.focus(), 50);
+  });
+}
+
+async function addRunnerTo(m, st, r, another) {
+  if (!r.private && !another) {
+    const ok = await confirmDialog('Add a runner to a public repository?', [
+      h('p', {}, h('b', {}, r.full_name), ' is public.'),
+      h('p', {}, 'Anyone on GitHub can open a pull request whose workflow then runs on ' + machineName(m) + ', with its files in reach. GitHub recommends self-hosted runners only for private repositories.')], 'Add anyway', true);
+    if (!ok) return;
+  }
+  const picked = await pickLabels([r.full_name], another, st, mbase(m));
+  if (picked === null) return;
+  await guard(async () => {
+    const res = await api('POST', mbase(m) + '/api/add', { repos: [r.full_name], labels: picked.labels, allow_public: !r.private, another: !!another, name: picked.name || undefined });
+    toast('Adding a runner to ' + r.full_name + ' on ' + machineName(m) + ' ...');
+    watchTask(m, res, 'Add ' + r.full_name);
+  });
+}
+
+// addMachine makes a one-time code and shows the commands to paste on the
+// other PC.
+async function addMachine() {
+  const body = h('div', {}, h('div', { class: 'row muted' }, h('div', { class: 'spinner' }), 'Making a code ...'));
+  openDialog({ title: 'Add a machine', body, foot: [h('button', { class: 'btn primary', onclick: closeDialog }, 'Done')], onclose: loadFleet });
+  let inv;
+  try { inv = await api('POST', '/api/machines/invite'); } catch (e) { mount(body, h('p', { class: 'err' }, e.message)); return; }
+  const cmd = (label, text) => {
+    const code = h('code', { class: 'cmd' }, text);
+    return h('div', { class: 'stack' }, h('b', {}, label), h('div', { class: 'snippet cmd-row' }, code, h('button', { class: 'btn small', onclick: () => copy(text, code) }, 'Copy')));
+  };
+  const at = inv.expires ? new Date(inv.expires) : null;
+  const left = at && !isNaN(at) ? Math.max(1, Math.round((at - Date.now()) / 60000)) : 0;
+  mount(body,
+    h('p', {}, 'Paste one of these on the other PC. The code works once and expires ' + (left ? 'in ' + left + ' minutes (at ' + at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ')' : 'in about an hour') + '.'),
+    cmd('Windows (PowerShell)', inv.windows),
+    cmd('macOS / Linux (Terminal)', inv.unix),
+    h('p', { class: 'muted small' }, 'The other PC tries these addresses: ' + (inv.addrs || []).map((a) => a + ':' + inv.port).join(', ') + '. It must reach one of them.'));
 }
 
 // ---------- automation ----------
@@ -1058,7 +1304,52 @@ function renderSettings() {
       h('dt', {}, 'Running since'), h('dd', {}, ago(st.started) + ' (pid ' + st.pid + ')')),
     h('p', {}, h('a', { href: 'https://github.com/MehdiMamas/gh-runners', target: '_blank', rel: 'noopener' }, 'github.com/MehdiMamas/gh-runners')));
 
-  mount(el, h('div', { class: 'two' }, h('div', {}, account, folder, defaults), h('div', {}, svc, updates, about)));
+  mount(el, h('div', { class: 'two' }, h('div', {}, account, folder, defaults), h('div', {}, svc, hostCard(), updates, about)));
+}
+
+// hostCard is the Settings card for the main host: turn this computer into
+// one, or, when it is managed by one, leave it.
+function hostCard() {
+  const f = S.fleet;
+  if (!f) return null;
+  const m = f.member;
+  if (m && m.joined) {
+    return h('div', { class: 'card', id: 'host-card' },
+      h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Main host'), h('p', { class: 'muted' }, 'Managed by the main host ', h('b', {}, m.host_name || m.addr || '?'), '. It can see and change the runners on this computer, and its GitHub sign-in is used here when you have none of your own.')),
+        m.connected ? h('span', { class: 'pill ok' }, 'Connected') : h('span', { class: 'pill bad' }, 'Not connected')),
+      m.connected && m.since ? h('p', { class: 'muted small' }, 'Connected ' + ago(m.since) + (m.addr ? ' · ' + m.addr : '')) : null,
+      m.error ? h('p', { class: 'err' }, m.error) : null,
+      h('div', { class: 'row' }, h('button', { class: 'btn danger', onclick: leaveHost }, 'Leave the main host')));
+  }
+  return h('div', { class: 'card', id: 'host-card' },
+    h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Main host'),
+      h('p', { class: 'muted' }, 'One main host controls the runners on your other PCs: they connect to it, and you manage them all from its Machines tab. Turning it on opens TLS port ' + f.port + ' on this computer\'s network.')),
+      f.main_host ? h('span', { class: 'pill ' + (f.listening ? 'ok' : 'bad') }, f.listening ? 'Listening' : 'Not listening') : null),
+    f.main_host ? h('dl', { class: 'kv' }, h('dt', {}, 'Port'), h('dd', {}, String(f.port)), h('dt', {}, 'Machines'), h('dd', {}, String((f.machines || []).length))) : null,
+    f.error ? h('p', { class: 'err' }, f.error) : null,
+    h('div', { class: 'row' }, f.main_host
+      ? h('button', { class: 'btn danger', onclick: () => setHost(false) }, 'Turn off')
+      : h('button', { class: 'btn primary', onclick: () => setHost(true) }, 'Make this the main host')));
+}
+
+async function setHost(on) {
+  if (!on && !await confirmDialog('Turn off the main host?', 'The machines you added disconnect and you can no longer manage them from here. They keep their runners and can be added again.', 'Turn off', true)) return;
+  await guard(async () => {
+    S.fleet = await api('POST', '/api/machines/host', { on });
+    toast(on ? 'This computer is now the main host' : 'Main host turned off');
+    syncMachinesTab();
+    render();
+  });
+}
+
+async function leaveHost() {
+  if (!await confirmDialog('Leave the main host?', 'The main host can no longer manage the runners here. They keep running. GitHub calls here then need a sign-in of its own.', 'Leave', true)) return;
+  await guard(async () => {
+    const r = await api('POST', '/api/machines/leave');
+    toast(r && r.told_host === false ? 'Left. The main host could not be told: remove this machine there too' : 'Left the main host');
+    await loadFleet();
+    await refreshState();
+  });
 }
 
 async function serviceAction(action) {
@@ -1143,9 +1434,10 @@ function selectTab(tab) {
   try { localStorage.setItem('ghr-tab', tab); } catch { /* private window */ }
   if (tab === 'repos') renderRepos();
   if (tab === 'machine') { renderMachine(); loadRemote(); }
+  if (tab === 'machines') { renderMachines(); loadFleet(); loadRemote(); }
   if (tab === 'automation') renderAutomation();
   if (tab === 'activity') renderActivity(true);
-  if (tab === 'settings') renderSettings();
+  if (tab === 'settings') { renderSettings(); loadFleet(); }
   if (tab === 'health') renderHealth();
 }
 
@@ -1155,10 +1447,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   try { tab = localStorage.getItem('ghr-tab') || 'repos'; } catch { /* ignore */ }
   await refreshState();
   await loadTasks();
+  await loadFleet();
   selectTab(tab);
   loadFound(false);
   setInterval(() => { if (!document.hidden) refreshState(); }, 3000);
   setInterval(() => { if (!document.hidden || S.tasks.some((t) => t.state === 'running')) loadTasks(); }, 1500);
   setInterval(() => { if (!document.hidden && S.tab === 'machine') loadRemote(); }, 15000);
+  setInterval(() => { if (!document.hidden && (S.tab === 'machines' || S.tab === 'settings')) loadFleet(); }, 10000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshState(); loadTasks(); } });
 });

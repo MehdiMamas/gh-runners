@@ -16,11 +16,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/control"
+	"github.com/MehdiMamas/gh-runners/internal/fleet"
 	"github.com/MehdiMamas/gh-runners/internal/github"
 	"github.com/MehdiMamas/gh-runners/internal/ops"
 	"github.com/MehdiMamas/gh-runners/internal/proc"
@@ -70,6 +72,10 @@ type Daemon struct {
 	tok      string
 	tokAt    time.Time
 	ghClient *github.Client
+
+	host     *fleet.Host
+	member   *fleet.Member
+	brokered *github.Client
 }
 
 // Run blocks until ctx is cancelled or /shutdown is called, then stops
@@ -112,6 +118,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 			os.Remove(store.DaemonPath())
 		}
 	}()
+	d.host = &fleet.Host{Dir: store.FleetDir(), Token: d.hostToken, Log: d.Log.Printf}
+	d.member = &fleet.Member{Dir: store.FleetDir(), Info: d.fleetInfo, Log: d.Log.Printf}
+	d.brokered = d.member.Client()
 	dash := web.New(web.Hooks{
 		Version:     d.Version,
 		Status:      d.status,
@@ -121,12 +130,24 @@ func (d *Daemon) Run(ctx context.Context) error {
 		ResetClient: d.resetClient,
 		UpdateNow:   func() { nudge(d.updateNow) },
 		Log:         d.Log,
+		Host:        d.host,
+		Member:      d.member,
 	}, uiSecret)
+	d.member.API = dash.FleetAPI()
+	d.member.OnChange = func() {
+		d.resetClient()
+		dash.Reset()
+	}
 	srv := &http.Server{Handler: dash.Handler(d.handler(secret, cancel)), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	defer srv.Close()
 
 	d.Log.Printf("gh-runners daemon %s started (pid %d, home %s, dashboard http://%s)", d.Version, info.PID, store.Home(), info.Addr)
+	if err := web.StartHost(d.host); err != nil {
+		d.Log.Printf("main host: %v", err)
+	}
+	defer d.host.Stop()
+	go d.member.Run(ctx)
 	go d.syncLoop(ctx)
 	go d.jit.loop(ctx)
 	go d.updateLoop(ctx)
@@ -197,6 +218,10 @@ func (d *Daemon) handler(secret string, shutdown context.CancelFunc) http.Handle
 	}))
 	mux.HandleFunc("POST /update", auth(func(w http.ResponseWriter, r *http.Request) {
 		nudge(d.updateNow)
+	}))
+	mux.HandleFunc("POST /fleet", auth(func(w http.ResponseWriter, r *http.Request) {
+		d.member.Reload()
+		d.member.OnChange()
 	}))
 	mux.HandleFunc("POST /shutdown", auth(func(w http.ResponseWriter, r *http.Request) {
 		shutdown()
@@ -361,6 +386,11 @@ func (d *Daemon) client() (*github.Client, error) {
 	}
 	ts, err := github.ResolveToken(store.TokenPath())
 	if err != nil {
+		// Not signed in here: a machine with a main host has the host
+		// make its GitHub calls.
+		if d.member != nil && d.member.Joined() {
+			return d.brokered, nil
+		}
 		return nil, err
 	}
 	if d.ghClient == nil || ts.Token != d.tok {
@@ -368,6 +398,29 @@ func (d *Daemon) client() (*github.Client, error) {
 	}
 	d.tok, d.tokAt = ts.Token, time.Now()
 	return d.ghClient, nil
+}
+
+// hostToken is the token the main host makes members' GitHub calls with.
+// It is used here only; it never goes to a member.
+func (d *Daemon) hostToken(context.Context) (string, error) {
+	c, err := d.client()
+	if err != nil {
+		return "", err
+	}
+	return c.Token, nil
+}
+
+// fleetInfo is what this machine tells its main host.
+func (d *Daemon) fleetInfo() fleet.Info {
+	host, _ := os.Hostname()
+	info := fleet.Info{Hostname: host, OS: runtime.GOOS, Arch: runtime.GOARCH, Version: d.Version, Runners: []fleet.RunnerInfo{}}
+	st := d.status()
+	runners, _ := store.List()
+	for _, r := range runners {
+		state, _ := ops.LocalState(r, st, true)
+		info.Runners = append(info.Runners, fleet.RunnerInfo{ID: r.ID, Scope: r.Scope(), Name: r.Name, State: state, Labels: r.Labels})
+	}
+	return info
 }
 
 // resetClient drops the cached token after a sign-in or sign-out.

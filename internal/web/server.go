@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/control"
+	"github.com/MehdiMamas/gh-runners/internal/fleet"
 	"github.com/MehdiMamas/gh-runners/internal/github"
 	"github.com/MehdiMamas/gh-runners/internal/ops"
 	"github.com/MehdiMamas/gh-runners/internal/service"
@@ -43,6 +44,10 @@ type Hooks struct {
 	ResetClient func()
 	UpdateNow   func()
 	Log         *log.Logger
+	// Host is this machine as a main host; Member is its link to one.
+	// Either may be nil (no daemon, in tests).
+	Host   *fleet.Host
+	Member *fleet.Member
 }
 
 // Server is the dashboard.
@@ -77,6 +82,14 @@ func New(h Hooks, secret string) *Server {
 		h.Status = func() control.Status { return control.Status{} }
 	}
 	s := &Server{h: h, secret: secret, tasks: newTaskQueue(h.Log)}
+	if m := h.Member; m != nil {
+		s.auth.brokered = func() (*github.Client, string) {
+			if st := m.Status(); st.Joined {
+				return m.Client(), st.HostName
+			}
+			return nil, ""
+		}
+	}
 	s.wfLabels.ttl, s.ghRunners.ttl, s.found.ttl = 5*time.Minute, time.Minute, 2*time.Minute
 	s.spawn = func(logName string, args ...string) error {
 		return service.Spawn(filepath.Join(store.Home(), logName), args...)
@@ -181,7 +194,12 @@ func readBody(r *http.Request, v any) error {
 	return nil
 }
 
-func (s *Server) api() http.Handler {
+// Reset forgets what the dashboard cached about GitHub (the daemon calls it
+// when this machine joins or leaves a main host).
+func (s *Server) Reset() { s.signedInChanged() }
+
+// routes is the dashboard API without the browser checks.
+func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/state", s.getState)
 	mux.HandleFunc("GET /api/repos", s.getRepos)
@@ -213,6 +231,17 @@ func (s *Server) api() http.Handler {
 	mux.HandleFunc("POST /api/logout", s.postLogout)
 	mux.HandleFunc("GET /api/tasks", s.getTasks)
 	mux.HandleFunc("GET /api/tasks/{id}", s.getTask)
+	return mux
+}
+
+func (s *Server) api() http.Handler {
+	mux := s.routes()
+	mux.HandleFunc("GET /api/machines", s.getMachines)
+	mux.HandleFunc("POST /api/machines/host", s.postMainHost)
+	mux.HandleFunc("POST /api/machines/invite", s.postInvite)
+	mux.HandleFunc("POST /api/machines/leave", s.postLeave)
+	mux.HandleFunc("POST /api/machines/{id}/remove", s.postRemoveMachine)
+	mux.HandleFunc("/api/machines/{id}/api/{rest...}", s.proxyMachine)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-GHR") != "1" {
 			fail(w, http.StatusForbidden, errors.New("missing X-GHR header"))
