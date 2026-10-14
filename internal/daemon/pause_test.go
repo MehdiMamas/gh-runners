@@ -5,10 +5,12 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -23,13 +25,25 @@ import (
 // directory and sleeps.
 func TestMain(m *testing.M) {
 	switch os.Getenv("FAKE_RUNNER") {
-	case "parent":
+	case "parent", "leader":
+		kind := "child"
+		if os.Getenv("FAKE_RUNNER") == "leader" {
+			// run.sh as on the Mac: it exits on the interrupt, its child ignores it.
+			kind = "stubborn"
+			sig := make(chan os.Signal, 1)
+			signal.Notify(sig, syscall.SIGINT)
+			go func() { <-sig; os.Exit(0) }()
+		}
 		child := exec.Command(os.Args[0])
-		child.Env = append(os.Environ(), "FAKE_RUNNER=child")
+		child.Env = append(os.Environ(), "FAKE_RUNNER="+kind)
 		if err := child.Start(); err != nil {
 			os.Exit(2)
 		}
 		_ = os.WriteFile("pids.txt", []byte(strconv.Itoa(os.Getpid())+" "+strconv.Itoa(child.Process.Pid)), 0o644)
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	case "stubborn":
+		signal.Ignore(syscall.SIGINT)
 		time.Sleep(time.Minute)
 		os.Exit(0)
 	case "child":

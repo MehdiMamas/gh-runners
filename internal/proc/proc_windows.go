@@ -71,7 +71,7 @@ func descendants(pid int) []procRef {
 	for err := windows.Process32First(snap, &e); err == nil; err = windows.Process32Next(snap, &e) {
 		parent[e.ParentProcessID] = append(parent[e.ParentProcessID], e.ProcessID)
 	}
-	const access = windows.PROCESS_TERMINATE | windows.PROCESS_QUERY_LIMITED_INFORMATION
+	const access = windows.PROCESS_TERMINATE | windows.PROCESS_QUERY_LIMITED_INFORMATION | windows.SYNCHRONIZE
 	root, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
 	if err != nil {
 		return nil
@@ -122,6 +122,70 @@ func killPIDs(refs []procRef) {
 	for _, h := range refs {
 		_ = windows.TerminateProcess(h, 1)
 		windows.CloseHandle(h)
+	}
+}
+
+// treeGone reports whether every process noted before the interrupt has
+// exited; a process handle is signalled once its process is gone.
+func treeGone(_ *exec.Cmd, known []procRef) bool {
+	for _, h := range known {
+		if ev, err := windows.WaitForSingleObject(h, 0); err != nil || ev != windows.WAIT_OBJECT_0 {
+			return false
+		}
+	}
+	return true
+}
+
+// strays lists the processes whose executable file is inside dir, from a
+// snapshot of the process table. Each is held by an open handle, so the PID
+// cannot be reused before it is killed.
+func strays(dir string) []Stray {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil
+	}
+	defer windows.CloseHandle(snap)
+	const access = windows.PROCESS_TERMINATE | windows.PROCESS_QUERY_LIMITED_INFORMATION | windows.SYNCHRONIZE
+	var found []Stray
+	var e windows.ProcessEntry32
+	e.Size = uint32(unsafe.Sizeof(e))
+	for err := windows.Process32First(snap, &e); err == nil; err = windows.Process32Next(snap, &e) {
+		if int(e.ProcessID) == os.Getpid() {
+			continue
+		}
+		h, err := windows.OpenProcess(access, false, e.ProcessID)
+		if err != nil {
+			continue
+		}
+		buf := make([]uint16, 1024)
+		n := uint32(len(buf))
+		if windows.QueryFullProcessImageName(h, 0, &buf[0], &n) != nil {
+			windows.CloseHandle(h)
+			continue
+		}
+		exe := windows.UTF16ToString(buf[:n])
+		if _, ok := below(dir, exe, true); !ok {
+			windows.CloseHandle(h)
+			continue
+		}
+		found = append(found, Stray{PID: int(e.ProcessID), Path: exe, ref: h})
+	}
+	return found
+}
+
+func releaseStrays(found []Stray) {
+	for _, s := range found {
+		windows.CloseHandle(s.ref)
+	}
+}
+
+// killStrays terminates the strays and what they started. The children are
+// noted first: once a parent is gone they cannot be found.
+func killStrays(found []Stray) {
+	for _, s := range found {
+		killPIDs(descendants(s.PID))
+		_ = windows.TerminateProcess(s.ref, 1)
+		windows.CloseHandle(s.ref)
 	}
 }
 

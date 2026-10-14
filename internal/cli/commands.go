@@ -196,6 +196,7 @@ func newStartStopCmd(start bool) *cobra.Command {
 		use, short = "start <owner/repo | org>", "Start a stopped runner again"
 	}
 	var sel string
+	var force bool
 	cmd := &cobra.Command{
 		Use:   use,
 		Short: short + " (every runner of the repo unless --runner picks one)",
@@ -204,6 +205,28 @@ func newStartStopCmd(start bool) *cobra.Command {
 			rs, err := findRunners(args, sel)
 			if err != nil {
 				return err
+			}
+			if !start && !force {
+				dirs := map[string]bool{}
+				for _, r := range rs {
+					dirs[r.Dir()] = true
+				}
+				var busy []string
+				rows, _, _ := collectRows(cmd, false)
+				for _, row := range rows {
+					if dirs[row.Dir] && row.GitHub == "busy" && row.Local != "stopped" {
+						busy = append(busy, row.Name+" ("+row.Scope+")")
+					}
+				}
+				if len(busy) > 0 {
+					msg := "Stopping cancels the job running on " + strings.Join(busy, ", ") + "."
+					if !interactive() {
+						return errors.New(msg + " Run with --force to stop anyway.")
+					}
+					if !confirm(msg + " Stop anyway?") {
+						return errors.New("not stopped")
+					}
+				}
 			}
 			for _, r := range rs {
 				if err := ops.SetDisabled(r, !start); err != nil {
@@ -221,6 +244,9 @@ func newStartStopCmd(start bool) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&sel, "runner", "", runnerFlagHelp)
+	if !start {
+		cmd.Flags().BoolVar(&force, "force", false, "stop even if a runner is running a job (the job is cancelled)")
+	}
 	return cmd
 }
 

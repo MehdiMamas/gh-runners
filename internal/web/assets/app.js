@@ -145,8 +145,8 @@ function confirmDialog(title, text, okLabel, danger) {
 }
 
 // confirmBusy warns that runners are running a job and asks to go on
-// anyway. gerund is "Restarting", "Removing", "Updating" or "Pausing".
-const BUSY_VERBS = { Restarting: 'Restart', Removing: 'Remove', Updating: 'Update', Pausing: 'Pause' };
+// anyway. gerund is "Stopping", "Restarting", "Removing", "Updating" or "Pausing".
+const BUSY_VERBS = { Stopping: 'Stop', Restarting: 'Restart', Removing: 'Remove', Updating: 'Update', Pausing: 'Pause' };
 function confirmBusy(names, gerund) {
   const one = names.length === 1;
   return confirmDialog(gerund + ' will cancel a job',
@@ -871,7 +871,10 @@ async function setPaused(m, on) {
 
 async function startStop(r, stop) {
   await guard(async () => {
-    await api('POST', `/api/runners/${encodeURIComponent(r.id)}/${stop ? 'stop' : 'start'}`);
+    const path = `/api/runners/${encodeURIComponent(r.id)}/${stop ? 'stop' : 'start'}`;
+    // Stopping cancels a job the runner is running: ask first.
+    const res = stop ? await confirmedPost(path, 'Stopping') : await api('POST', path);
+    if (res === null) return;
     toast(who(r) + (stop ? ' is stopping' : ' is starting'));
     await refreshState();
   });
@@ -1071,7 +1074,7 @@ function machineCard(m) {
 }
 
 // machineRunnerAction runs start, stop, restart or remove on a runner of
-// a machine. Restart and remove ask first when GitHub says it runs a job.
+// a machine. Stop, restart and remove ask first when GitHub says it runs a job.
 async function machineRunnerAction(m, r, verb) {
   const path = `${mbase(m)}/api/runners/${encodeURIComponent(r.id)}/${verb}`;
   if (verb === 'remove') {
@@ -1079,7 +1082,7 @@ async function machineRunnerAction(m, r, verb) {
     if (!await confirmDialog('Remove the runner ' + r.name + '?', body, 'Remove', true)) return;
   }
   await guard(async () => {
-    const res = verb === 'restart' || verb === 'remove' ? await confirmedPost(path, verb === 'restart' ? 'Restarting' : 'Removing') : await api('POST', path);
+    const res = verb === 'start' ? await api('POST', path) : await confirmedPost(path, { stop: 'Stopping', restart: 'Restarting', remove: 'Removing' }[verb]);
     if (res === null) return;
     toast(r.name + ' on ' + machineName(m) + ': ' + { start: 'starting', stop: 'stopping', restart: 'restarting', remove: 'removing' }[verb] + ' ...');
     watchTask(m, res, verb + ' ' + r.name);

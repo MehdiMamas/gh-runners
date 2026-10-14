@@ -162,7 +162,7 @@ func (s *Server) postLeave(w http.ResponseWriter, r *http.Request) {
 
 // busyCheck matches the remote calls that would stop a job: restarting or
 // removing a runner, updating gh-runners, and pausing the machine.
-var busyCheck = regexp.MustCompile(`^/api/(runners/([^/]+)/(restart|remove)|update|pause)$`)
+var busyCheck = regexp.MustCompile(`^/api/(runners/([^/]+)/(stop|restart|remove)|update|pause)$`)
 
 // proxyMachine passes a dashboard call on to a machine. Restart, remove and
 // update first ask GitHub whether a runner there is running a job; if one
@@ -177,7 +177,7 @@ func (s *Server) proxyMachine(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	confirmed := q.Get("confirm_busy") == "1"
 	q.Del("confirm_busy")
-	if path == "/api/pause" {
+	if path == "/api/pause" || strings.HasSuffix(path, "/stop") {
 		// The host asked GitHub itself above; the member need not again.
 		q.Set("confirm_busy", "1")
 	}
