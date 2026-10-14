@@ -54,8 +54,10 @@ type Host struct {
 	cert     *tls.Certificate
 	fp       string
 	sessions map[string]*session
+	conns    map[net.Conn]bool // open connections, sessions or not yet
 	stop     chan struct{}
 	startErr error
+	wg       sync.WaitGroup // accept and every connection
 }
 
 type session struct {
@@ -211,19 +213,21 @@ func (h *Host) Start(addr string) error {
 	h.ln, h.port = ln, ln.Addr().(*net.TCPAddr).Port
 	h.stop = make(chan struct{})
 	if h.sessions == nil {
-		h.sessions = map[string]*session{}
+		h.sessions, h.conns = map[string]*session{}, map[net.Conn]bool{}
 	}
 	tl := tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{*cert}, MinVersion: tls.VersionTLS13})
+	h.wg.Add(1)
 	go h.accept(tl, h.stop)
 	h.logf("main host: listening for machines on port %d", h.port)
 	return nil
 }
 
-// Stop closes the listener and every member's connection.
+// Stop closes the listener and every member's connection, and waits until
+// they are done with host.json.
 func (h *Host) Stop() {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.ln == nil {
+		h.mu.Unlock()
 		return
 	}
 	close(h.stop)
@@ -233,6 +237,11 @@ func (h *Host) Stop() {
 		s.c.close(errors.New("the main host stopped"))
 		delete(h.sessions, id)
 	}
+	for nc := range h.conns {
+		_ = nc.Close()
+	}
+	h.mu.Unlock()
+	h.wg.Wait()
 }
 
 // Running reports whether the host is listening, and on which port.
@@ -258,6 +267,7 @@ func (h *Host) Fingerprint() (string, error) {
 }
 
 func (h *Host) accept(ln net.Listener, stop chan struct{}) {
+	defer h.wg.Done()
 	for {
 		nc, err := ln.Accept()
 		if err != nil {
@@ -273,11 +283,27 @@ func (h *Host) accept(ln net.Listener, stop chan struct{}) {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
+		h.mu.Lock()
+		if h.ln == nil || h.stop != stop {
+			// Stopped (and maybe started again) since Accept returned.
+			h.mu.Unlock()
+			_ = nc.Close()
+			return
+		}
+		h.conns[nc] = true
+		h.wg.Add(1)
+		h.mu.Unlock()
 		go h.handle(nc)
 	}
 }
 
 func (h *Host) handle(nc net.Conn) {
+	defer func() {
+		h.mu.Lock()
+		delete(h.conns, nc)
+		h.mu.Unlock()
+		h.wg.Done()
+	}()
 	_ = nc.SetDeadline(time.Now().Add(handshakeTimeout))
 	if err := nc.(*tls.Conn).Handshake(); err != nil {
 		_ = nc.Close()
