@@ -156,14 +156,21 @@ func within(p, dir string) bool {
 }
 
 // moveDir renames, or copies and deletes when src and dst are on different
-// drives.
+// drives. dst must not exist, or be an empty folder claimed for src; it
+// never merges into another runner's folder.
 func moveDir(src, dst string) error {
+	if runtime.GOOS == "windows" {
+		_ = os.Remove(dst) // Rename does not replace even an empty folder there
+	}
 	var err error
 	for i := 0; i < 5; i++ { // Windows holds files for a moment after exit
 		if err = os.Rename(src, dst); err == nil {
 			return nil
 		}
-		if _, statErr := os.Stat(dst); statErr == nil {
+		if entries, statErr := os.ReadDir(dst); statErr == nil {
+			if len(entries) > 0 {
+				return fmt.Errorf("%s exists already", dst)
+			}
 			break
 		}
 		var le *os.LinkError

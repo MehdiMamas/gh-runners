@@ -139,20 +139,21 @@ func (c *repoCache) reset() {
 }
 
 type repoView struct {
-	FullName    string `json:"full_name"`
-	Owner       string `json:"owner"`
-	OwnerType   string `json:"owner_type"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	URL         string `json:"url"`
-	Private     bool   `json:"private"`
-	Archived    bool   `json:"archived"`
-	Fork        bool   `json:"fork"`
-	Admin       bool   `json:"admin"`
-	PushedAt    string `json:"pushed_at"`
-	RunnerID    string `json:"runner_id,omitempty"`
-	SyncMatch   bool   `json:"sync_match"`
-	SyncReason  string `json:"sync_reason,omitempty"`
+	FullName    string   `json:"full_name"`
+	Owner       string   `json:"owner"`
+	OwnerType   string   `json:"owner_type"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	URL         string   `json:"url"`
+	Private     bool     `json:"private"`
+	Archived    bool     `json:"archived"`
+	Fork        bool     `json:"fork"`
+	Admin       bool     `json:"admin"`
+	PushedAt    string   `json:"pushed_at"`
+	RunnerID    string   `json:"runner_id,omitempty"`  // first local runner, for older pages
+	RunnerIDs   []string `json:"runner_ids,omitempty"` // every local runner of the repo
+	SyncMatch   bool     `json:"sync_match"`
+	SyncReason  string   `json:"sync_reason,omitempty"`
 }
 
 func (s *Server) getRepos(w http.ResponseWriter, r *http.Request) {
@@ -177,20 +178,26 @@ func (s *Server) getRepos(w http.ResponseWriter, r *http.Request) {
 	cfg, _ := store.LoadConfig()
 	f := ops.RepoFilter{Owners: cfg.Sync.Owners, Include: cfg.Sync.Include, Exclude: cfg.Sync.Exclude, IncludePublic: cfg.Sync.IncludePublic, IncludeForks: cfg.Sync.IncludeForks}
 	local, _ := store.List()
-	have := map[string]string{}
+	have := map[string][]string{}
 	for _, l := range local {
 		if l.Kind == store.KindRepo {
-			have[strings.ToLower(l.Scope())] = l.ID
+			key := strings.ToLower(l.Scope())
+			have[key] = append(have[key], l.ID)
 		}
 	}
 	out := make([]repoView, 0, len(repos))
 	for _, repo := range repos {
 		ok, why := f.Match(repo, me)
+		ids := have[strings.ToLower(repo.FullName)]
+		first := ""
+		if len(ids) > 0 {
+			first = ids[0]
+		}
 		out = append(out, repoView{
 			FullName: repo.FullName, Owner: repo.Owner.Login, OwnerType: repo.Owner.Type, Name: repo.Name,
 			Description: repo.Description, URL: repo.HTMLURL, Private: repo.Private, Archived: repo.Archived,
 			Fork: repo.Fork, Admin: repo.Permissions.Admin, PushedAt: repo.PushedAt,
-			RunnerID: have[strings.ToLower(repo.FullName)], SyncMatch: ok, SyncReason: why,
+			RunnerID: first, RunnerIDs: ids, SyncMatch: ok, SyncReason: why,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"me": me, "repos": out, "fetched": since(at)})
@@ -259,6 +266,10 @@ func (s *Server) postAdd(w http.ResponseWriter, r *http.Request) {
 		Org         string   `json:"org"`
 		Labels      []string `json:"labels"`
 		AllowPublic bool     `json:"allow_public"`
+		// Another adds one more runner to repos that already have one here;
+		// Name names it (one repo only), else the machine name gets -2, -3...
+		Another bool   `json:"another"`
+		Name    string `json:"name"`
 	}
 	if err := readBody(r, &body); err != nil {
 		fail(w, http.StatusBadRequest, err)
@@ -290,7 +301,18 @@ func (s *Server) postAdd(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, err)
 		return
 	}
+	body.Name = strings.TrimSpace(body.Name)
+	if body.Name != "" && len(scopes) > 1 {
+		fail(w, http.StatusBadRequest, errors.New("a runner name works for one repository at a time"))
+		return
+	}
 	title := "Add a runner to " + scopes[0].String()
+	if body.Another {
+		title = "Add another runner to " + scopes[0].String()
+	}
+	if body.Name != "" {
+		title += " named " + body.Name
+	}
 	if len(scopes) > 1 {
 		title = fmt.Sprintf("Add runners to %d repositories", len(scopes))
 	}
@@ -310,7 +332,7 @@ func (s *Server) postAdd(w http.ResponseWriter, r *http.Request) {
 		failed := 0
 		for _, sc := range scopes {
 			fmt.Fprintf(out, "== %s\n", sc)
-			_, err := ops.Add(ctx, c, sc, ops.AddOptions{Source: "add", Labels: labels, AllowPublic: body.AllowPublic}, out)
+			_, err := ops.Add(ctx, c, sc, ops.AddOptions{Source: "add", Labels: labels, AllowPublic: body.AllowPublic, Another: body.Another, Name: body.Name}, out)
 			switch {
 			case errors.Is(err, ops.ErrExists):
 				fmt.Fprintln(out, err)
@@ -377,7 +399,7 @@ func (s *Server) postRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	force := r.URL.Query().Get("force") == "1"
-	s.startTask(w, "Remove the runner of "+rn.Scope(), func(out io.Writer) error {
+	s.startTask(w, "Remove the runner "+rn.Display(), func(out io.Writer) error {
 		ctx := context.Background()
 		c, _, err := s.client(ctx)
 		if err != nil {
@@ -389,7 +411,7 @@ func (s *Server) postRemove(w http.ResponseWriter, r *http.Request) {
 		if err := ops.Remove(ctx, c, rn, force, out); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "Removed %s.\n", rn.Scope())
+		fmt.Fprintf(out, "Removed %s.\n", rn.Display())
 		s.repos.reset()
 		s.remote.reset()
 		return nil

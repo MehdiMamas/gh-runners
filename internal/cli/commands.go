@@ -34,7 +34,9 @@ func newAddCmd() *cobra.Command {
 		Example: `  gh-runners add                      # the repo of the current directory
   gh-runners add MehdiMamas/spotter
   gh-runners add --org my-org         # one runner for every repo of an org
-  gh-runners add owner/repo --labels gpu,big`,
+  gh-runners add owner/repo --labels gpu,big
+  gh-runners add owner/repo --another --labels light   # one more runner for the same repo
+  gh-runners add owner/repo --another --name mac-light --labels light`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			scope, err := scopeFromArgs(args, org)
@@ -57,7 +59,7 @@ func newAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("\nRunner %q is registered for %s.\n", r.Name, r.Scope())
+			fmt.Printf("\nRunner %q is registered for %s (folder %s).\n", r.Name, r.Scope(), r.Dir())
 			afterChange()
 			fmt.Printf("Use it in a workflow with:\n  runs-on: [self-hosted, %s]\n", strings.Join(append([]string{osLabel()}, r.Labels...), ", "))
 			return nil
@@ -66,9 +68,11 @@ func newAddCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&org, "org", false, "register an organization runner")
 	cmd.Flags().StringVar(&labels, "labels", "", "extra labels, comma separated")
 	cmd.Flags().StringVar(&o.Group, "group", "", "runner group (organizations)")
-	cmd.Flags().StringVar(&o.Name, "name", "", "runner name (default: this machine's hostname)")
+	cmd.Flags().StringVar(&o.Name, "name", "", "runner name (default: this machine's hostname; with --another, hostname-2, -3, ...)")
 	cmd.Flags().BoolVar(&o.AllowPublic, "allow-public", false, "allow a public repository (unsafe)")
 	cmd.Flags().BoolVar(&o.Force, "force", false, "re-register even if it already exists")
+	cmd.Flags().BoolVar(&o.Another, "another", false, "add one more runner when the repo already has one here (its own folder, name and labels)")
+	cmd.Flags().StringVar(&o.Runner, "runner", "", "with --force: which runner of the repo to re-register (name or folder id)")
 	cmd.Flags().StringVar(&o.RegistrationToken, "registration-token", "", "register with a token from the repo's Settings > Actions > Runners page (no GitHub login needed)")
 	return cmd
 }
@@ -103,29 +107,59 @@ func splitList(s string) []string {
 	return out
 }
 
+// findRunners returns the local runners of the scope in args (default: the
+// repo of the current directory), or the one sel names among them.
+func findRunners(args []string, sel string) ([]store.Runner, error) {
+	var q string
+	if len(args) == 1 {
+		q = args[0]
+	} else {
+		scope, err := scopeFromArgs(nil, false)
+		if err != nil {
+			return nil, err
+		}
+		q = scope.String()
+	}
+	rs, err := store.Find(q)
+	if err != nil || sel == "" {
+		return rs, err
+	}
+	r, err := ops.SelectRunner(rs, sel)
+	if err != nil {
+		return nil, err
+	}
+	return []store.Runner{r}, nil
+}
+
+const runnerFlagHelp = "which runner of the repo, by name or folder id, when it has several"
+
 func newRemoveCmd() *cobra.Command {
 	var force, all bool
+	var sel string
 	cmd := &cobra.Command{
 		Use:     "remove [owner/repo | org]",
 		Aliases: []string{"rm"},
 		Short:   "Unregister and delete a runner on this machine (default: the repo in the current directory)",
-		Args:    cobra.MaximumNArgs(1),
+		Example: `  gh-runners remove MehdiMamas/spotter
+  gh-runners remove MehdiMamas/klawly --runner mac-light   # one runner of a repo that has several`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var targets []store.Runner
 			var err error
-			switch {
-			case all:
+			if all {
 				targets, err = store.List()
-			case len(args) == 1:
-				targets, err = store.Find(args[0])
-			default:
-				var scope github.Scope
-				if scope, err = scopeFromArgs(nil, false); err == nil {
-					targets, err = store.Find(scope.String())
-				}
+			} else {
+				targets, err = findRunners(args, sel)
 			}
 			if err != nil {
 				return err
+			}
+			if !all && sel == "" && len(targets) > 1 {
+				names := make([]string, len(targets))
+				for i, r := range targets {
+					names[i] = r.Name
+				}
+				return fmt.Errorf("%s has %d runners here (%s); pick one with --runner <name>", targets[0].Scope(), len(targets), strings.Join(names, ", "))
 			}
 			c, err := client()
 			if err != nil {
@@ -138,7 +172,7 @@ func newRemoveCmd() *cobra.Command {
 					failed++
 					continue
 				}
-				fmt.Printf("Removed %s.\n", r.Scope())
+				fmt.Printf("Removed %s.\n", r.Display())
 			}
 			if failed > 0 {
 				return fmt.Errorf("%d of %d removals failed", failed, len(targets))
@@ -148,20 +182,22 @@ func newRemoveCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "delete local files even if GitHub cannot be updated")
 	cmd.Flags().BoolVar(&all, "all", false, "remove every runner on this machine")
+	cmd.Flags().StringVar(&sel, "runner", "", runnerFlagHelp)
 	return cmd
 }
 
 func newStartStopCmd(start bool) *cobra.Command {
-	use, short := "stop <owner/repo | org>", "Stop a runner on this machine (it stays registered)"
+	use, short := "stop <owner/repo | org>", "Stop a runner on this machine; it stays registered"
 	if start {
 		use, short = "start <owner/repo | org>", "Start a stopped runner again"
 	}
-	return &cobra.Command{
+	var sel string
+	cmd := &cobra.Command{
 		Use:   use,
-		Short: short,
+		Short: short + " (every runner of the repo unless --runner picks one)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			rs, err := store.Find(args[0])
+			rs, err := findRunners(args, sel)
 			if err != nil {
 				return err
 			}
@@ -172,7 +208,7 @@ func newStartStopCmd(start bool) *cobra.Command {
 				if !start {
 					_ = control.WaitStopped(r.ID, 90*time.Second)
 				}
-				fmt.Printf("%s: %s\n", r.Scope(), map[bool]string{true: "started", false: "stopped"}[start])
+				fmt.Printf("%s: %s\n", r.Display(), map[bool]string{true: "started", false: "stopped"}[start])
 			}
 			if start {
 				afterChange()
@@ -180,6 +216,100 @@ func newStartStopCmd(start bool) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&sel, "runner", "", runnerFlagHelp)
+	return cmd
+}
+
+func newLabelsCmd() *cobra.Command {
+	var sel, set, add, del string
+	cmd := &cobra.Command{
+		Use:   "labels [owner/repo | org]",
+		Short: "Show or change the custom labels of a runner on GitHub, without re-registering it",
+		Example: `  gh-runners labels MehdiMamas/klawly                          # every runner of the repo
+  gh-runners labels MehdiMamas/klawly --runner mac-2 --set light
+  gh-runners labels MehdiMamas/klawly --runner mac-2 --add triage --remove heavy`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rs, err := findRunners(args, sel)
+			if err != nil {
+				return err
+			}
+			c, err := client()
+			if err != nil {
+				return err
+			}
+			change := cmd.Flags().Changed("set") || add != "" || del != ""
+			if change && len(rs) > 1 {
+				return fmt.Errorf("%s has %d runners here; pick one with --runner <name>", rs[0].Scope(), len(rs))
+			}
+			scope := github.Scope{Owner: rs[0].Owner, Repo: rs[0].Repo}
+			remote, err := c.ListRunners(ctx(cmd), scope)
+			if err != nil {
+				return err
+			}
+			for _, r := range rs {
+				var gr *github.Runner
+				for i := range remote {
+					if remote[i].Name == r.Name {
+						gr = &remote[i]
+					}
+				}
+				if gr == nil {
+					fmt.Printf("%s: not registered on GitHub (local labels: %s)\n", r.Display(), strings.Join(r.Labels, ","))
+					continue
+				}
+				var custom []string
+				for _, l := range gr.Labels {
+					if l.Type != "read-only" && !ops.IsBuiltinLabel(l.Name) {
+						custom = append(custom, l.Name)
+					}
+				}
+				if !change {
+					fmt.Printf("%s: %s\n", r.Display(), strings.Join(custom, ","))
+					continue
+				}
+				labels := custom
+				if cmd.Flags().Changed("set") {
+					labels = splitList(set)
+				}
+				labels = editLabels(labels, splitList(add), splitList(del))
+				got, err := ops.SetLabels(ctx(cmd), c, scope, gr.ID, labels)
+				if err != nil {
+					return err
+				}
+				names := make([]string, len(got))
+				for i, l := range got {
+					names[i] = l.Name
+				}
+				fmt.Printf("%s: %s\n", r.Display(), strings.Join(names, ","))
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&sel, "runner", "", runnerFlagHelp)
+	cmd.Flags().StringVar(&set, "set", "", "replace the custom labels, comma separated")
+	cmd.Flags().StringVar(&add, "add", "", "labels to add, comma separated")
+	cmd.Flags().StringVar(&del, "remove", "", "labels to remove, comma separated")
+	return cmd
+}
+
+// editLabels adds and removes labels, ignoring case.
+func editLabels(labels, add, del []string) []string {
+	var out []string
+	drop := map[string]bool{}
+	for _, l := range del {
+		drop[strings.ToLower(l)] = true
+	}
+	seen := map[string]bool{}
+	for _, l := range append(append([]string{}, labels...), add...) {
+		k := strings.ToLower(l)
+		if drop[k] || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, l)
+	}
+	return out
 }
 
 type listRow struct {
@@ -507,6 +637,7 @@ func newDaemonCmd() *cobra.Command {
 func newLogsCmd() *cobra.Command {
 	var follow, daemonLog bool
 	var lines int
+	var sel string
 	cmd := &cobra.Command{
 		Use:   "logs [owner/repo | org]",
 		Short: "Show a runner's output (or the daemon's with --daemon)",
@@ -514,19 +645,15 @@ func newLogsCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := store.DaemonLog()
 			if !daemonLog {
-				var q string
-				if len(args) == 1 {
-					q = args[0]
-				} else {
-					scope, err := scopeFromArgs(nil, false)
-					if err != nil {
+				rs, err := findRunners(args, sel)
+				if err != nil {
+					if len(args) == 0 {
 						return fmt.Errorf("%v (or use --daemon)", err)
 					}
-					q = scope.String()
-				}
-				rs, err := store.Find(q)
-				if err != nil {
 					return err
+				}
+				if len(rs) > 1 {
+					fmt.Fprintf(os.Stderr, "%s has %d runners here; showing %q (pick another with --runner)\n", rs[0].Scope(), len(rs), rs[0].Name)
 				}
 				path = rs[0].LogPath()
 			}
@@ -536,6 +663,7 @@ func newLogsCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "keep printing new lines")
 	cmd.Flags().BoolVar(&daemonLog, "daemon", false, "show the daemon log")
 	cmd.Flags().IntVarP(&lines, "lines", "n", 50, "number of lines to show")
+	cmd.Flags().StringVar(&sel, "runner", "", runnerFlagHelp)
 	return cmd
 }
 

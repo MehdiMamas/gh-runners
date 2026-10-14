@@ -3,6 +3,7 @@ package ops
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/MehdiMamas/gh-runners/internal/store"
@@ -58,20 +59,23 @@ func TestScanFindsHandMadeRunners(t *testing.T) {
 	}
 }
 
-func TestFreeID(t *testing.T) {
+func TestClaimID(t *testing.T) {
 	t.Setenv("GH_RUNNERS_HOME", t.TempDir())
 	base := store.IDFor(store.KindRepo, "MehdiMamas", "klawly")
-	if got := freeID(base, "Macbook M4"); got != base {
-		t.Fatalf("free: %s", got)
+	want := []string{base, base + "__Macbook-M4", base + "__Macbook-M4-2"}
+	var got []string
+	for range want {
+		id, err := claimID(base, "Macbook M4")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(store.RunnersDir(), id)); err != nil {
+			t.Fatalf("%s not claimed: %v", id, err)
+		}
+		got = append(got, id)
 	}
-	_ = os.MkdirAll(filepath.Join(store.RunnersDir(), base), 0o755)
-	want := base + "__Macbook-M4"
-	if got := freeID(base, "Macbook M4"); got != want {
-		t.Fatalf("taken: %s", got)
-	}
-	_ = os.MkdirAll(filepath.Join(store.RunnersDir(), want), 0o755)
-	if got := freeID(base, "Macbook M4"); got != want+"-2" {
-		t.Fatalf("taken twice: %s", got)
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("claimID = %v, want %v", got, want)
 	}
 }
 

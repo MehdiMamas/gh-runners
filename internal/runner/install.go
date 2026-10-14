@@ -285,11 +285,17 @@ type ConfigureOptions struct {
 	Name   string
 	Labels []string
 	Group  string
+	// NoReplace fails when GitHub already has a runner of that name instead
+	// of taking over its registration.
+	NoReplace bool
 }
 
 // Configure registers the runner installed in dir with GitHub.
 func Configure(ctx context.Context, dir string, o ConfigureOptions, out io.Writer) error {
-	args := []string{"--unattended", "--url", o.URL, "--token", o.Token, "--name", o.Name, "--work", "_work", "--replace"}
+	args := []string{"--unattended", "--url", o.URL, "--token", o.Token, "--name", o.Name, "--work", "_work"}
+	if !o.NoReplace {
+		args = append(args, "--replace")
+	}
 	if len(o.Labels) > 0 {
 		args = append(args, "--labels", strings.Join(o.Labels, ","))
 	}

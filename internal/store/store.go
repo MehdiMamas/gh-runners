@@ -8,7 +8,9 @@
 //	  ui-secret                    unlocks the dashboard in a browser (0600)
 //	  cache/                       downloaded runner packages
 //	  runners/<id>/                one actions/runner install per registration
-//	                               (config "runners_dir" moves this folder)
+//	                               (config "runners_dir" moves this folder):
+//	                               <owner>__<repo> for the first runner of a
+//	                               repo, <owner>__<repo>__<name> for more
 //	    gh-runners.json            what gh-runners knows about it
 //	    gh-runners.log             the runner's output, written by the daemon
 package store
@@ -126,6 +128,9 @@ func (r Runner) Scope() string {
 	return r.Owner + "/" + r.Repo
 }
 
+// Display is the scope and the runner name, e.g. "MehdiMamas/klawly (mac-2)".
+func (r Runner) Display() string { return r.Scope() + " (" + r.Name + ")" }
+
 // Dir is the runner's install directory.
 func (r Runner) Dir() string { return filepath.Join(RunnersDir(), r.ID) }
 
@@ -147,6 +152,26 @@ func IDFor(kind, owner, repo string) string {
 		id = "org__" + owner
 	}
 	return unsafe.ReplaceAllString(id, "-")
+}
+
+// IDWithName is the directory of one more runner for a scope that already
+// has one, e.g. "MehdiMamas__klawly__mac-light".
+func IDWithName(base, name string) string {
+	return base + "__" + strings.Trim(unsafe.ReplaceAllString(name, "-"), "-")
+}
+
+// Claim creates the directory of a new runner and reports false when it
+// exists already. os.Mkdir is atomic, so two processes adding runners at the
+// same time never install into the same directory.
+func Claim(id string) (bool, error) {
+	if err := os.MkdirAll(RunnersDir(), 0o755); err != nil {
+		return false, err
+	}
+	err := os.Mkdir(filepath.Join(RunnersDir(), id), 0o755)
+	if errors.Is(err, os.ErrExist) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 const metaFile = "gh-runners.json"
@@ -190,6 +215,22 @@ func List() ([]Runner, error) {
 		out = append(out, r)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// ForScope returns the local runners of a scope ("owner/repo" or "org"),
+// sorted by id, so the first runner of the scope comes first.
+func ForScope(scope string) ([]Runner, error) {
+	all, err := List()
+	if err != nil {
+		return nil, err
+	}
+	var out []Runner
+	for _, r := range all {
+		if strings.EqualFold(r.Scope(), strings.TrimSpace(scope)) {
+			out = append(out, r)
+		}
+	}
 	return out, nil
 }
 

@@ -213,6 +213,11 @@ label.check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; c
 .item .meta { display: flex; gap: 6px; align-items: center; margin-top: 3px; flex-wrap: wrap; }
 .item .actions { display: flex; gap: 6px; justify-content: flex-end; }
 .item.dim .name { color: var(--muted); }
+/* A runner of the repository above it, one row per runner. */
+.item.sub { padding-top: 7px; padding-bottom: 7px; border-top-style: dashed; background: var(--panel-2); }
+.item.sub:hover { background: var(--idle-soft); }
+.item.sub .name { font-size: 13px; font-weight: 550; }
+.item.sub .branch { justify-self: center; align-self: stretch; width: 12px; border-left: 2px solid var(--border); border-bottom: 2px solid var(--border); border-bottom-left-radius: 6px; margin: -7px 0 50% 6px; }
 @media (max-width: 700px) {
   .item { grid-template-columns: 26px minmax(0, 1fr); }
   .item .status, .item .actions { grid-column: 2; justify-content: flex-start; }
