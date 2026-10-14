@@ -11,6 +11,11 @@ rm -rf "$out"
 mkdir -p "$out"
 
 ldflags="-s -w -X github.com/MehdiMamas/gh-runners/internal/cli.Version=$version"
+# The OAuth app behind "Sign in with GitHub" in the dashboard. Its client ID is
+# public; without one the dashboard offers token sign-in only.
+if [ -n "${GH_RUNNERS_OAUTH_CLIENT_ID:-}" ]; then
+	ldflags="$ldflags -X github.com/MehdiMamas/gh-runners/internal/github.OAuthClientID=$GH_RUNNERS_OAUTH_CLIENT_ID"
+fi
 for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 linux/arm windows/amd64 windows/arm64; do
 	os=${target%/*}
 	arch=${target#*/}

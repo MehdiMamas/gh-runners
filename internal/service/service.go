@@ -46,6 +46,22 @@ func Install() (string, error) { return install() }
 // Uninstall stops the daemon and removes the login entry.
 func Uninstall() error { return uninstall() }
 
+// UninstallKeepRunning removes the login entry but leaves a daemon running
+// until logout, so the dashboard that asked for it stays up.
+func UninstallKeepRunning() error { return uninstallKeepRunning() }
+
+// Restart stops and starts the daemon (to load a new binary, for example).
+func Restart() error {
+	if err := stop(); err != nil {
+		return err
+	}
+	return start()
+}
+
+// Installed reports whether the login entry exists, without asking the
+// daemon (the daemon itself uses it).
+func Installed() Status { return status() }
+
 // Start starts the daemon now.
 func Start() error { return start() }
 

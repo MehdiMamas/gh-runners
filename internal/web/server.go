@@ -1,0 +1,217 @@
+// Package web is the local dashboard: a single page app served by the
+// daemon on 127.0.0.1, and the JSON API behind it.
+//
+// Security: the daemon only listens on loopback. Requests must name a
+// loopback host (no DNS rebinding), carry the cookie that the secret link
+// from `gh-runners ui` sets, and API calls must send X-GHR (a custom header
+// that a cross-site form or image cannot add, so no CSRF).
+package web
+
+import (
+	"crypto/subtle"
+	"embed"
+	"encoding/json"
+	"errors"
+	"io/fs"
+	"log"
+	"net"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/MehdiMamas/gh-runners/internal/control"
+)
+
+//go:embed assets
+var assets embed.FS
+
+// CookieName holds the dashboard secret in the browser.
+const CookieName = "ghr_ui"
+
+// Hooks connect the dashboard to the daemon that serves it.
+type Hooks struct {
+	Version     string
+	Status      func() control.Status
+	Reload      func()
+	SyncNow     func()
+	WakeJIT     func()
+	ResetClient func()
+	Log         *log.Logger
+}
+
+// Server is the dashboard.
+type Server struct {
+	h      Hooks
+	secret string
+	tasks  *taskQueue
+	auth   authCache
+	repos  repoCache
+	remote remoteCache
+	login  loginFlow
+	// spawn runs `gh-runners <args>` detached; tests replace it.
+	spawn func(logName string, args ...string) error
+}
+
+// New returns a dashboard that unlocks with secret.
+func New(h Hooks, secret string) *Server {
+	if h.Log == nil {
+		h.Log = log.New(log.Writer(), "", log.LstdFlags)
+	}
+	for _, f := range []*func(){&h.Reload, &h.SyncNow, &h.WakeJIT, &h.ResetClient} {
+		if *f == nil {
+			*f = func() {}
+		}
+	}
+	if h.Status == nil {
+		h.Status = func() control.Status { return control.Status{} }
+	}
+	s := &Server{h: h, secret: secret, tasks: newTaskQueue(h.Log)}
+	s.spawn = spawnSelf
+	return s
+}
+
+// Handler serves the dashboard and passes everything else to next (the
+// daemon's control API).
+func (s *Server) Handler(next http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	static, _ := fs.Sub(assets, "assets")
+	files := http.FileServer(http.FS(static))
+	mux.HandleFunc("GET /{$}", s.index)
+	mux.Handle("GET /assets/", http.StripPrefix("/assets/", noCache(files)))
+	mux.Handle("/api/", s.api())
+	mux.Handle("/", next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !loopbackHost(r.Host) {
+			http.Error(w, "gh-runners only answers on 127.0.0.1", http.StatusMisdirectedRequest)
+			return
+		}
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		mux.ServeHTTP(w, r)
+	})
+}
+
+func noCache(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		h.ServeHTTP(w, r)
+	})
+}
+
+func loopbackHost(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func (s *Server) unlocked(r *http.Request) bool {
+	c, err := r.Cookie(CookieName)
+	return err == nil && subtle.ConstantTimeCompare([]byte(c.Value), []byte(s.secret)) == 1
+}
+
+const csp = "default-src 'self'; img-src 'self' https://avatars.githubusercontent.com data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+
+func (s *Server) index(w http.ResponseWriter, r *http.Request) {
+	if k := r.URL.Query().Get("k"); k != "" {
+		if subtle.ConstantTimeCompare([]byte(k), []byte(s.secret)) == 1 {
+			http.SetCookie(w, &http.Cookie{
+				Name: CookieName, Value: s.secret, Path: "/", HttpOnly: true,
+				SameSite: http.SameSiteStrictMode, MaxAge: 400 * 24 * 3600,
+			})
+		}
+		// Drop the secret from the address bar and history.
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	w.Header().Set("Content-Security-Policy", csp)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	page := "assets/index.html"
+	if !s.unlocked(r) {
+		page = "assets/locked.html"
+		w.WriteHeader(http.StatusUnauthorized)
+	}
+	b, _ := assets.ReadFile(page)
+	_, _ = w.Write(b)
+}
+
+// apiError is how failures reach the page.
+type apiError struct {
+	Error string `json:"error"`
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func fail(w http.ResponseWriter, status int, err error) {
+	writeJSON(w, status, apiError{err.Error()})
+}
+
+func readBody(r *http.Request, v any) error {
+	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20))
+	if err := dec.Decode(v); err != nil {
+		return errors.New("bad request body: " + err.Error())
+	}
+	return nil
+}
+
+func (s *Server) api() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/state", s.getState)
+	mux.HandleFunc("GET /api/repos", s.getRepos)
+	mux.HandleFunc("GET /api/github-runners", s.getRemote)
+	mux.HandleFunc("POST /api/add", s.postAdd)
+	mux.HandleFunc("POST /api/runners/{id}/start", s.postStartStop(false))
+	mux.HandleFunc("POST /api/runners/{id}/stop", s.postStartStop(true))
+	mux.HandleFunc("POST /api/runners/{id}/remove", s.postRemove)
+	mux.HandleFunc("GET /api/runners/{id}/log", s.getRunnerLog)
+	mux.HandleFunc("GET /api/daemon-log", s.getDaemonLog)
+	mux.HandleFunc("GET /api/sync/plan", s.getSyncPlan)
+	mux.HandleFunc("POST /api/sync/apply", s.postSyncApply)
+	mux.HandleFunc("PUT /api/config", s.putConfig)
+	mux.HandleFunc("POST /api/runners-dir", s.postRunnersDir)
+	mux.HandleFunc("GET /api/fs", s.getFS)
+	mux.HandleFunc("POST /api/fs/mkdir", s.postMkdir)
+	mux.HandleFunc("POST /api/service/{action}", s.postService)
+	mux.HandleFunc("GET /api/doctor", s.getDoctor)
+	mux.HandleFunc("POST /api/login/device", s.postDeviceLogin)
+	mux.HandleFunc("GET /api/login/device", s.getDeviceLogin)
+	mux.HandleFunc("POST /api/login/token", s.postTokenLogin)
+	mux.HandleFunc("POST /api/logout", s.postLogout)
+	mux.HandleFunc("GET /api/tasks", s.getTasks)
+	mux.HandleFunc("GET /api/tasks/{id}", s.getTask)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-GHR") != "1" {
+			fail(w, http.StatusForbidden, errors.New("missing X-GHR header"))
+			return
+		}
+		if o := r.Header.Get("Origin"); o != "" && o != "http://"+r.Host {
+			fail(w, http.StatusForbidden, errors.New("cross-origin request refused"))
+			return
+		}
+		if !s.unlocked(r) {
+			fail(w, http.StatusUnauthorized, errors.New("locked: open the dashboard with `gh-runners ui`"))
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+}
+
+func since(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}

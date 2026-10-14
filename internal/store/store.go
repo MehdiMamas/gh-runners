@@ -5,13 +5,17 @@
 //	  token                        PAT saved by `gh-runners login` (0600)
 //	  daemon.json                  port/pid/secret of the running daemon
 //	  daemon.log
+//	  ui-secret                    unlocks the dashboard in a browser (0600)
 //	  cache/                       downloaded runner packages
 //	  runners/<id>/                one actions/runner install per registration
+//	                               (config "runners_dir" moves this folder)
 //	    gh-runners.json            what gh-runners knows about it
 //	    gh-runners.log             the runner's output, written by the daemon
 package store
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +24,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -35,12 +40,62 @@ func Home() string {
 	return filepath.Join(home, ".gh-runners")
 }
 
-func ConfigPath() string { return filepath.Join(Home(), "config.json") }
-func TokenPath() string  { return filepath.Join(Home(), "token") }
-func DaemonPath() string { return filepath.Join(Home(), "daemon.json") }
-func DaemonLog() string  { return filepath.Join(Home(), "daemon.log") }
-func CacheDir() string   { return filepath.Join(Home(), "cache") }
-func RunnersDir() string { return filepath.Join(Home(), "runners") }
+func ConfigPath() string   { return filepath.Join(Home(), "config.json") }
+func TokenPath() string    { return filepath.Join(Home(), "token") }
+func DaemonPath() string   { return filepath.Join(Home(), "daemon.json") }
+func DaemonLog() string    { return filepath.Join(Home(), "daemon.log") }
+func CacheDir() string     { return filepath.Join(Home(), "cache") }
+func UISecretPath() string { return filepath.Join(Home(), "ui-secret") }
+
+// DefaultRunnersDir is where runners go unless config.json says otherwise.
+func DefaultRunnersDir() string { return filepath.Join(Home(), "runners") }
+
+var dirCache struct {
+	sync.Mutex
+	path string
+	mod  time.Time
+	size int64
+	dir  string
+}
+
+// RunnersDir is the folder holding one subfolder per runner: the config's
+// runners_dir, or DefaultRunnersDir. It is cached until config.json changes.
+func RunnersDir() string {
+	path := ConfigPath()
+	st, err := os.Stat(path)
+	if err != nil {
+		return DefaultRunnersDir()
+	}
+	dirCache.Lock()
+	defer dirCache.Unlock()
+	if dirCache.path == path && dirCache.mod.Equal(st.ModTime()) && dirCache.size == st.Size() {
+		return dirCache.dir
+	}
+	dir := DefaultRunnersDir()
+	if c, err := LoadConfig(); err == nil && c.RunnersDir != "" {
+		dir = c.RunnersDir
+	}
+	dirCache.path, dirCache.mod, dirCache.size, dirCache.dir = path, st.ModTime(), st.Size(), dir
+	return dir
+}
+
+// UISecret returns the dashboard secret, creating it on first use.
+func UISecret() (string, error) {
+	if b, err := os.ReadFile(UISecretPath()); err == nil {
+		if s := strings.TrimSpace(string(b)); len(s) >= 32 {
+			return s, nil
+		}
+	}
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	s := hex.EncodeToString(b)
+	if err := os.MkdirAll(Home(), 0o700); err != nil {
+		return "", err
+	}
+	return s, os.WriteFile(UISecretPath(), []byte(s+"\n"), 0o600)
+}
 
 // Kind of a runner entry.
 const (
@@ -162,9 +217,13 @@ type Config struct {
 	// Labels added to every runner this machine registers.
 	Labels []string `json:"labels"`
 	// Name for runners on this machine; defaults to the hostname.
-	RunnerName string   `json:"runner_name,omitempty"`
-	Sync       Sync     `json:"sync"`
-	OnDemand   OnDemand `json:"on_demand"`
+	RunnerName string `json:"runner_name,omitempty"`
+	// RunnersDir holds the runner installs; empty means ~/.gh-runners/runners.
+	RunnersDir string `json:"runners_dir,omitempty"`
+	// DashboardPort is the local port of the web dashboard (default 47321).
+	DashboardPort int      `json:"dashboard_port,omitempty"`
+	Sync          Sync     `json:"sync"`
+	OnDemand      OnDemand `json:"on_demand"`
 }
 
 // Sync decides which repositories `gh-runners sync` (and the daemon's
@@ -248,12 +307,19 @@ func LoadConfig() (Config, error) {
 }
 
 // SaveConfig writes config.json.
-func SaveConfig(c Config) error { return writeJSON(ConfigPath(), c, 0o644) }
+func SaveConfig(c Config) error {
+	// Two saves within the file system's mtime granularity could otherwise
+	// leave RunnersDir on the old folder.
+	dirCache.Lock()
+	dirCache.path = ""
+	dirCache.Unlock()
+	return writeJSON(ConfigPath(), c, 0o644)
+}
 
 // DaemonInfo is how CLI commands find the running daemon.
 type DaemonInfo struct {
 	PID     int       `json:"pid"`
-	Addr    string    `json:"addr"`   // 127.0.0.1:port
+	Addr    string    `json:"addr"`   // 127.0.0.1:port, also serves the dashboard
 	Secret  string    `json:"secret"` // sent as X-GH-Runners-Secret
 	Version string    `json:"version"`
 	Started time.Time `json:"started"`
@@ -268,7 +334,8 @@ func LoadDaemonInfo() (DaemonInfo, error) {
 func SaveDaemonInfo(d DaemonInfo) error { return writeJSON(DaemonPath(), d, 0o600) }
 
 func readJSON(path string, v any) error {
-	b, err := os.ReadFile(path)
+	var b []byte
+	err := retry(func() (err error) { b, err = os.ReadFile(path); return err })
 	if err != nil {
 		return err
 	}
@@ -291,5 +358,16 @@ func writeJSON(path string, v any, perm os.FileMode) error {
 	if err := os.WriteFile(tmp, append(b, '\n'), perm); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return retry(func() error { return os.Rename(tmp, path) })
+}
+
+// retry runs fn again for up to about a second while it fails with an error
+// that goes away once another reader or writer of the file is done.
+func retry(fn func() error) error {
+	err := fn()
+	for i := 0; i < 50 && err != nil && transient(err); i++ {
+		time.Sleep(time.Duration(2+i) * time.Millisecond)
+		err = fn()
+	}
+	return err
 }

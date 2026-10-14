@@ -49,7 +49,9 @@ try {
         & $exe service stop
         & $exe service start
     }
-    Write-Host 'Next: gh-runners doctor, then gh-runners (interactive menu)'
+    # Best effort: a Start Menu entry that opens the dashboard.
+    try { & $exe shortcut install | Out-Null } catch { }
+    Write-Host 'Next: run gh-runners to open the dashboard in your browser (or find gh-runners in the Start Menu)'
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

@@ -53,6 +53,15 @@ jobs:
           ./gh-runners service install
           ./gh-runners service status
           ./gh-runners list
+          # The dashboard answers on the daemon's port: locked without the
+          # secret link, unlocked (cookie + redirect) with it.
+          addr=$(jq -r .addr "$GH_RUNNERS_HOME/daemon.json")
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://$addr/")
+          test "$code" = 401
+          key=$(tr -d '[:space:]' < "$GH_RUNNERS_HOME/ui-secret")
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://$addr/?k=$key")
+          test "$code" = 303
+          ./gh-runners ui --no-browser
           ./gh-runners service uninstall
           ./gh-runners service status
       - name: daemon log

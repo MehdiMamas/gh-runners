@@ -28,6 +28,7 @@ jobs:
       - run: sh scripts/build-release.sh "$VERSION"
         env:
           VERSION: ${{ inputs.version }}
+          GH_RUNNERS_OAUTH_CLIENT_ID: ${{ vars.GH_RUNNERS_OAUTH_CLIENT_ID }}
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}

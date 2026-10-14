@@ -26,6 +26,7 @@ import (
 	"github.com/MehdiMamas/gh-runners/internal/proc"
 	"github.com/MehdiMamas/gh-runners/internal/runner"
 	"github.com/MehdiMamas/gh-runners/internal/store"
+	"github.com/MehdiMamas/gh-runners/internal/web"
 )
 
 const (
@@ -35,6 +36,10 @@ const (
 	stableAfter = 10 * time.Minute
 	stopGrace   = 30 * time.Second
 	maxLogSize  = 10 << 20
+
+	// DefaultPort is where the dashboard listens, so its address (and the
+	// browser's cookie for it) stays the same across restarts.
+	DefaultPort = 47321
 )
 
 type child struct {
@@ -82,9 +87,15 @@ func (d *Daemon) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	cfg, _ := store.LoadConfig()
+	ln, err := listen(ctx, cfg.DashboardPort)
 	if err != nil {
 		return err
+	}
+	uiSecret, err := store.UISecret()
+	if err != nil {
+		ln.Close()
+		return fmt.Errorf("dashboard secret: %w", err)
 	}
 	secret := randomHex(16)
 	info := store.DaemonInfo{PID: os.Getpid(), Addr: ln.Addr().String(), Secret: secret, Version: d.Version, Started: d.started}
@@ -97,11 +108,20 @@ func (d *Daemon) Run(ctx context.Context) error {
 			os.Remove(store.DaemonPath())
 		}
 	}()
-	srv := &http.Server{Handler: d.handler(secret, cancel), ReadHeaderTimeout: 5 * time.Second}
+	dash := web.New(web.Hooks{
+		Version:     d.Version,
+		Status:      d.status,
+		Reload:      func() { nudge(d.reload) },
+		SyncNow:     func() { nudge(d.syncNow) },
+		WakeJIT:     d.jit.wake,
+		ResetClient: d.resetClient,
+		Log:         d.Log,
+	}, uiSecret)
+	srv := &http.Server{Handler: dash.Handler(d.handler(secret, cancel)), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	defer srv.Close()
 
-	d.Log.Printf("gh-runners daemon %s started (pid %d, home %s)", d.Version, info.PID, store.Home())
+	d.Log.Printf("gh-runners daemon %s started (pid %d, home %s, dashboard http://%s)", d.Version, info.PID, store.Home(), info.Addr)
 	go d.syncLoop(ctx)
 	go d.jit.loop(ctx)
 
@@ -120,6 +140,26 @@ func (d *Daemon) Run(ctx context.Context) error {
 		case <-d.reload:
 		}
 	}
+}
+
+// listen takes the dashboard port, waiting a little in case the daemon
+// that just stopped still holds it, then falls back to any free port.
+func listen(ctx context.Context, port int) (net.Listener, error) {
+	if port <= 0 {
+		port = DefaultPort
+	}
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	for i := 0; ; i++ {
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			return ln, nil
+		}
+		if i == 10 || ctx.Err() != nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return net.Listen("tcp", "127.0.0.1:0")
 }
 
 func randomHex(n int) string {
@@ -319,6 +359,13 @@ func (d *Daemon) client() (*github.Client, error) {
 	}
 	d.tok, d.tokAt = ts.Token, time.Now()
 	return d.ghClient, nil
+}
+
+// resetClient drops the cached token after a sign-in or sign-out.
+func (d *Daemon) resetClient() {
+	d.tokMu.Lock()
+	d.ghClient, d.tok, d.tokAt = nil, "", time.Time{}
+	d.tokMu.Unlock()
 }
 
 // syncLoop runs `sync` on the configured interval when auto-sync is on.

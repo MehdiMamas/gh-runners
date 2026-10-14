@@ -58,3 +58,11 @@ func status() Status {
 	}
 	return s
 }
+
+func uninstallKeepRunning() error {
+	if k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.SET_VALUE); err == nil {
+		_ = k.DeleteValue(Name)
+		k.Close()
+	}
+	return nil
+}

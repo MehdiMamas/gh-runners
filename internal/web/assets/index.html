@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gh-runners</title>
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/app.css">
+<script src="/assets/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><img src="/assets/icon.svg" alt="" width="22" height="22"><span>gh-runners</span></div>
+  <div class="machine" id="machine"></div>
+  <div class="grow"></div>
+  <div id="account" class="account"></div>
+</header>
+<nav class="tabs" id="tabs">
+  <button data-tab="repos" class="active">Repositories</button>
+  <button data-tab="machine">This machine <span class="count" id="count-runners"></span></button>
+  <button data-tab="automation">Automation</button>
+  <button data-tab="activity">Activity <span class="count busy" id="count-tasks"></span></button>
+  <button data-tab="settings">Settings</button>
+  <button data-tab="health">Health</button>
+</nav>
+<main>
+  <div id="banner"></div>
+  <section id="tab-repos" class="tab active"></section>
+  <section id="tab-machine" class="tab"></section>
+  <section id="tab-automation" class="tab"></section>
+  <section id="tab-activity" class="tab"></section>
+  <section id="tab-settings" class="tab"></section>
+  <section id="tab-health" class="tab"></section>
+</main>
+<dialog id="dialog"></dialog>
+<div id="tasks-dock" class="dock"></div>
+<div id="toasts" class="toasts"></div>
+<div id="offline" class="offline hidden"><div class="offline-box"><div class="spinner"></div><div id="offline-text">Reconnecting to gh-runners ...</div></div></div>
+</body>
+</html>
