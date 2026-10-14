@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/control"
+	"github.com/MehdiMamas/gh-runners/internal/github"
+	"github.com/MehdiMamas/gh-runners/internal/ops"
 	"github.com/MehdiMamas/gh-runners/internal/service"
 	"github.com/MehdiMamas/gh-runners/internal/store"
 )
@@ -52,6 +54,11 @@ type Server struct {
 	repos  repoCache
 	remote remoteCache
 	login  loginFlow
+	// What GitHub says per repository: workflow labels, all runners; and
+	// the hand-made runners found on this machine.
+	wfLabels  timedCache[[]ops.LabelSet]
+	ghRunners timedCache[[]github.Runner]
+	found     timedCache[[]ops.Found]
 	// spawn runs `gh-runners <args>` detached; tests replace it.
 	spawn func(logName string, args ...string) error
 }
@@ -70,6 +77,7 @@ func New(h Hooks, secret string) *Server {
 		h.Status = func() control.Status { return control.Status{} }
 	}
 	s := &Server{h: h, secret: secret, tasks: newTaskQueue(h.Log)}
+	s.wfLabels.ttl, s.ghRunners.ttl, s.found.ttl = 5*time.Minute, time.Minute, 2*time.Minute
 	s.spawn = func(logName string, args ...string) error {
 		return service.Spawn(filepath.Join(store.Home(), logName), args...)
 	}
@@ -179,6 +187,11 @@ func (s *Server) api() http.Handler {
 	mux.HandleFunc("GET /api/repos", s.getRepos)
 	mux.HandleFunc("GET /api/github-runners", s.getRemote)
 	mux.HandleFunc("POST /api/add", s.postAdd)
+	mux.HandleFunc("GET /api/workflow-labels", s.getWorkflowLabels)
+	mux.HandleFunc("POST /api/repo-runners", s.postRepoRunners)
+	mux.HandleFunc("PUT /api/runner-labels", s.putRunnerLabels)
+	mux.HandleFunc("GET /api/found", s.getFound)
+	mux.HandleFunc("POST /api/adopt", s.postAdopt)
 	mux.HandleFunc("POST /api/runners/{id}/start", s.postStartStop(false))
 	mux.HandleFunc("POST /api/runners/{id}/stop", s.postStartStop(true))
 	mux.HandleFunc("POST /api/runners/{id}/remove", s.postRemove)

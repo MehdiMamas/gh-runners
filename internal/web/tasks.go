@@ -21,6 +21,7 @@ type task struct {
 	Error   string    `json:"error,omitempty"`
 	Created time.Time `json:"created"`
 	Ended   time.Time `json:"ended,omitzero"`
+	Scopes  []string  `json:"scopes,omitempty"` // repos it adds to or changes
 	out     []byte
 	run     func(w io.Writer) error
 }
@@ -38,13 +39,14 @@ func (t *task) Write(p []byte) (int, error) {
 }
 
 type taskView struct {
-	ID      int    `json:"id"`
-	Title   string `json:"title"`
-	State   string `json:"state"`
-	Error   string `json:"error,omitempty"`
-	Created string `json:"created"`
-	Ended   string `json:"ended,omitempty"`
-	Log     string `json:"log"`
+	ID      int      `json:"id"`
+	Title   string   `json:"title"`
+	State   string   `json:"state"`
+	Error   string   `json:"error,omitempty"`
+	Created string   `json:"created"`
+	Ended   string   `json:"ended,omitempty"`
+	Scopes  []string `json:"scopes,omitempty"`
+	Log     string   `json:"log"`
 }
 
 func (t *task) view(full bool) taskView {
@@ -54,7 +56,7 @@ func (t *task) view(full bool) taskView {
 	if !full && len(out) > 4096 {
 		out = out[len(out)-4096:]
 	}
-	return taskView{t.ID, t.Title, t.State, t.Error, since(t.Created), since(t.Ended), string(out)}
+	return taskView{t.ID, t.Title, t.State, t.Error, since(t.Created), since(t.Ended), t.Scopes, string(out)}
 }
 
 type taskQueue struct {
@@ -96,10 +98,10 @@ func (q *taskQueue) work() {
 }
 
 // add queues a task and returns its id.
-func (q *taskQueue) add(title string, run func(w io.Writer) error) (*task, error) {
+func (q *taskQueue) add(title string, scopes []string, run func(w io.Writer) error) (*task, error) {
 	q.mu.Lock()
 	q.next++
-	t := &task{ID: q.next, Title: title, State: "queued", Created: time.Now(), run: run}
+	t := &task{ID: q.next, Title: title, State: "queued", Created: time.Now(), Scopes: scopes, run: run}
 	q.list = append(q.list, t)
 	if len(q.list) > 50 {
 		q.list = q.list[len(q.list)-50:]
@@ -150,7 +152,13 @@ func (q *taskQueue) busy() int {
 }
 
 func (s *Server) startTask(w http.ResponseWriter, title string, run func(w io.Writer) error) {
-	t, err := s.tasks.add(title, run)
+	s.startScopedTask(w, title, nil, run)
+}
+
+// startScopedTask queues a task that works on these repositories, so the
+// page can show them as busy until it is done.
+func (s *Server) startScopedTask(w http.ResponseWriter, title string, scopes []string, run func(w io.Writer) error) {
+	t, err := s.tasks.add(title, scopes, run)
 	if err != nil {
 		fail(w, http.StatusServiceUnavailable, err)
 		return

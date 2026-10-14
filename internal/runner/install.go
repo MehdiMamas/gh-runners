@@ -96,11 +96,13 @@ func EnsurePackage(ctx context.Context, c *github.Client, scope github.Scope, lo
 	if resp.StatusCode != http.StatusOK {
 		return Package{}, fmt.Errorf("download %s: %s", d.DownloadURL, resp.Status)
 	}
-	tmp := path + ".part"
-	f, err := os.Create(tmp)
+	// A temp file of its own: an add from the CLI and one from the
+	// dashboard may download the same package at once.
+	f, err := os.CreateTemp(store.CacheDir(), d.Filename+".*.part")
 	if err != nil {
 		return Package{}, err
 	}
+	tmp := f.Name()
 	h := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(f, h), resp.Body); err != nil {
 		f.Close()
@@ -108,6 +110,7 @@ func EnsurePackage(ctx context.Context, c *github.Client, scope github.Scope, lo
 		return Package{}, err
 	}
 	if err := f.Close(); err != nil {
+		os.Remove(tmp)
 		return Package{}, err
 	}
 	if sum := hex.EncodeToString(h.Sum(nil)); d.SHA256 != "" && !strings.EqualFold(sum, d.SHA256) {
@@ -115,6 +118,11 @@ func EnsurePackage(ctx context.Context, c *github.Client, scope github.Scope, lo
 		return Package{}, fmt.Errorf("checksum mismatch for %s: got %s, want %s", d.Filename, sum, d.SHA256)
 	}
 	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		// The other download may have finished first and hold the file open.
+		if ok, _ := checksumMatches(path, d.SHA256); ok {
+			return Package{path, version}, nil
+		}
 		return Package{}, err
 	}
 	return Package{path, version}, nil

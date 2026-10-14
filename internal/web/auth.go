@@ -110,6 +110,8 @@ func (s *Server) signedInChanged() {
 	s.auth.reset()
 	s.repos.reset()
 	s.remote.reset()
+	s.ghRunners.reset()
+	s.wfLabels.reset()
 	s.h.ResetClient()
 }
 

@@ -5,6 +5,7 @@ package github
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -265,6 +266,64 @@ func (c *Client) ListRunners(ctx context.Context, s Scope) ([]Runner, error) {
 func (c *Client) DeleteRunner(ctx context.Context, s Scope, id int64) error {
 	_, err := c.do(ctx, http.MethodDelete, fmt.Sprintf("%s/%d", s.apiBase(), id), nil, nil)
 	return err
+}
+
+// SetRunnerLabels replaces a runner's custom labels; GitHub keeps
+// self-hosted, the OS and the architecture itself.
+func (c *Client) SetRunnerLabels(ctx context.Context, s Scope, id int64, labels []string) ([]Label, error) {
+	if labels == nil {
+		labels = []string{}
+	}
+	var r struct {
+		Labels []Label `json:"labels"`
+	}
+	_, err := c.do(ctx, http.MethodPut, fmt.Sprintf("%s/%d/labels", s.apiBase(), id), map[string]any{"labels": labels}, &r)
+	return r.Labels, err
+}
+
+// WorkflowFile is one file of a repository's .github/workflows folder.
+type WorkflowFile struct {
+	Name    string
+	Content string
+}
+
+// Workflows returns the YAML files in the repository's .github/workflows
+// folder on the default branch; none when the folder does not exist.
+func (c *Client) Workflows(ctx context.Context, owner, repo string) ([]WorkflowFile, error) {
+	base := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/contents/.github/workflows"
+	var entries []struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	if _, err := c.do(ctx, http.MethodGet, base, nil, &entries); err != nil {
+		if IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []WorkflowFile
+	for _, e := range entries {
+		if e.Type != "file" || !(strings.HasSuffix(e.Name, ".yml") || strings.HasSuffix(e.Name, ".yaml")) {
+			continue
+		}
+		var f struct {
+			Content  string `json:"content"`
+			Encoding string `json:"encoding"`
+		}
+		if _, err := c.do(ctx, http.MethodGet, base+"/"+url.PathEscape(e.Name), nil, &f); err != nil {
+			return nil, err
+		}
+		text := f.Content
+		if f.Encoding == "base64" {
+			b, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(f.Content, "\n", ""))
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", e.Name, err)
+			}
+			text = string(b)
+		}
+		out = append(out, WorkflowFile{Name: e.Name, Content: text})
+	}
+	return out, nil
 }
 
 // Download is one runner package for an OS/arch.
