@@ -180,6 +180,26 @@ label.check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; c
 .pill.info { background: var(--info-soft); color: var(--info); }
 .chip { display: inline-block; padding: 1px 8px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--border); font-family: var(--mono); font-size: 11.5px; }
 .chips { display: flex; gap: 5px; flex-wrap: wrap; }
+.chip.custom { background: var(--accent-soft); border-color: var(--accent); }
+.chip.fixed { color: var(--muted); }
+.chip .x { border: 0; background: none; color: inherit; font: inherit; cursor: pointer; padding: 0 0 0 5px; opacity: .7; }
+.chip .x:hover { opacity: 1; color: var(--bad); }
+.linkbtn { border: 0; background: none; padding: 0; font: inherit; color: var(--link); cursor: pointer; }
+.linkbtn:hover .pill, .linkbtn:hover { text-decoration: underline; }
+
+/* labels */
+.sets { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 14px; }
+.set { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.set:hover { background: var(--panel-2); }
+.set.dim { opacity: .7; cursor: default; }
+.set .grow { min-width: 0; }
+.set .muted { overflow-wrap: anywhere; }
+@media (max-width: 600px) { .set { flex-wrap: wrap; } }
+.gh-runner { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: 1px solid var(--border); }
+.gh-runner:first-child { border-top: 0; padding-top: 0; }
+.found-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.found { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: var(--panel); border-radius: 8px; padding: 8px 10px; }
+.found .grow { min-width: 200px; overflow-wrap: anywhere; }
 
 /* repository list */
 .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }

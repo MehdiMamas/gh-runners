@@ -90,12 +90,34 @@ manages it.
 
 | Tab | What you do there |
 | --- | --- |
-| Repositories | Every repo you can reach, filter by owner and name, **Add runner** on one or tick several and add them all. Public repos ask first. |
-| This machine | Each runner here: state on this computer and on GitHub, labels, a `runs-on:` line to copy, **Stop**, **Start**, **Logs**, **Remove**. |
+| Repositories | Every repo you can reach, filter by owner and name, **Add runner** on one or tick several and add them all. Each repo shows the runners GitHub already has for it (from any machine) and their labels. Public repos ask first. |
+| This machine | Each runner here: state on this computer and on GitHub, labels (**Edit labels**), a `runs-on:` line to copy, **Stop**, **Start**, **Logs**, **Remove**. |
 | Automation | A runner for every repo that matches your rules (with preview), or on-demand runners. |
 | Activity | What the dashboard did, with the output of each step, and the service log. |
 | Settings | GitHub account (sign in, switch, sign out), the **runners folder** (pick any folder or disk; existing runners are moved there), runner name and labels, start at login. |
 | Health | The same checks as `gh-runners doctor`. |
+
+**Labels.** Before adding a runner the dashboard asks which labels it gets. It
+reads the repo's workflows, lists the label sets their `runs-on:` lines ask for
+(for example `[self-hosted, heavy]` or `[self-hosted, light]`), shows which of
+those jobs this machine would take, and preselects the most used set. Labels of
+any runner, here or on another machine, can be changed later with **Edit
+labels**; the change goes straight to GitHub, no re-registration.
+
+**Several at once.** Click **Add runner** on as many repos as you like, or tick
+them and add them together. Each repo is queued; its row says *Queued* or
+*Adding…* and can't be added twice, and work on different repos runs side by
+side.
+
+**Runners set up by hand.** The dashboard looks for runners made with GitHub's
+own `config.sh` / `config.cmd` (in your home folder, the top of the system drive
+on Windows, `/opt`, `/srv` and `/Users/Shared`). They show in a banner and on their repo's row
+as *Set up by hand here*. **Move into gh-runners** stops the old runner, moves
+its folder into the runners folder, keeps its registration and labels, and from
+then on gh-runners runs it. A runner installed as a Windows service needs one
+UAC prompt to remove that service. A system launchd daemon (macOS), or a
+systemd unit (Linux) when `sudo` asks for a password, comes with the `sudo`
+commands to run.
 
 The dashboard only listens on `127.0.0.1`. The link `gh-runners ui` prints
 carries a secret that unlocks it in your browser once (it is kept in a cookie);
@@ -153,7 +175,9 @@ jobs:
 ```
 
 Every runner gets the labels GitHub adds (`self-hosted`, the OS, the CPU) plus
-`gh-runners`, the machine's hostname label and any `--labels` you pass.
+`gh-runners`, the machine's hostname label and any `--labels` you pass (for
+example `--labels heavy` for jobs with `runs-on: [self-hosted, heavy]`). A job
+only lands on a runner that has every label in its `runs-on:` list.
 
 ## Commands
 
