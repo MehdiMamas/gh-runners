@@ -38,14 +38,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       GH_TOKEN: ${{ github.token }}
-      GH_RUNNERS_HOME: ${{ runner.temp }}/gh-runners-home
       LABEL: e2e-${{ github.run_id }}-${{ matrix.name }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - run: go build -o gh-runners .
+      - run: |
+          go build -o gh-runners .
+          echo "GH_RUNNERS_HOME=$RUNNER_TEMP/gh-runners-home" >> "$GITHUB_ENV"
       - name: add runner
         env:
           REG_TOKEN: ${{ secrets.E2E_REGISTRATION_TOKEN }}
