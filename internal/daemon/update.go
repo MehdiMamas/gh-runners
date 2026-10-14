@@ -43,6 +43,11 @@ func (d *Daemon) updateLoop(ctx context.Context) {
 		case <-d.updateNow:
 			pending = true
 		}
+		if d.paused.Load() {
+			pending = false
+			timer.Reset(d.pausedWait())
+			continue
+		}
 		var next time.Duration
 		next, pending = d.checkUpdate(ctx, pending)
 		timer.Reset(next)

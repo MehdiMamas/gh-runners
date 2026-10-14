@@ -97,6 +97,8 @@ type Info struct {
 	Arch     string       `json:"arch"`
 	Version  string       `json:"version"`
 	Runners  []RunnerInfo `json:"runners"`
+	// Paused means the machine is paused: none of its runners run.
+	Paused bool `json:"paused,omitempty"`
 }
 
 // RunnerInfo is one runner of a member.

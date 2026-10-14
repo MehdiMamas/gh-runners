@@ -70,3 +70,30 @@ func envKey(kv string) string {
 	}
 	return strings.ToUpper(kv)
 }
+
+// StopTree stops cmd and everything it started, right away: it asks the
+// process group to exit like Stop (so GitHub sees the runner go offline),
+// waits up to grace, then kills the whole tree whether or not the leader
+// has gone, so no job process is left behind.
+// done must be closed when cmd.Wait returns.
+func StopTree(cmd *exec.Cmd, done <-chan struct{}, grace time.Duration) {
+	if cmd.Process == nil {
+		return
+	}
+	known := descendants(cmd.Process.Pid)
+	interrupt(cmd)
+	select {
+	case <-done:
+	case <-time.After(grace):
+		known = append(known, descendants(cmd.Process.Pid)...)
+	}
+	kill(cmd)
+	killPIDs(known)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+	}
+}
+
+// Alive reports whether a process with this PID is running.
+func Alive(pid int) bool { return alive(pid) }

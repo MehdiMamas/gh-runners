@@ -23,6 +23,7 @@ var memberAPI = []rule{
 	{"GET", `/api/tasks`},
 	{"GET", `/api/tasks/[0-9]+`},
 	{"POST", `/api/update`},
+	{"POST", `/api/(pause|resume)`},
 }
 
 // The GitHub API calls a member may have the host make: exactly the ones

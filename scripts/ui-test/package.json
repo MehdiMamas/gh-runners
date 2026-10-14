@@ -6,7 +6,8 @@
   "scripts": {
     "tour": "node tour.js",
     "flow": "node flow.js",
-    "multi": "node multi.js"
+    "multi": "node multi.js",
+    "pause": "node pause.js"
   },
   "dependencies": {
     "puppeteer-core": "^23.11.1"

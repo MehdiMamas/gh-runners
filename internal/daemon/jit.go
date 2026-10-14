@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -94,6 +95,9 @@ func (m *jitManager) summary() string {
 	if !m.enabled {
 		return "off"
 	}
+	if m.d.paused.Load() {
+		return "paused"
+	}
 	s := fmt.Sprintf("watching %d repo(s), last poll %s", m.watching, m.lastPoll.Format(time.Kitchen))
 	if m.lastErr != "" {
 		s += ", error: " + m.lastErr
@@ -114,7 +118,7 @@ func (m *jitManager) loop(ctx context.Context) {
 			m.enabled = cfg.OnDemand.Enabled
 			paused := m.paused
 			m.mu.Unlock()
-			if cfg.OnDemand.Enabled && !paused {
+			if cfg.OnDemand.Enabled && !paused && !m.d.paused.Load() {
 				err = m.poll(ctx, cfg)
 			}
 		}
@@ -126,6 +130,9 @@ func (m *jitManager) loop(ctx context.Context) {
 			m.d.Log.Printf("on-demand: %v", err)
 		}
 		m.mu.Unlock()
+		if m.d.paused.Load() {
+			poll = pausedRecheck
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -304,6 +311,9 @@ func (w jobWatcher) Write(p []byte) (int, error) {
 }
 
 func (m *jitManager) launch(ctx context.Context, c *github.Client, cfg store.Config, s *jitSlot, scope github.Scope, labels []string) error {
+	if m.d.paused.Load() {
+		return errors.New("the machine is paused")
+	}
 	if _, err := os.Stat(filepath.Join(s.dir, "run.sh")); err != nil {
 		if _, err := os.Stat(filepath.Join(s.dir, "run.cmd")); err != nil {
 			pkg, err := runner.EnsurePackage(ctx, c, scope, logWriter{m.d.Log})
@@ -393,6 +403,28 @@ func (m *jitManager) stopAll() {
 		go func(s *jitSlot) {
 			defer wg.Done()
 			proc.Stop(s.cmd, s.done, stopGrace)
+		}(s)
+	}
+	wg.Wait()
+}
+
+// stopAllNow stops every on-demand runner and its process tree right away
+// (a pause): a short grace to close the session, then a kill.
+func (m *jitManager) stopAllNow() {
+	m.mu.Lock()
+	var running []*jitSlot
+	for _, s := range m.slots {
+		if s.cmd != nil {
+			running = append(running, s)
+		}
+	}
+	m.mu.Unlock()
+	var wg sync.WaitGroup
+	for _, s := range running {
+		wg.Add(1)
+		go func(s *jitSlot) {
+			defer wg.Done()
+			proc.StopTree(s.cmd, s.done, pauseGrace)
 		}(s)
 	}
 	wg.Wait()

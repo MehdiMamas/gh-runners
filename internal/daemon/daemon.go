@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/control"
@@ -64,6 +65,7 @@ type Daemon struct {
 	lastSync time.Time
 	syncErr  string
 	jit      *jitManager
+	paused   atomic.Bool // see pause.go
 
 	updateNow chan struct{}
 	upd       control.UpdateState
@@ -93,6 +95,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.syncNow = make(chan struct{}, 1)
 	d.updateNow = make(chan struct{}, 1)
 	d.jit = newJITManager(d)
+	d.paused.Store(store.IsPaused())
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -129,6 +132,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 		WakeJIT:     d.jit.wake,
 		ResetClient: d.resetClient,
 		UpdateNow:   func() { nudge(d.updateNow) },
+		Pause:       d.Pause,
+		Resume:      d.Resume,
 		Log:         d.Log,
 		Host:        d.host,
 		Member:      d.member,
@@ -223,6 +228,16 @@ func (d *Daemon) handler(secret string, shutdown context.CancelFunc) http.Handle
 		d.member.Reload()
 		d.member.OnChange()
 	}))
+	mux.HandleFunc("POST /pause", auth(func(w http.ResponseWriter, r *http.Request) {
+		if err := d.Pause(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}))
+	mux.HandleFunc("POST /resume", auth(func(w http.ResponseWriter, r *http.Request) {
+		if err := d.Resume(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}))
 	mux.HandleFunc("POST /shutdown", auth(func(w http.ResponseWriter, r *http.Request) {
 		shutdown()
 	}))
@@ -239,6 +254,10 @@ func nudge(c chan struct{}) {
 func (d *Daemon) status() control.Status {
 	d.mu.Lock()
 	s := control.Status{PID: os.Getpid(), Version: d.Version, Started: d.started, LastSync: d.lastSync, SyncErr: d.syncErr, Update: d.upd}
+	s.Paused = d.paused.Load()
+	if s.Paused {
+		s.PausedSince = store.LoadPause().Since
+	}
 	for _, c := range d.children {
 		s.Runners = append(s.Runners, c.state)
 	}
@@ -258,7 +277,7 @@ func (d *Daemon) reconcile() {
 	}
 	want := map[string]store.Runner{}
 	for _, r := range runners {
-		if !r.Disabled && r.Configured() {
+		if !r.Disabled && r.Configured() && !d.paused.Load() {
 			want[r.ID] = r
 		}
 	}
@@ -358,10 +377,10 @@ func (d *Daemon) stopAll() {
 		if c.cmd != nil {
 			c.stopping = true
 			wg.Add(1)
-			go func(c *child) {
+			go func(cmd *exec.Cmd, done chan struct{}) {
 				defer wg.Done()
-				proc.Stop(c.cmd, c.done, stopGrace)
-			}(c)
+				proc.Stop(cmd, done, stopGrace)
+			}(c.cmd, c.done)
 		}
 	}
 	d.mu.Unlock()
@@ -413,7 +432,7 @@ func (d *Daemon) hostToken(context.Context) (string, error) {
 // fleetInfo is what this machine tells its main host.
 func (d *Daemon) fleetInfo() fleet.Info {
 	host, _ := os.Hostname()
-	info := fleet.Info{Hostname: host, OS: runtime.GOOS, Arch: runtime.GOARCH, Version: d.Version, Runners: []fleet.RunnerInfo{}}
+	info := fleet.Info{Hostname: host, OS: runtime.GOOS, Arch: runtime.GOARCH, Version: d.Version, Runners: []fleet.RunnerInfo{}, Paused: d.paused.Load()}
 	st := d.status()
 	runners, _ := store.List()
 	for _, r := range runners {
@@ -447,6 +466,10 @@ func (d *Daemon) syncLoop(ctx context.Context) {
 		interval := time.Hour
 		if err == nil {
 			interval = cfg.Sync.Interval.Or(time.Hour)
+		}
+		if d.paused.Load() {
+			timer.Reset(d.pausedWait())
+			continue
 		}
 		if err == nil && (cfg.Sync.Auto || forced) {
 			err = d.runSync(ctx, cfg)

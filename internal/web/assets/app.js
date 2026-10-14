@@ -104,7 +104,7 @@ function stateClass(s) {
   if (!s) return '';
   if (s === 'running' || s === 'online' || s === 'jit-busy') return 'ok';
   if (s === 'busy') return 'info';
-  if (s.startsWith('restarting') || s === 'starting' || s === 'stopping' || s === 'jit-idle') return 'warn';
+  if (s.startsWith('restarting') || s === 'starting' || s === 'stopping' || s === 'jit-idle' || s === 'paused') return 'warn';
   if (s === 'not registered' || s === 'error' || s === 'missing' || s === 'no daemon') return 'bad';
   return '';
 }
@@ -145,8 +145,8 @@ function confirmDialog(title, text, okLabel, danger) {
 }
 
 // confirmBusy warns that runners are running a job and asks to go on
-// anyway. gerund is "Restarting", "Removing" or "Updating".
-const BUSY_VERBS = { Restarting: 'Restart', Removing: 'Remove', Updating: 'Update' };
+// anyway. gerund is "Restarting", "Removing", "Updating" or "Pausing".
+const BUSY_VERBS = { Restarting: 'Restart', Removing: 'Remove', Updating: 'Update', Pausing: 'Pause' };
 function confirmBusy(names, gerund) {
   const one = names.length === 1;
   return confirmDialog(gerund + ' will cancel a job',
@@ -245,7 +245,9 @@ function renderHeader() {
   mount($('machine'),
     h('span', { class: 'host' }, st.hostname),
     h('span', { class: 'pill plain' }, osName(st.os) + ' · ' + st.arch),
-    st.service.installed ? h('span', { class: 'pill ok', title: st.service.where }, 'Starts at login') : h('span', { class: 'pill warn' }, 'Not started at login'));
+    st.service.installed ? h('span', { class: 'pill ok', title: st.service.where }, 'Starts at login') : h('span', { class: 'pill warn' }, 'Not started at login'),
+    st.paused ? h('span', { class: 'pill warn' }, 'Paused') : null,
+    h('button', { class: 'btn small pause-btn' + (st.paused ? ' primary' : ''), title: st.paused ? 'Start the runners again' : 'Stop every runner and all background work on this computer until you resume', onclick: () => setPaused(null, !st.paused) }, st.paused ? 'Resume' : 'Pause this machine'));
   const a = st.auth;
   if (a.signed_in) {
     mount($('account'),
@@ -266,6 +268,11 @@ function renderBanner() {
     items.push(h('div', { class: 'notice' },
       h('div', { class: 'grow' }, h('b', {}, 'Runners stop when you restart this computer. '), 'Turn on "Start at login" to keep them running.'),
       h('button', { class: 'btn primary', onclick: () => serviceAction('install') }, 'Start at login')));
+  }
+  if (st.paused) {
+    items.unshift(h('div', { class: 'notice' },
+      h('div', { class: 'grow' }, h('b', {}, 'This machine is paused. '), 'No runner, on-demand runner, sync or update runs' + (st.paused_since ? ' (since ' + ago(st.paused_since) + ')' : '') + '. It stays paused after a restart until you resume.'),
+      h('button', { class: 'btn primary', onclick: () => setPaused(null, false) }, 'Resume')));
   }
   mount($('banner'), items);
 }
@@ -843,6 +850,25 @@ async function addOrg(org) {
   await guard(async () => { await api('POST', '/api/add', { org }); loadTasks(); });
 }
 
+// setPaused pauses or resumes a machine: m is a machine of the main host, or
+// null for this one. Pausing cancels a running job, so it asks first.
+async function setPaused(m, on) {
+  const base = m ? mbase(m) : '';
+  const name = m ? machineName(m) : (S.state ? S.state.hostname : 'this machine');
+  await guard(async () => {
+    if (on) {
+      const res = await confirmedPost(base + '/api/pause', 'Pausing');
+      if (res === null) return;
+      toast(name + ' is paused');
+    } else {
+      await api('POST', base + '/api/resume');
+      toast(name + ' is resuming');
+    }
+    await refreshState();
+    if (S.fleet) loadFleet();
+  });
+}
+
 async function startStop(r, stop) {
   await guard(async () => {
     await api('POST', `/api/runners/${encodeURIComponent(r.id)}/${stop ? 'stop' : 'start'}`);
@@ -905,7 +931,7 @@ function renderMachine() {
       h('div', { class: 'snippet' }, h('code', {}, 'runs-on: ' + runsOn), h('button', { class: 'btn small ghost', onclick: () => copy('runs-on: ' + runsOn) }, 'Copy')),
       h('div', { class: 'row', 'data-gap': '1' },
         r.disabled ? h('button', { class: 'btn', onclick: () => startStop(r, false) }, 'Start') : h('button', { class: 'btn', onclick: () => startStop(r, true) }, 'Stop'),
-        r.disabled ? null : h('button', { class: 'btn', title: 'Stop and start again, with the current PATH and other variables', onclick: () => restartRunner(r) }, 'Restart'),
+        r.disabled || st.paused ? null : h('button', { class: 'btn', title: 'Stop and start again, with the current PATH and other variables', onclick: () => restartRunner(r) }, 'Restart'),
         h('button', { class: 'btn', onclick: () => showLog(r) }, 'Logs'),
         r.kind !== 'org' && st.auth.signed_in ? h('button', { class: 'btn', onclick: () => editLocalLabels(r) }, 'Edit labels') : null,
         h('div', { class: 'grow' }),
@@ -987,9 +1013,11 @@ function renderMachines() {
   const members = f.machines || [];
   const mine = h('div', { class: 'card' },
     h('div', { class: 'card-head' },
-      h('div', {}, h('div', { class: 'row' }, h('h2', {}, st.hostname), h('span', { class: 'pill plain info' }, 'Main host')),
+      h('div', {}, h('div', { class: 'row' }, h('h2', {}, st.hostname), h('span', { class: 'pill plain info' }, 'Main host'), st.paused ? h('span', { class: 'pill warn' }, 'Paused') : null),
         h('div', { class: 'muted small' }, 'gh-runners ' + st.version + ' · ' + osName(st.os) + ' · ' + st.arch + ' · this computer')),
-      h('button', { class: 'btn', onclick: () => selectTab('machine') }, 'Manage runners')),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn small', onclick: () => setPaused(null, !st.paused) }, st.paused ? 'Resume machine' : 'Pause machine'),
+        h('button', { class: 'btn', onclick: () => selectTab('machine') }, 'Manage runners'))),
     st.runners.length ? h('div', { class: 'mrunners' }, st.runners.map((r) => h('div', { class: 'mrunner' },
       h('div', { class: 'who' }, h('div', { class: 'name' }, r.kind === 'org' ? r.scope + ' (organization)' : who(r)), h('div', { class: 'muted small' }, r.name)),
       h('div', { class: 'row' }, S.remote[r.id] ? pill(S.remote[r.id]) : null, pill(r.state)))))
@@ -1013,6 +1041,7 @@ function machineCard(m) {
   const btn = (text, fn, cls) => h('button', { class: 'btn small' + (cls ? ' ' + cls : ''), disabled: off, title: off ? why : null, onclick: fn }, text);
   const rows = (info.runners || []).map((r) => {
     const stopped = r.state === 'stopped';
+    const paused = r.state === 'paused';
     const extra = (r.labels || []).filter((l) => !BUILTIN.includes(l.toLowerCase()));
     return h('div', { class: 'mrunner', 'data-runner': r.id },
       h('div', { class: 'who' },
@@ -1021,20 +1050,22 @@ function machineCard(m) {
       h('div', { class: 'row' }, off ? null : (gh[r.id] ? pill(gh[r.id]) : null), pill(r.state)),
       h('div', { class: 'acts' },
         stopped ? btn('Start', () => machineRunnerAction(m, r, 'start')) : btn('Stop', () => machineRunnerAction(m, r, 'stop')),
-        stopped ? null : btn('Restart', () => machineRunnerAction(m, r, 'restart')),
+        stopped || paused ? null : btn('Restart', () => machineRunnerAction(m, r, 'restart')),
         btn('Logs', () => showLog(r, mbase(m), machineName(m) + ' · ' + r.name)),
         r.scope.includes('/') ? btn('Edit labels', () => editLocalLabels({ scope: r.scope, name: r.name }, mbase(m))) : null,
         btn('Remove', () => machineRunnerAction(m, r, 'remove'), 'danger')));
   });
   return h('div', { class: 'card machine-card', 'data-machine': m.id },
     h('div', { class: 'card-head' },
-      h('div', {}, h('div', { class: 'row' }, h('h2', {}, machineName(m)), m.online ? h('span', { class: 'pill ok' }, 'Online') : h('span', { class: 'pill' }, 'Offline')),
+      h('div', {}, h('div', { class: 'row' }, h('h2', {}, machineName(m)), m.online ? h('span', { class: 'pill ok' }, 'Online') : h('span', { class: 'pill' }, 'Offline'), info.paused ? h('span', { class: 'pill warn' }, 'Paused') : null),
         h('div', { class: 'muted small' }, ['gh-runners ' + (info.version || '?'), osName(info.os) + (info.arch ? ' · ' + info.arch : ''),
-          m.online ? (m.since ? 'connected ' + ago(m.since) : 'connected') : (m.last_seen ? 'last seen ' + ago(m.last_seen) : 'never connected')].join(' · '))),
+          m.online ? 'live' : (m.last_seen ? 'last seen ' + ago(m.last_seen) : 'never connected')].join(' · '))),
       h('div', { class: 'row' },
+        btn(info.paused ? 'Resume machine' : 'Pause machine', () => setPaused(m, !info.paused)),
         btn('Add runner', () => addToMachine(m)),
         btn('Update gh-runners', () => updateMachine(m)),
         h('button', { class: 'btn small danger', onclick: () => removeMachine(m) }, 'Remove machine'))),
+    info.paused ? h('p', { class: 'muted small' }, 'Paused: no runner, on-demand runner, sync or update runs on this machine until you resume it.') : null,
     off ? h('p', { class: 'muted small' }, 'Offline: its runners keep running, but you can change them here only when it is back.') : null,
     rows.length ? h('div', { class: 'mrunners' }, rows) : h('p', { class: 'muted' }, 'No runners on this machine yet.'));
 }
