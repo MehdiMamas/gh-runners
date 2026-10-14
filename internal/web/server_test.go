@@ -450,7 +450,8 @@ func TestSeveralRunnersPerRepo(t *testing.T) {
 	api(t, h, "GET", "/api/tasks", "", &tasks)
 	var titles []string
 	for _, tv := range tasks {
-		if tv.State == "queued" {
+		// "hold" itself may still be queued until the worker goroutine picks it up.
+		if tv.State == "queued" && tv.Title != "hold" {
 			titles = append(titles, tv.Title)
 		}
 	}
