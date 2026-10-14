@@ -70,3 +70,25 @@ jobs:
       - run: |
           file dist/gh-runners-darwin-universal
           dist/gh-runners-darwin-universal --version
+
+  install-script:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: install.sh (latest release)
+        if: runner.os != 'Windows'
+        run: |
+          GH_RUNNERS_BIN="$RUNNER_TEMP/bin" sh install.sh
+          "$RUNNER_TEMP/bin/gh-runners" --version
+          "$RUNNER_TEMP/bin/gh-runners" doctor || true
+      - name: install.ps1 (latest release)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:GH_RUNNERS_BIN = "$env:RUNNER_TEMP\bin"
+          ./install.ps1
+          & "$env:RUNNER_TEMP\bin\gh-runners.exe" --version
