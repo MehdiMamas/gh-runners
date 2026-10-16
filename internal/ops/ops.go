@@ -524,3 +524,66 @@ func ApplySync(ctx context.Context, c *github.Client, plan *SyncPlan, log io.Wri
 		}
 	}
 }
+
+// ErrPaused is what the start-all operations answer on a paused machine.
+var ErrPaused = errors.New("machine is paused; resume first")
+
+// LastSessionRunners are the configured runners of the last session that
+// still exist.
+func LastSessionRunners() []store.Runner {
+	var out []store.Runner
+	for _, id := range store.LoadLastSession().IDs {
+		if r, err := store.Load(id); err == nil && r.Configured() {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// Enable clears Disabled on rs and calls nudge once, returning the runners
+// it turned on (the ones that were already on are left out).
+func Enable(rs []store.Runner, nudge func() error) ([]store.Runner, error) {
+	if store.IsPaused() {
+		return nil, ErrPaused
+	}
+	var started []store.Runner
+	for _, r := range rs {
+		if !r.Disabled {
+			continue
+		}
+		r.Disabled = false
+		if err := store.Save(r); err != nil {
+			return started, err
+		}
+		started = append(started, r)
+	}
+	if len(started) > 0 && nudge != nil {
+		if err := nudge(); err != nil && !errors.Is(err, control.ErrNotRunning) {
+			return started, err
+		}
+	}
+	return started, nil
+}
+
+// StartLast runs what was on before the daemon last started with
+// everything stopped.
+func StartLast() ([]store.Runner, error) {
+	return Enable(LastSessionRunners(), control.Reload)
+}
+
+// StartAll runs every configured runner on this machine.
+func StartAll() ([]store.Runner, error) {
+	return Enable(ConfiguredRunners(), control.Reload)
+}
+
+// ConfiguredRunners are the runners here that finished registering.
+func ConfiguredRunners() []store.Runner {
+	all, _ := store.List()
+	var out []store.Runner
+	for _, r := range all {
+		if r.Configured() {
+			out = append(out, r)
+		}
+	}
+	return out
+}

@@ -196,12 +196,23 @@ func newStartStopCmd(start bool) *cobra.Command {
 		use, short = "start <owner/repo | org>", "Start a stopped runner again"
 	}
 	var sel string
-	var force bool
+	var force, last, all bool
 	cmd := &cobra.Command{
 		Use:   use,
 		Short: short + " (every runner of the repo unless --runner picks one)",
-		Args:  cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if start && (last || all) {
+				if len(args) > 0 || sel != "" || (last && all) {
+					return errors.New("--last and --all stand alone: give neither a repo, --runner, nor both flags")
+				}
+				return nil
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if start && (last || all) {
+				return startSet(all)
+			}
 			rs, err := findRunners(args, sel)
 			if err != nil {
 				return err
@@ -244,10 +255,37 @@ func newStartStopCmd(start bool) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&sel, "runner", "", runnerFlagHelp)
+	if start {
+		cmd.Flags().BoolVar(&last, "last", false, "Run what was on before it closed")
+		cmd.Flags().BoolVar(&all, "all", false, "Run all")
+	}
 	if !start {
 		cmd.Flags().BoolVar(&force, "force", false, "stop even if a runner is running a job (the job is cancelled)")
 	}
 	return cmd
+}
+
+// startSet starts the last session's runners, or every runner.
+func startSet(all bool) error {
+	var started []store.Runner
+	var err error
+	if all {
+		started, err = ops.StartAll()
+	} else {
+		started, err = ops.StartLast()
+	}
+	if err != nil {
+		return err
+	}
+	if len(started) == 0 {
+		fmt.Println("Nothing to start: no stopped runner matches.")
+		return nil
+	}
+	for _, r := range started {
+		fmt.Printf("%s: started\n", r.Display())
+	}
+	afterChange()
+	return nil
 }
 
 func newLabelsCmd() *cobra.Command {

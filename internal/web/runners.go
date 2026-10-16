@@ -67,6 +67,9 @@ type stateView struct {
 	Config        store.Config        `json:"config"`
 	TasksBusy     int                 `json:"tasks_busy"`
 	Update        control.UpdateState `json:"update"`
+	// LastSession is how many runners of the last session are stopped now:
+	// what "Run what was on before it closed" would start.
+	LastSession int `json:"last_session"`
 }
 
 type serviceView struct {
@@ -111,6 +114,11 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 		Runners: s.runnerViews(st), OnDemand: st.OnDemand, LastSync: since(st.LastSync),
 		SyncErr: st.SyncErr, Config: cfg, TasksBusy: s.tasks.busy(), OnDemandProcs: []control.ProcState{},
 		Update: st.Update,
+	}
+	for _, r := range ops.LastSessionRunners() {
+		if r.Disabled {
+			v.LastSession++
+		}
 	}
 	for _, p := range st.Runners {
 		if strings.HasPrefix(p.State, "jit") {
@@ -745,4 +753,25 @@ func (s *Server) getDoctor(w http.ResponseWriter, r *http.Request) {
 
 func rank(level string) int {
 	return map[string]int{doctor.Fix: 0, doctor.Note: 1, doctor.OK: 2}[level]
+}
+
+// postStartSet runs the runners of the last session (all=false) or every
+// runner (all=true). It answers 409 on a paused machine.
+func (s *Server) postStartSet(all bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rs := ops.LastSessionRunners()
+		if all {
+			rs = ops.ConfiguredRunners()
+		}
+		started, err := ops.Enable(rs, func() error { s.h.Reload(); return nil })
+		if errors.Is(err, ops.ErrPaused) {
+			fail(w, http.StatusConflict, err)
+			return
+		}
+		if err != nil {
+			fail(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]int{"started": len(started)})
+	}
 }

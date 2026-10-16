@@ -213,6 +213,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("PUT /api/runner-labels", s.putRunnerLabels)
 	mux.HandleFunc("GET /api/found", s.getFound)
 	mux.HandleFunc("POST /api/adopt", s.postAdopt)
+	mux.HandleFunc("POST /api/runners/start-last", s.postStartSet(false))
+	mux.HandleFunc("POST /api/runners/start-all", s.postStartSet(true))
 	mux.HandleFunc("POST /api/runners/{id}/start", s.postStartStop(false))
 	mux.HandleFunc("POST /api/runners/{id}/stop", s.postStartStop(true))
 	mux.HandleFunc("POST /api/runners/{id}/restart", s.postRestart)
