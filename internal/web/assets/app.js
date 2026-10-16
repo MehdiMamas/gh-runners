@@ -869,6 +869,23 @@ async function setPaused(m, on) {
   });
 }
 
+async function startSet(m, which) {
+  const base = m ? mbase(m) : '';
+  await guard(async () => {
+    const res = await api('POST', base + '/api/runners/start-' + which);
+    toast((m ? machineName(m) + ': ' : '') + (res && res.started ? res.started + ' runner(s) starting' : 'nothing to start'));
+    await refreshState();
+    if (m) setTimeout(loadFleet, 1500);
+  });
+}
+
+function startSetButtons(m, last, anyStopped) {
+  const lastTxt = 'Run what was on before it closed' + (last != null ? ' (' + last + ')' : '');
+  return [
+    last === 0 ? null : h('button', { class: 'btn small', 'data-act': 'start-last', onclick: () => startSet(m, 'last') }, lastTxt),
+    anyStopped ? h('button', { class: 'btn small', 'data-act': 'start-all', onclick: () => startSet(m, 'all') }, 'Run all') : null];
+}
+
 async function startStop(r, stop) {
   await guard(async () => {
     const path = `/api/runners/${encodeURIComponent(r.id)}/${stop ? 'stop' : 'start'}`;
@@ -912,6 +929,13 @@ function showLog(r, base = '', title) {
   timer = setInterval(load, 2000);
 }
 
+// nothingRunning explains the empty state after a start: the daemon starts
+// with every runner stopped.
+function nothingRunning(runners) {
+  if (!runners.length || runners.some((r) => !r.disabled)) return null;
+  return h('p', { class: 'muted', 'data-nothing-running': '1' }, 'Nothing is running. gh-runners starts with every runner stopped.');
+}
+
 // ---------- this machine ----------
 function renderMachine() {
   const el = $('tab-machine');
@@ -947,6 +971,8 @@ function renderMachine() {
     h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Runners on ' + st.hostname),
       h('span', { class: 'muted small' }, 'Folder: ', h('code', {}, st.runners_dir))),
     foundBanner(),
+    nothingRunning(st.runners),
+    st.runners.some((r) => r.disabled) && !st.paused ? h('div', { class: 'row', 'data-gap': '1' }, startSetButtons(null, st.last_session, true)) : null,
     h('p', { class: 'muted' }, 'Target any runner of this computer from a workflow with ', h('code', {}, 'runs-on: [self-hosted, ' + st.machine_labels[3 + (st.config.labels || []).length] + ']'), ' or by its OS: ', h('code', {}, 'runs-on: [self-hosted, ' + osName(st.os) + ']'), '.'),
     od,
     cards.length ? h('div', { class: 'grid' }, cards) : h('div', { class: 'card empty' },
@@ -1065,6 +1091,7 @@ function machineCard(m) {
           m.online ? 'live' : (m.last_seen ? 'last seen ' + ago(m.last_seen) : 'never connected')].join(' · '))),
       h('div', { class: 'row' },
         btn(info.paused ? 'Resume machine' : 'Pause machine', () => setPaused(m, !info.paused)),
+        (info.paused || off) ? null : (info.runners || []).some((r) => r.state === 'stopped') ? [btn('Run what was on before it closed', () => startSet(m, 'last')), btn('Run all', () => startSet(m, 'all'))] : null,
         btn('Add runner', () => addToMachine(m)),
         btn('Update gh-runners', () => updateMachine(m)),
         h('button', { class: 'btn small danger', onclick: () => removeMachine(m) }, 'Remove machine'))),

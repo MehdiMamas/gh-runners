@@ -119,6 +119,7 @@ func state(d *Daemon, id string) control.ProcState {
 func startDaemon(t *testing.T) (*Daemon, func()) {
 	t.Helper()
 	d := &Daemon{Version: "test"}
+	_ = store.SetKeepRunning() // these tests want their runners on at start
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { _ = d.Run(ctx); close(done) }()

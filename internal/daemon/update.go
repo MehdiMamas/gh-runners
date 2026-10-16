@@ -130,7 +130,11 @@ func (d *Daemon) applyUpdate(ctx context.Context, tag string) (waiting bool, err
 	}
 	d.Log.Printf("installed gh-runners %s at %s; restarting", tag, exe)
 	d.setUpdate(func(u *control.UpdateState) { u.Note = "restarting into " + tag })
+	if err := store.SetKeepRunning(); err != nil {
+		d.Log.Printf("keep-running marker: %v", err)
+	}
 	if err := service.Spawn(filepath.Join(store.Home(), "update-restart.log"), "service", "restart"); err != nil {
+		_ = os.Remove(store.KeepRunningPath())
 		d.jit.pause(false)
 		return false, fmt.Errorf("restart: %w", err)
 	}

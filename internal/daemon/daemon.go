@@ -104,6 +104,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.updateNow = make(chan struct{}, 1)
 	d.jit = newJITManager(d)
 	d.paused.Store(store.IsPaused())
+	d.startStopped()
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

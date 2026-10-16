@@ -279,6 +279,7 @@ only lands on a runner that has every label in its `runs-on:` list.
 | `add [owner/repo]` | Download, register and start a runner for a repo (`--org` for an org, `--labels`, `--name`, `--group`, `--force`). `--another` adds one more runner to a repo that already has one (`--name` picks its name on GitHub). |
 | `remove [owner/repo]` | Stop, unregister and delete it (`--all`, `--force` if GitHub can't be reached, `--runner <name>` when the repo has several here). |
 | `stop` / `start [owner/repo]` | Pause a runner without unregistering it (every runner of the repo, or one with `--runner`). |
+| `start --last` / `start --all` | **Run what was on before it closed** / **Run all**. The daemon starts with every runner stopped (at login, after `service restart`); these two bring runners back. The same two buttons are on the dashboard (also per machine) and in the menu. An automatic update restart keeps the runners on, and a paused machine stays paused. |
 | `labels [owner/repo]` | Show or change a runner's labels on GitHub, no re-registration (`--set`, `--add`, `--remove`, `--runner`). |
 | `list` | Local state (running, restarting, stopped) and GitHub state (online, busy, offline). `--json`. |
 | `sync` | Add a runner for every private repo you admin; `--dry-run`, `--auto on` to repeat hourly. |

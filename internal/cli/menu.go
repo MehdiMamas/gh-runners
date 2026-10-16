@@ -30,6 +30,8 @@ func runMenu(ctx context.Context) error {
 			huh.NewOption("Add runners to repos (pick from a list)", "add"),
 			huh.NewOption("Show runners and their status", "list"),
 			huh.NewOption("Sync: a runner for every private repo I own", "sync"),
+			huh.NewOption("Run what was on before it closed", "last"),
+			huh.NewOption("Run all", "all"),
 			huh.NewOption("Stop / start a runner", "toggle"),
 			huh.NewOption("Remove runners", "remove"),
 			huh.NewOption(onOff(s.Installed, "Stop starting at login", "Start runners now and at every login"), "service"),
@@ -54,6 +56,10 @@ func runMenu(ctx context.Context) error {
 			runErr = runSub("list")
 		case "sync":
 			runErr = runSub("sync")
+		case "last":
+			runErr = startSet(false)
+		case "all":
+			runErr = startSet(true)
 		case "toggle":
 			runErr = menuToggle()
 		case "remove":
