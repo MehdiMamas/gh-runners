@@ -47,8 +47,14 @@ func SetKeepRunning() error {
 	return os.WriteFile(KeepRunningPath(), nil, 0o644)
 }
 
-// ConsumeKeepRunning removes the marker and reports whether it was there.
+// ConsumeKeepRunning removes the marker and reports whether it was there and
+// fresh (under 10 minutes old). A stale marker, left by an update restart
+// that never came up, must not keep a later manual start running.
 func ConsumeKeepRunning() bool {
-	err := os.Remove(KeepRunningPath())
-	return err == nil
+	fi, err := os.Stat(KeepRunningPath())
+	if err != nil {
+		return false
+	}
+	_ = os.Remove(KeepRunningPath())
+	return time.Since(fi.ModTime()) < 10*time.Minute
 }

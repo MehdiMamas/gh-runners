@@ -1,6 +1,10 @@
 package store
 
-import "testing"
+import (
+	"os"
+	"testing"
+	"time"
+)
 
 func TestLastSessionRoundTrip(t *testing.T) {
 	t.Setenv("GH_RUNNERS_HOME", t.TempDir())
@@ -29,5 +33,22 @@ func TestKeepRunningMarker(t *testing.T) {
 	}
 	if !ConsumeKeepRunning() || ConsumeKeepRunning() {
 		t.Fatal("marker must be consumed exactly once")
+	}
+}
+
+func TestKeepRunningStaleMarker(t *testing.T) {
+	t.Setenv("GH_RUNNERS_HOME", t.TempDir())
+	if err := SetKeepRunning(); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(KeepRunningPath(), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if ConsumeKeepRunning() {
+		t.Fatal("stale marker honoured")
+	}
+	if _, err := os.Stat(KeepRunningPath()); err == nil {
+		t.Fatal("stale marker not removed")
 	}
 }
