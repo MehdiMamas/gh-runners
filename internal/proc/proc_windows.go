@@ -5,7 +5,9 @@ package proc
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -47,7 +49,89 @@ func env() []string {
 	if err != nil {
 		return nil
 	}
-	return mergeEnv(os.Environ(), fresh)
+	return jobEnv(mergeEnv(os.Environ(), fresh), dirExists)
+}
+
+// jobEnv gives runners what a GitHub-hosted Windows image has and a plain
+// install lacks: bash (Git for Windows puts only Git\cmd on PATH), the
+// GitHub CLI and node, and PowerShell step scripts allowed to run (the
+// default execution policy blocks them). Missing folders are appended
+// after the existing PATH, so they never shadow a Windows tool.
+func jobEnv(env []string, exists func(string) bool) []string {
+	get := func(name string) string {
+		for _, kv := range env {
+			if envKey(kv) == name {
+				return kv[len(name)+1:]
+			}
+		}
+		return ""
+	}
+	path := get("PATH")
+	var add []string
+	for _, d := range toolDirs(path, get("PROGRAMFILES"), get("LOCALAPPDATA")) {
+		if !hasDir(path, d) && !hasDir(strings.Join(add, ";"), d) && exists(d) {
+			add = append(add, d)
+		}
+	}
+	var extra []string
+	if len(add) > 0 {
+		path = strings.TrimRight(path, ";")
+		if path != "" {
+			path += ";"
+		}
+		extra = append(extra, "Path="+path+strings.Join(add, ";"))
+	}
+	if get("PSEXECUTIONPOLICYPREFERENCE") == "" {
+		extra = append(extra, "PSExecutionPolicyPreference=Bypass")
+	}
+	return mergeEnv(env, extra)
+}
+
+// toolDirs lists the folders runners should find tools in. Git's bin is
+// taken from where its cmd folder is on PATH, with the default install as
+// a fallback.
+func toolDirs(path, programFiles, localAppData string) []string {
+	var gits []string
+	for _, d := range strings.Split(path, ";") {
+		d = strings.TrimRight(d, `\/`)
+		if strings.EqualFold(filepath.Base(d), "cmd") && exeIn(d, "git") {
+			gits = append(gits, filepath.Dir(d))
+		}
+	}
+	var out []string
+	if programFiles != "" {
+		gits = append(gits, filepath.Join(programFiles, "Git"))
+	}
+	for _, g := range gits {
+		out = append(out, filepath.Join(g, "bin"), filepath.Join(g, "usr", "bin"))
+	}
+	if programFiles != "" {
+		out = append(out, filepath.Join(programFiles, "GitHub CLI"), filepath.Join(programFiles, "nodejs"))
+	}
+	if localAppData != "" {
+		out = append(out, filepath.Join(localAppData, "Programs", "GitHub CLI"))
+	}
+	return out
+}
+
+// exeIn is a variable so tests can fake the file system.
+var exeIn = func(dir, name string) bool { return dirExists(filepath.Join(dir, name+".exe")) }
+
+func dirExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+// hasDir reports whether dir is one of the entries of path, ignoring case
+// and a trailing slash.
+func hasDir(path, dir string) bool {
+	dir = strings.TrimRight(dir, `\/`)
+	for _, d := range strings.Split(path, ";") {
+		if strings.EqualFold(strings.TrimRight(d, `\/`), dir) {
+			return true
+		}
+	}
+	return false
 }
 
 // procRef is an open handle: holding it keeps the PID from being reused

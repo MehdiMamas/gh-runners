@@ -28,3 +28,35 @@ func TestEnvRereadsRegistry(t *testing.T) {
 		t.Fatal("variables set only in this process are kept")
 	}
 }
+
+// Runners get Git's bash, gh and node appended to PATH when installed but
+// missing, never twice, and PowerShell scripts allowed to run.
+func TestJobEnv(t *testing.T) {
+	defer func(f func(string, string) bool) { exeIn = f }(exeIn)
+	exeIn = func(dir, name string) bool { return strings.EqualFold(dir, `D:\Git\cmd`) && name == "git" }
+	installed := map[string]bool{
+		`d:\git\bin`: true, `d:\git\usr\bin`: true, `c:\pf\git\bin`: true,
+		`c:\pf\github cli`: true, `c:\pf\nodejs`: true,
+	}
+	exists := func(p string) bool { return installed[strings.ToLower(p)] }
+	env := []string{`Path=C:\WINDOWS;D:\Git\cmd;C:\PF\nodejs\;`, `ProgramFiles=C:\PF`, `LOCALAPPDATA=C:\L`}
+	got := map[string]string{}
+	for _, kv := range jobEnv(env, exists) {
+		k, v, _ := strings.Cut(kv, "=")
+		got[strings.ToUpper(k)] = v
+	}
+	want := `C:\WINDOWS;D:\Git\cmd;C:\PF\nodejs\;D:\Git\bin;D:\Git\usr\bin;C:\PF\Git\bin;C:\PF\GitHub CLI`
+	if got["PATH"] != want {
+		t.Fatalf("PATH\n got %q\nwant %q", got["PATH"], want)
+	}
+	if got["PSEXECUTIONPOLICYPREFERENCE"] != "Bypass" {
+		t.Fatalf("policy = %q", got["PSEXECUTIONPOLICYPREFERENCE"])
+	}
+
+	// A policy the user set is kept, and nothing missing leaves PATH alone.
+	env = []string{`Path=C:\WINDOWS`, `PSExecutionPolicyPreference=AllSigned`}
+	out := strings.Join(jobEnv(env, func(string) bool { return false }), "|")
+	if out != `Path=C:\WINDOWS|PSExecutionPolicyPreference=AllSigned` {
+		t.Fatalf("got %q", out)
+	}
+}
