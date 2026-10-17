@@ -57,6 +57,11 @@ func Stop(cmd *exec.Cmd, done <-chan struct{}, grace time.Duration) {
 // starts or restarts from then on. nil means the daemon's own environment.
 func Env() []string { return env() }
 
+// MissingTools names the tools jobs expect that the runners' PATH lacks:
+// bash, gh and node on Windows, where a plain install has none of them.
+// Elsewhere it is nil.
+func MissingTools() []string { return missingTools() }
+
 // mergeEnv returns base with every variable of fresh added or replacing
 // the one of the same name. Names compare without case, as on Windows.
 func mergeEnv(base, fresh []string) []string {

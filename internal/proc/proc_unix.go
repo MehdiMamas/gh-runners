@@ -39,6 +39,8 @@ func treeGone(cmd *exec.Cmd, _ []procRef) bool {
 
 func env() []string { return nil }
 
+func missingTools() []string { return nil }
+
 type procRef = int
 
 // descendants is only needed where the tree has no process group to aim at.
