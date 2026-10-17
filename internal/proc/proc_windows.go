@@ -114,6 +114,32 @@ func toolDirs(path, programFiles, localAppData string) []string {
 	return out
 }
 
+func missingTools() []string { return missingIn(env(), exeIn) }
+
+// missingIn lists which of bash, gh and node no PATH entry of env holds.
+func missingIn(env []string, exe func(dir, name string) bool) []string {
+	path := ""
+	for _, kv := range env {
+		if envKey(kv) == "PATH" {
+			path = kv[len("PATH")+1:]
+		}
+	}
+	var out []string
+	for _, name := range []string{"bash", "gh", "node"} {
+		found := false
+		for _, d := range strings.Split(path, ";") {
+			if d != "" && exe(d, name) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // exeIn is a variable so tests can fake the file system.
 var exeIn = func(dir, name string) bool { return dirExists(filepath.Join(dir, name+".exe")) }
 

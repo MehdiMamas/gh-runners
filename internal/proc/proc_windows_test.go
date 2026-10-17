@@ -60,3 +60,17 @@ func TestJobEnv(t *testing.T) {
 		t.Fatalf("got %q", out)
 	}
 }
+
+// Doctor flags each job tool that no PATH entry holds.
+func TestMissingIn(t *testing.T) {
+	exe := func(dir, name string) bool {
+		return (dir == `C:\Git\bin` && name == "bash") || (dir == `C:\nodejs` && name == "node")
+	}
+	got := missingIn([]string{`Path=C:\Windows;;C:\Git\bin;C:\nodejs`}, exe)
+	if strings.Join(got, ",") != "gh" {
+		t.Fatalf("missing = %v, want [gh]", got)
+	}
+	if got := missingIn(nil, exe); len(got) != 3 {
+		t.Fatalf("no PATH: missing = %v, want all three", got)
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"github.com/MehdiMamas/gh-runners/internal/control"
 	"github.com/MehdiMamas/gh-runners/internal/github"
 	"github.com/MehdiMamas/gh-runners/internal/ops"
+	"github.com/MehdiMamas/gh-runners/internal/proc"
 	"github.com/MehdiMamas/gh-runners/internal/runner"
 	"github.com/MehdiMamas/gh-runners/internal/service"
 	"github.com/MehdiMamas/gh-runners/internal/store"
@@ -72,6 +73,11 @@ func Run(ctx context.Context, st *control.Status) []Check {
 		if out, err := exec.Command("ldconfig", "-p").Output(); err == nil && !strings.Contains(string(out), "libicu") {
 			add(Fix, "libicu not found; the runner needs it. Install it with your package manager (for example: sudo apt install libicu-dev)")
 		}
+	}
+
+	winget := map[string]string{"bash": "Git.Git", "gh": "GitHub.cli", "node": "OpenJS.NodeJS.LTS"}
+	for _, t := range proc.MissingTools() {
+		add(Fix, "%s is not on the runners' PATH, so jobs that use it fail: winget install --id %s, then restart the runners", t, winget[t])
 	}
 
 	s := service.Get()
