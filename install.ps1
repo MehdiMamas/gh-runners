@@ -48,8 +48,13 @@ try {
     }
     if ($wasRunning) {
         Write-Host 'Restarting the background service to load the new version ...'
-        & $exe service stop
-        & $exe service start
+        if ($env:GH_RUNNERS_NOW) {
+            & $exe service stop
+            & $exe service start
+        } else {
+            # Waits for running jobs; GH_RUNNERS_NOW=1 restarts at once.
+            & $exe service restart --when-idle
+        }
     }
     # Best effort: a Start Menu entry that opens the dashboard.
     try { & $exe shortcut install | Out-Null } catch { }

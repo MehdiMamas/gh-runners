@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -657,13 +658,7 @@ func newServiceCmd() *cobra.Command {
 			fmt.Println("Stopped.")
 			return nil
 		}},
-		&cobra.Command{Use: "restart", Short: "Stop and start the daemon (after an update, for example)", RunE: func(*cobra.Command, []string) error {
-			if err := service.Restart(); err != nil {
-				return err
-			}
-			fmt.Println("The daemon is running.")
-			return nil
-		}},
+		restartCmd(),
 		&cobra.Command{Use: "status", Short: "Show whether the daemon is installed and running", RunE: func(*cobra.Command, []string) error {
 			s := service.Get()
 			fmt.Printf("installed: %v (%s)\nrunning:   %v", s.Installed, s.Where, s.Running)
@@ -788,5 +783,91 @@ func newConfigCmd() *cobra.Command {
 			fmt.Printf("# %s\n%s\n", store.ConfigPath(), b)
 			return nil
 		},
+	}
+}
+
+func restartCmd() *cobra.Command {
+	var whenIdle bool
+	cmd := &cobra.Command{
+		Use:   "restart",
+		Short: "Stop and start the daemon (after an update, for example)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if whenIdle {
+				if err := waitIdle(ctx(cmd), os.Stdout); err != nil {
+					return err
+				}
+			}
+			if err := service.Restart(); err != nil {
+				return err
+			}
+			fmt.Println("The daemon is running.")
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&whenIdle, "when-idle", false, "first wait until no runner on this machine is running a job")
+	return cmd
+}
+
+// idleEvery is how often waitIdle asks again.
+var idleEvery = 30 * time.Second
+
+// busyNow says what on this machine is running a job, or "" when nothing is.
+// skip is true when it can't tell and waiting would not help.
+var busyNow = func(ctx context.Context) (why string, skip bool) {
+	st, err := control.GetStatus()
+	if err != nil {
+		return "", true // no daemon: nothing to wait for
+	}
+	running := map[string]bool{}
+	for _, p := range st.Runners {
+		switch p.State {
+		case "jit-busy":
+			return "on-demand runner " + p.ID + " to finish", false
+		case "running", "stopping":
+			running[p.ID] = true
+		}
+	}
+	if len(running) == 0 {
+		return "", false
+	}
+	runners, err := store.List()
+	if err != nil {
+		return "", true
+	}
+	var rs []store.Runner
+	for _, r := range runners {
+		if running[r.ID] {
+			rs = append(rs, r)
+		}
+	}
+	c, err := client()
+	if err != nil {
+		return "", true // not signed in here: GitHub can't be asked
+	}
+	return daemon.JobRunning(ctx, c, rs), false
+}
+
+// waitIdle blocks until no runner here runs a job, so a restart doesn't
+// kill one.
+func waitIdle(ctx context.Context, out io.Writer) error {
+	last := ""
+	for {
+		why, skip := busyNow(ctx)
+		if skip {
+			fmt.Fprintln(out, "Can't check for running jobs here; restarting now.")
+			return nil
+		}
+		if why == "" {
+			return nil
+		}
+		if why != last {
+			fmt.Fprintf(out, "Waiting for %s before restarting (Ctrl-C to skip; the service keeps the old version until it restarts) ...\n", why)
+			last = why
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(idleEvery):
+		}
 	}
 }
