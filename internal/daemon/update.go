@@ -162,15 +162,25 @@ func (d *Daemon) busy(ctx context.Context) string {
 	if err != nil {
 		return "the runner list (" + err.Error() + ")"
 	}
-	byScope := map[string][]store.Runner{}
+	var rs []store.Runner
 	for _, r := range runners {
 		if running[r.ID] {
-			byScope[r.Scope()] = append(byScope[r.Scope()], r)
+			rs = append(rs, r)
 		}
 	}
 	c, err := d.client()
 	if err != nil {
 		return "GitHub sign-in to check running jobs"
+	}
+	return JobRunning(ctx, c, rs)
+}
+
+// JobRunning says which of runners GitHub reports busy with a job, or ""
+// when none is. When GitHub can't be asked, it says that instead.
+func JobRunning(ctx context.Context, c *github.Client, runners []store.Runner) string {
+	byScope := map[string][]store.Runner{}
+	for _, r := range runners {
+		byScope[r.Scope()] = append(byScope[r.Scope()], r)
 	}
 	for scope, rs := range byScope {
 		s, err := github.ParseScope(scope, rs[0].Kind == store.KindOrg)

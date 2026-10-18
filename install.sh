@@ -69,7 +69,12 @@ case ":$PATH:" in
 esac
 if "$bin/gh-runners" service status 2>/dev/null | grep -q "running: *true"; then
 	echo "Restarting the background service to load the new version ..."
-	"$bin/gh-runners" service stop && "$bin/gh-runners" service start
+	if [ -n "${GH_RUNNERS_NOW:-}" ]; then
+		"$bin/gh-runners" service stop && "$bin/gh-runners" service start
+	else
+		# Waits for running jobs; GH_RUNNERS_NOW=1 restarts at once.
+		"$bin/gh-runners" service restart --when-idle
+	fi
 fi
 # Best effort: an app-menu entry that opens the dashboard.
 "$bin/gh-runners" shortcut install >/dev/null 2>&1 || true
