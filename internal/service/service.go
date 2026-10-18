@@ -88,7 +88,9 @@ func Uninstall() error { return uninstall() }
 func UninstallKeepRunning() error { return uninstallKeepRunning() }
 
 // Restart stops and starts the daemon (to load a new binary, for example).
-func Restart() error {
+func Restart() error { return restart() }
+
+func stopStart() error {
 	if err := stop(); err != nil {
 		return err
 	}

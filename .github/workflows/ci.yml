@@ -62,6 +62,20 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' "http://$addr/?k=$key")
           test "$code" = 303
           ./gh-runners ui --no-browser
+          # Restart the way an auto-update does: the daemon spawns the
+          # helper, which must bring up a new daemon (#24).
+          pid=$(jq -r .pid "$GH_RUNNERS_HOME/daemon.json")
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'X-GHR: 1' -b "ghr_ui=$key" "http://$addr/api/service/restart")
+          test "$code" = 202
+          for i in $(seq 1 60); do
+            new=$(jq -r .pid "$GH_RUNNERS_HOME/daemon.json" 2>/dev/null || true)
+            if [ -n "$new" ] && [ "$new" != "$pid" ] && ./gh-runners service status | grep -q "Daemon: running"; then break; fi
+            sleep 2
+          done
+          test "$new" != "$pid"
+          cat "$GH_RUNNERS_HOME/service-restart.log" || true
+          ./gh-runners service status
+          ./gh-runners list
           ./gh-runners service uninstall
           ./gh-runners service status
       - name: daemon log

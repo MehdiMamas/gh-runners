@@ -155,6 +155,8 @@ func start() error {
 	return StartDetached()
 }
 
+func restart() error { return stopStart() }
+
 func stop() error {
 	if _, err := os.Stat(unitPath()); err == nil && hasSystemd() {
 		_ = run("systemctl", "--user", "stop", name()+".service")
