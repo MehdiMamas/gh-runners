@@ -164,6 +164,9 @@ func (s *Server) postLeave(w http.ResponseWriter, r *http.Request) {
 // removing a runner, updating gh-runners, and pausing the machine.
 var busyCheck = regexp.MustCompile(`^/api/(runners/([^/]+)/(stop|restart|remove)|update|pause)$`)
 
+// startSetPath matches Run last and Run all.
+var startSetPath = regexp.MustCompile(`^/api/runners/start-(last|all)$`)
+
 // proxyMachine passes a dashboard call on to a machine. Restart, remove and
 // update first ask GitHub whether a runner there is running a job; if one
 // is, the page gets a 409 to confirm, and sends confirm_busy=1 to go on.
@@ -219,6 +222,11 @@ func (s *Server) proxyMachine(w http.ResponseWriter, r *http.Request) {
 			code = http.StatusServiceUnavailable
 		}
 		fail(w, code, err)
+		return
+	}
+	if status == http.StatusForbidden && startSetPath.MatchString(path) {
+		// Members before v0.6.5 do not allow Run last / Run all from the host.
+		fail(w, status, errors.New("that machine runs an older gh-runners: update it (Update on its card), then try again"))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
