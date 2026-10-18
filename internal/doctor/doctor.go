@@ -68,6 +68,13 @@ func Run(ctx context.Context, st *control.Status) []Check {
 			}
 		}
 	}
+	if rs := github.Stats(); rs.Remaining >= 0 {
+		kind := OK
+		if rs.Remaining < rs.Limit/10 {
+			kind = Note
+		}
+		add(kind, "GitHub API: %d of %d calls left this hour (resets %s)", rs.Remaining, rs.Limit, rs.Reset.Local().Format("15:04"))
+	}
 
 	if runtime.GOOS == "linux" {
 		if out, err := exec.Command("ldconfig", "-p").Output(); err == nil && !strings.Contains(string(out), "libicu") {

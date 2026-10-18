@@ -238,11 +238,11 @@ func (s *Server) getRemote(w http.ResponseWriter, r *http.Request) {
 }
 
 // remoteStates is what GitHub says about each local runner; fresh skips the
-// answer cached for 15 seconds.
+// answer cached for a minute.
 func (s *Server) remoteStates(ctx context.Context, fresh bool) (map[string]string, error) {
 	s.remote.mu.Lock()
 	defer s.remote.mu.Unlock()
-	if !s.remote.at.IsZero() && time.Since(s.remote.at) < 15*time.Second && !fresh {
+	if !s.remote.at.IsZero() && time.Since(s.remote.at) < time.Minute && !fresh {
 		return s.remote.byID, nil
 	}
 	c, _, err := s.client(ctx)
