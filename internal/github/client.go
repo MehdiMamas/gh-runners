@@ -136,6 +136,22 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	// A GET remembers the ETag: an unchanged answer comes back as 304, which
+	// GitHub does not count against the rate limit.
+	cond := method == http.MethodGet && c.Token != ""
+	var prev cachedResp
+	var hasPrev bool
+	if cond {
+		c.mu.Lock()
+		prev, hasPrev = c.etags[u]
+		c.mu.Unlock()
+		if hasPrev {
+			req.Header.Set("If-None-Match", prev.etag)
+		}
+	}
+	if err := limiter.before(); err != nil {
+		return nil, err
+	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, err
@@ -145,7 +161,11 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	if err != nil {
 		return resp, err
 	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+	switch {
+	case resp.StatusCode == http.StatusNotModified && hasPrev:
+		limiter.after(resp, "")
+		data = prev.body
+	case resp.StatusCode < 200 || resp.StatusCode > 299:
 		var e struct {
 			Message string `json:"message"`
 		}
@@ -153,7 +173,20 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 		if e.Message == "" {
 			e.Message = strings.TrimSpace(string(data))
 		}
+		if rl := limiter.after(resp, e.Message); rl != nil {
+			return resp, rl
+		}
 		return resp, &APIError{Status: resp.StatusCode, Method: method, Path: path, Message: e.Message, Scopes: resp.Header.Get("X-OAuth-Scopes")}
+	default:
+		limiter.after(resp, "")
+		if et := resp.Header.Get("ETag"); cond && et != "" {
+			c.mu.Lock()
+			if c.etags == nil {
+				c.etags = map[string]cachedResp{}
+			}
+			c.etags[u] = cachedResp{et, data}
+			c.mu.Unlock()
+		}
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
@@ -475,7 +508,7 @@ func (c *Client) Runs(ctx context.Context, owner, repo, status string) ([]Workfl
 	var r struct {
 		WorkflowRuns []WorkflowRun `json:"workflow_runs"`
 	}
-	err := c.getConditional(ctx, "/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/actions/runs?per_page=50&status="+url.QueryEscape(status), &r)
+	_, err := c.do(ctx, http.MethodGet, "/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)+"/actions/runs?per_page=50&status="+url.QueryEscape(status), nil, &r)
 	return r.WorkflowRuns, err
 }
 
@@ -494,50 +527,4 @@ func (c *Client) RunJobs(ctx context.Context, owner, repo string, runID int64) (
 	}
 	_, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/actions/runs/%d/jobs?filter=latest&per_page=100", url.PathEscape(owner), url.PathEscape(repo), runID), nil, &r)
 	return r.Jobs, err
-}
-
-// getConditional is a GET that remembers the ETag: an unchanged answer
-// comes back as 304, which GitHub does not count against the rate limit.
-// That keeps polling many repositories for queued jobs cheap.
-func (c *Client) getConditional(ctx context.Context, path string, out any) error {
-	c.mu.Lock()
-	prev, hasPrev := c.etags[path]
-	c.mu.Unlock()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.BaseURL, "/")+path, nil)
-	if err != nil {
-		return err
-	}
-	c.headers(req)
-	if hasPrev {
-		req.Header.Set("If-None-Match", prev.etag)
-	}
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	switch {
-	case resp.StatusCode == http.StatusNotModified && hasPrev:
-		data = prev.body
-	case resp.StatusCode >= 200 && resp.StatusCode <= 299:
-		if et := resp.Header.Get("ETag"); et != "" {
-			c.mu.Lock()
-			if c.etags == nil {
-				c.etags = map[string]cachedResp{}
-			}
-			c.etags[path] = cachedResp{et, data}
-			c.mu.Unlock()
-		}
-	default:
-		var e struct {
-			Message string `json:"message"`
-		}
-		_ = json.Unmarshal(data, &e)
-		return &APIError{Status: resp.StatusCode, Method: http.MethodGet, Path: path, Message: e.Message}
-	}
-	return json.Unmarshal(data, out)
 }
