@@ -69,7 +69,9 @@ jobs:
           test "$code" = 202
           for i in $(seq 1 60); do
             new=$(jq -r .pid "$GH_RUNNERS_HOME/daemon.json" 2>/dev/null || true)
-            if [ -n "$new" ] && [ "$new" != "$pid" ] && ./gh-runners service status | grep -q "Daemon: running"; then break; fi
+            # Not a pipe into grep -q: with pipefail, SIGPIPE fails the test.
+            st=$(./gh-runners service status || true)
+            if [ -n "$new" ] && [ "$new" != "$pid" ] && [[ "$st" == *"Daemon: running"* ]]; then break; fi
             sleep 2
           done
           test "$new" != "$pid"
