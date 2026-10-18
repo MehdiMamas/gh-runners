@@ -43,6 +43,8 @@ func uninstall() error {
 
 func start() error { return StartDetached() }
 
+func restart() error { return stopStart() }
+
 func stop() error {
 	_ = control.Shutdown()
 	waitStopped(90 * time.Second)

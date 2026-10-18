@@ -97,6 +97,21 @@ func start() error {
 	return waitRunning(15 * time.Second)
 }
 
+// restart has launchd stop and start the job in one call. The helper that
+// runs it was spawned by the daemon; if it booted the job out itself, it
+// could go down with it and leave nothing to start the daemon again.
+func restart() error {
+	if _, err := os.Stat(plistPath()); err != nil {
+		return stopStart()
+	}
+	if err := run("launchctl", "kickstart", "-k", domain()+"/"+label()); err != nil {
+		if err := run("launchctl", "bootstrap", domain(), plistPath()); err != nil {
+			return err
+		}
+	}
+	return waitRunning(90 * time.Second)
+}
+
 func stop() error {
 	if _, err := os.Stat(plistPath()); err == nil {
 		// bootout, not kill: KeepAlive would restart a killed daemon.
