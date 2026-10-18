@@ -17,6 +17,7 @@ var memberAPI = []rule{
 	{"GET", `/api/workflow-labels`},
 	{"POST", `/api/repo-runners`},
 	{"PUT", `/api/runner-labels`},
+	{"POST", `/api/runners/start-(last|all)`},
 	{"POST", `/api/runners/` + id + `/(start|stop|restart|remove)`},
 	{"GET", `/api/runners/` + id + `/log`},
 	{"GET", `/api/daemon-log`},

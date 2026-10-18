@@ -7,7 +7,8 @@
     "tour": "node tour.js",
     "flow": "node flow.js",
     "multi": "node multi.js",
-    "pause": "node pause.js"
+    "pause": "node pause.js",
+    "remote": "node remote.js"
   },
   "dependencies": {
     "puppeteer-core": "^23.11.1"

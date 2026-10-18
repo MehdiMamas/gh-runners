@@ -392,3 +392,25 @@ func freePort(t *testing.T) int {
 	}
 	return port
 }
+
+func TestRemoteStartSet(t *testing.T) {
+	f := newFleetTest(t)
+	f.member.h.Reload = func() {}
+	saveStopped(t, "a")
+	saveStopped(t, "b")
+	_ = store.SaveLastSession([]string{"a"})
+	var out struct {
+		Started int `json:"started"`
+	}
+	if code := f.remote(t, "POST", "/api/runners/start-last", "", &out); code != 200 || out.Started != 1 {
+		t.Fatalf("remote start-last: %d %+v", code, out)
+	}
+	if code := f.remote(t, "POST", "/api/runners/start-all", "", &out); code != 200 || out.Started != 1 {
+		t.Fatalf("remote start-all: %d %+v", code, out)
+	}
+	for _, id := range []string{"a", "b"} {
+		if r, _ := store.Load(id); r.Disabled {
+			t.Fatalf("%s is still stopped", id)
+		}
+	}
+}
