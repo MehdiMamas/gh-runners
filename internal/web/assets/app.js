@@ -119,13 +119,21 @@ function sw(checked, onchange, label) {
 
 // ---------- dialog ----------
 const dlg = $('dialog');
+// dlgDone is the onclose of the dialog last opened, not run yet. The close
+// event comes a task after dlg.close(): when a dialog closes and the next
+// opens right away (repo picker, then labels), the event arrives while the
+// next one is open and must not count as closing it.
+let dlgDone = null;
+function dialogClosed() { const f = dlgDone; dlgDone = null; if (f) f(); }
+dlg.onclose = () => { if (!dlg.open) dialogClosed(); };
 function openDialog({ title, body, foot, wide, onclose }) {
+  if (!dlg.open) dialogClosed(); // the one closed just before, if its event is still on the way
   dlg.className = wide ? 'wide' : '';
   mount(dlg,
     h('div', { class: 'dlg-head' }, h('h2', {}, title), h('button', { class: 'btn ghost small', onclick: () => dlg.close(), 'aria-label': 'Close' }, '✕')),
     h('div', { class: 'dlg-body' }, body),
     foot ? h('div', { class: 'dlg-foot' }, foot) : null);
-  dlg.onclose = () => { if (onclose) onclose(); };
+  dlgDone = onclose || null;
   if (!dlg.open) dlg.showModal();
 }
 function closeDialog() { if (dlg.open) dlg.close(); }
@@ -1021,6 +1029,8 @@ function watchTask(m, res, title) {
     let t;
     try { t = await api('GET', mbase(m) + '/api/tasks/' + res.task); } catch (e) {
       if (e.status === 503) { S.mwatch.delete(key); return; } // the machine restarted: it shows up again when back
+      // Any other answer from gh-runners will not change by asking again.
+      if (e.status) { S.mwatch.delete(key); toast(machineName(m) + ': ' + title + ': ' + e.message, true); return; }
       return setTimeout(poll, 3000);
     }
     if (t.state === 'done') toast(machineName(m) + ': ' + (t.title || title) + ': done');
