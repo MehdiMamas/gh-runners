@@ -3,7 +3,9 @@
 package proc
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -56,6 +58,26 @@ func Stop(cmd *exec.Cmd, done <-chan struct{}, grace time.Duration) {
 // after the daemon started (a new PATH entry, say) reaches the runners it
 // starts or restarts from then on. nil means the daemon's own environment.
 func Env() []string { return env() }
+
+// EnvFor is Env for the runner installed in dir. The runner itself never
+// reads its .path file (only env.sh writes it, and only .env is loaded at
+// startup), so a PATH kept there is applied here: it replaces the PATH of
+// the daemon and reaches job steps. The runner's .env still applies on top.
+func EnvFor(dir string) []string {
+	return withPathFile(Env(), dir)
+}
+
+func withPathFile(base []string, dir string) []string {
+	b, err := os.ReadFile(filepath.Join(dir, ".path"))
+	path := strings.TrimSpace(string(b))
+	if err != nil || path == "" {
+		return base
+	}
+	if base == nil {
+		base = os.Environ()
+	}
+	return mergeEnv(base, []string{"PATH=" + path})
+}
 
 // MissingTools names the tools jobs expect that the runners' PATH lacks:
 // bash, gh and node on Windows, where a plain install has none of them.

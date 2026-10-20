@@ -323,11 +323,11 @@ func Unconfigure(ctx context.Context, dir, token string, out io.Writer) error {
 func RunCommand(dir string, jitConfig string) *exec.Cmd {
 	if jitConfig != "" {
 		cmd := script(dir, "run", "--jitconfig", jitConfig)
-		cmd.Env = proc.Env()
+		cmd.Env = proc.EnvFor(dir)
 		return cmd
 	}
 	cmd := script(dir, "run")
-	cmd.Env = proc.Env()
+	cmd.Env = proc.EnvFor(dir)
 	return cmd
 }
 
