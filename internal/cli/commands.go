@@ -797,7 +797,17 @@ func restartCmd() *cobra.Command {
 					return err
 				}
 			}
+			// The runners that are on come back with the daemon.
+			if runners, err := store.List(); err == nil {
+				for _, r := range runners {
+					if r.Configured() && !r.Disabled {
+						_ = store.SetKeepRunning()
+						break
+					}
+				}
+			}
 			if err := service.Restart(); err != nil {
+				store.ClearKeepRunning()
 				return err
 			}
 			fmt.Println("The daemon is running.")
