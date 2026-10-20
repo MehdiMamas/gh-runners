@@ -3,6 +3,8 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -39,22 +41,48 @@ func SaveLastSession(ids []string) error {
 // runners on (an update restart, not a fresh start).
 func KeepRunningPath() string { return filepath.Join(Home(), "keep-running") }
 
-// SetKeepRunning writes the keep-running marker.
+// bootTolerance is how far two readings of the boot time may differ.
+const bootTolerance = 5 * time.Second
+
+// SetKeepRunning writes the keep-running marker: the current boot time, so a
+// marker left over from before a reboot is not honoured.
 func SetKeepRunning() error {
 	if err := os.MkdirAll(Home(), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(KeepRunningPath(), nil, 0o644)
+	var content []byte
+	if bt, err := BootTime(); err == nil {
+		content = []byte(strconv.FormatInt(bt.Unix(), 10))
+	}
+	return os.WriteFile(KeepRunningPath(), content, 0o644)
 }
 
-// ConsumeKeepRunning removes the marker and reports whether it was there and
-// fresh (under 10 minutes old). A stale marker, left by an update restart
-// that never came up, must not keep a later manual start running.
+// ClearKeepRunning removes the marker (an explicit stop must not keep it).
+func ClearKeepRunning() { _ = os.Remove(KeepRunningPath()) }
+
+// ConsumeKeepRunning removes the marker and reports whether it was there,
+// fresh (under 10 minutes old) and written in this boot. A stale marker, left
+// by a restart that never came up, must not keep a later manual start
+// running, and neither may one that survived a reboot. A marker without a
+// boot time, or a boot time the system can't give, counts on age alone.
 func ConsumeKeepRunning() bool {
 	fi, err := os.Stat(KeepRunningPath())
 	if err != nil {
 		return false
 	}
-	_ = os.Remove(KeepRunningPath())
-	return time.Since(fi.ModTime()) < 10*time.Minute
+	data, _ := os.ReadFile(KeepRunningPath())
+	ClearKeepRunning()
+	if time.Since(fi.ModTime()) >= 10*time.Minute {
+		return false
+	}
+	saved, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return true
+	}
+	cur, err := BootTime()
+	if err != nil {
+		return true
+	}
+	d := cur.Sub(time.Unix(saved, 0))
+	return d < bootTolerance && d > -bootTolerance
 }

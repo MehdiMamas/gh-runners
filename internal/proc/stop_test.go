@@ -184,7 +184,10 @@ func TestStraysMatchTheFolderOnly(t *testing.T) {
 			t.Errorf("%s was killed with a's strays", name)
 		}
 	}
-	if len(Strays(a)) != 0 {
-		t.Fatal("strays listed after the kill")
+	// The process list can trail a kill by a moment (Windows CI).
+	for deadline := time.Now().Add(10 * time.Second); len(Strays(a)) != 0; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("strays listed after the kill")
+		}
 	}
 }

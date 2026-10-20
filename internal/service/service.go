@@ -16,6 +16,7 @@ import (
 
 	"github.com/MehdiMamas/gh-runners/internal/control"
 	"github.com/MehdiMamas/gh-runners/internal/proc"
+	"github.com/MehdiMamas/gh-runners/internal/store"
 )
 
 // Name is used for the unit and registry value, Label for the launchd agent,
@@ -105,7 +106,13 @@ func Installed() Status { return status() }
 func Start() error { return start() }
 
 // Stop stops the daemon (and every runner) until the next Start or login.
-func Stop() error { return stop() }
+func Stop() error {
+	err := stop()
+	// A signal-driven exit (launchd's bootout) leaves the restart marker;
+	// an explicit stop must come back with everything stopped.
+	store.ClearKeepRunning()
+	return err
+}
 
 // Get reports whether the login entry exists and the daemon answers.
 func Get() Status {

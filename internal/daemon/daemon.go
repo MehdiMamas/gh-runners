@@ -106,6 +106,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.paused.Store(store.IsPaused())
 	d.startStopped()
 
+	// ctx is cancelled by an OS signal (launchd, a service stop); the
+	// derived one is also cancelled by /shutdown, which is a deliberate stop.
+	signalled := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -180,6 +183,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 		select {
 		case <-ctx.Done():
+			if signalled.Err() != nil {
+				d.keepRunningForRestart()
+			}
 			d.Log.Printf("stopping all runners")
 			d.stopAll()
 			d.jit.stopAll()
@@ -187,6 +193,28 @@ func (d *Daemon) Run(ctx context.Context) error {
 			return nil
 		case <-t.C:
 		case <-d.reload:
+		}
+	}
+}
+
+// keepRunningForRestart leaves the keep-running marker when a signal stops
+// the daemon while runners are on: launchd or the service manager is most
+// likely restarting it, and the runners should come back with it. A paused
+// machine keeps its own state, and nothing on means nothing to keep.
+func (d *Daemon) keepRunningForRestart() {
+	if d.paused.Load() {
+		return
+	}
+	runners, err := store.List()
+	if err != nil {
+		return
+	}
+	for _, r := range runners {
+		if r.Configured() && !r.Disabled {
+			if err := store.SetKeepRunning(); err != nil {
+				d.Log.Printf("keep-running marker: %v", err)
+			}
+			return
 		}
 	}
 }
