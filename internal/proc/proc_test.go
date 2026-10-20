@@ -19,14 +19,18 @@ func TestMergeEnv(t *testing.T) {
 
 func TestWithPathFile(t *testing.T) {
 	dir := t.TempDir()
-	base := []string{"HOME=/h", "PATH=/daemon/bin"}
-	if got := strings.Join(withPathFile(base, dir), "|"); got != "HOME=/h|PATH=/daemon/bin" {
+	sep := string(os.PathListSeparator)
+	join := func(p ...string) string { return strings.Join(p, sep) }
+	base := []string{"HOME=/h", "PATH=" + join("/daemon/bin", "/new/bin")}
+	if got := strings.Join(withPathFile(base, dir), "|"); got != "HOME=/h|PATH="+join("/daemon/bin", "/new/bin") {
 		t.Fatalf("no .path file changed the env: %s", got)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".path"), []byte("/mine/bin:/daemon/bin\n"), 0o600); err != nil {
+	file := join("/mine/bin", "/daemon/bin", "/mine/bin") + "\n"
+	if err := os.WriteFile(filepath.Join(dir, ".path"), []byte(file), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(withPathFile(base, dir), "|"); got != "HOME=/h|PATH=/mine/bin:/daemon/bin" {
-		t.Fatalf(".path did not take precedence: %s", got)
+	want := "HOME=/h|PATH=" + join("/mine/bin", "/daemon/bin", "/new/bin")
+	if got := strings.Join(withPathFile(base, dir), "|"); got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
 	}
 }

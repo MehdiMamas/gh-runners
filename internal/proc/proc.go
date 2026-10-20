@@ -60,23 +60,40 @@ func Stop(cmd *exec.Cmd, done <-chan struct{}, grace time.Duration) {
 func Env() []string { return env() }
 
 // EnvFor is Env for the runner installed in dir. The runner itself never
-// reads its .path file (only env.sh writes it, and only .env is loaded at
-// startup), so a PATH kept there is applied here: it replaces the PATH of
-// the daemon and reaches job steps. The runner's .env still applies on top.
+// reads its .path file (only env.sh writes it, once, at config time, and
+// only .env is loaded at startup), so its entries are put first on PATH here
+// and reach job steps. The daemon's own PATH entries follow, so tools
+// installed since then stay found. The runner's .env still applies on top.
 func EnvFor(dir string) []string {
 	return withPathFile(Env(), dir)
 }
 
 func withPathFile(base []string, dir string) []string {
 	b, err := os.ReadFile(filepath.Join(dir, ".path"))
-	path := strings.TrimSpace(string(b))
-	if err != nil || path == "" {
+	file := strings.TrimSpace(string(b))
+	if err != nil || file == "" {
 		return base
 	}
 	if base == nil {
 		base = os.Environ()
 	}
-	return mergeEnv(base, []string{"PATH=" + path})
+	var daemon string
+	for _, kv := range base {
+		if envKey(kv) == "PATH" {
+			daemon = kv[len("PATH="):]
+		}
+	}
+	seen := map[string]bool{}
+	var parts []string
+	for _, list := range []string{file, daemon} {
+		for _, d := range filepath.SplitList(list) {
+			if d != "" && !seen[d] {
+				seen[d] = true
+				parts = append(parts, d)
+			}
+		}
+	}
+	return mergeEnv(base, []string{"PATH=" + strings.Join(parts, string(os.PathListSeparator))})
 }
 
 // MissingTools names the tools jobs expect that the runners' PATH lacks:
