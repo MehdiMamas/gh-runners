@@ -52,6 +52,8 @@ func TestRepoFilter(t *testing.T) {
 }
 
 func TestLabels(t *testing.T) {
+	defer func(f func() bool) { DockerAvailable = f }(DockerAvailable)
+	DockerAvailable = func() bool { return false }
 	cfg := store.Config{Labels: []string{"gh-runners", "GPU"}, RunnerName: "Mehdi's MacBook Pro"}
 	got := strings.Join(Labels(cfg, []string{"gpu", " big ", ""}), ",")
 	if want := "gh-runners,GPU,mehdi-s-macbook-pro,big"; got != want {
@@ -59,5 +61,36 @@ func TestLabels(t *testing.T) {
 	}
 	if MachineName(cfg) != "Mehdi's MacBook Pro" {
 		t.Error("MachineName should use RunnerName")
+	}
+}
+
+func TestLabelsDocker(t *testing.T) {
+	defer func(f func() bool) { DockerAvailable = f }(DockerAvailable)
+	cfg := store.Config{Labels: []string{"gh-runners", "Docker"}, RunnerName: "Box"}
+	DockerAvailable = func() bool { return true }
+	if got := strings.Join(Labels(cfg, []string{"big"}), ","); got != "gh-runners,box,big,docker" {
+		t.Errorf("with docker: %s", got)
+	}
+	DockerAvailable = func() bool { return false }
+	if got := strings.Join(Labels(cfg, []string{"big"}), ","); got != "gh-runners,box,big" {
+		t.Errorf("without docker: %s", got)
+	}
+}
+
+func TestWithDockerLabel(t *testing.T) {
+	cases := []struct {
+		in   []string
+		has  bool
+		want string
+	}{
+		{[]string{"heavy", "gh-runners"}, true, "heavy,gh-runners,docker"},
+		{[]string{"heavy", "docker", "gh-runners"}, true, "heavy,gh-runners,docker"},
+		{[]string{"heavy", "Docker"}, false, "heavy"},
+		{nil, false, ""},
+	}
+	for _, c := range cases {
+		if got := strings.Join(WithDockerLabel(c.in, c.has), ","); got != c.want {
+			t.Errorf("WithDockerLabel(%v, %v) = %q, want %q", c.in, c.has, got, c.want)
+		}
 	}
 }

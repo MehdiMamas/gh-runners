@@ -43,6 +43,7 @@ func MachineLabel(cfg store.Config) string {
 
 // Labels returns the custom labels for a runner on this machine.
 // GitHub adds self-hosted, the OS (Linux/macOS/Windows) and the arch itself.
+// "docker" is added exactly when `docker info` works on this machine.
 func Labels(cfg store.Config, extra []string) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -54,7 +55,7 @@ func Labels(cfg store.Config, extra []string) []string {
 		seen[strings.ToLower(l)] = true
 		out = append(out, l)
 	}
-	return out
+	return WithDockerLabel(out, DockerAvailable())
 }
 
 // AddOptions control Add.

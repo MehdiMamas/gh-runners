@@ -272,6 +272,13 @@ Every runner gets the labels GitHub adds (`self-hosted`, the OS, the CPU) plus
 example `--labels heavy` for jobs with `runs-on: [self-hosted, heavy]`). A job
 only lands on a runner that has every label in its `runs-on:` list.
 
+The `docker` label is automatic: a runner gets it when `docker info` works on
+the machine (checked when it is registered, and for on-demand runners each time
+they start). The daemon re-checks at start and every 10 minutes, adding the label
+on GitHub when Docker appears and removing it when Docker is gone; your other
+labels are never touched. So `runs-on: [self-hosted, gh-runners, docker]` finds
+any machine that can run Docker with no manual step.
+
 ## Commands
 
 | Command | What it does |

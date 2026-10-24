@@ -87,6 +87,9 @@ type Daemon struct {
 	brokered *github.Client
 }
 
+// dockerEvery is how often the docker label is re-checked.
+const dockerEvery = 10 * time.Minute
+
 // Run blocks until ctx is cancelled or /shutdown is called, then stops
 // every runner it started.
 func (d *Daemon) Run(ctx context.Context) error {
@@ -166,6 +169,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	defer d.host.Stop()
 	go d.member.Run(ctx)
 	go d.syncLoop(ctx)
+	go d.dockerLoop(ctx)
 	go d.jit.loop(ctx)
 	go d.updateLoop(ctx)
 
@@ -540,6 +544,36 @@ func (d *Daemon) syncLoop(ctx context.Context) {
 		}
 		d.mu.Unlock()
 		timer.Reset(interval)
+	}
+}
+
+// dockerLoop keeps the docker label of this machine's runners right: at
+// start and then every dockerEvery, it adds the label when Docker works and
+// removes it when it does not.
+func (d *Daemon) dockerLoop(ctx context.Context) {
+	timer := time.NewTimer(20 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		timer.Reset(dockerEvery)
+		if d.paused.Load() {
+			continue
+		}
+		c, err := d.client()
+		if err != nil {
+			continue
+		}
+		changes, err := ops.SyncDockerLabel(ctx, c)
+		for _, ch := range changes {
+			d.Log.Printf("docker: %s", ch)
+		}
+		if err != nil {
+			d.Log.Printf("docker label: %v", err)
+		}
 	}
 }
 
