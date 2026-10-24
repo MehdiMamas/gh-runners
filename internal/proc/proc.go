@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -71,12 +72,12 @@ func Env() []string { return env() }
 func EnvFor(dir string) []string {
 	env := withPathFile(Env(), dir)
 	if runtime.GOOS == "windows" {
-		env = withFirstDirs(env, windowsToolDirs(os.Getenv, dirExists))
+		env = withFirstDirs(env, windowsToolDirs(os.Getenv, isDir))
 	}
 	return env
 }
 
-func dirExists(p string) bool {
+func isDir(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && st.IsDir()
 }
