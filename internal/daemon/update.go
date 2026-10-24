@@ -128,6 +128,7 @@ func (d *Daemon) applyUpdate(ctx context.Context, tag string) (waiting bool, err
 		d.jit.pause(false)
 		return false, fmt.Errorf("replace %s: %w", exe, err)
 	}
+	d.updated.Store(true)
 	d.Log.Printf("installed gh-runners %s at %s; restarting", tag, exe)
 	d.setUpdate(func(u *control.UpdateState) { u.Note = "restarting into " + tag })
 	if err := store.SetKeepRunning(); err != nil {

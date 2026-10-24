@@ -140,3 +140,20 @@ func TestStrayShowsAsStopping(t *testing.T) {
 		t.Fatal("the stray was killed by a status call")
 	}
 }
+
+func TestStopResult(t *testing.T) {
+	cases := []struct {
+		updated, signalled bool
+		want               error
+	}{
+		{true, true, ErrUpdated},
+		{true, false, nil},
+		{false, true, nil},
+		{false, false, nil},
+	}
+	for _, c := range cases {
+		if got := stopResult(c.updated, c.signalled); got != c.want {
+			t.Errorf("stopResult(%v,%v) = %v, want %v", c.updated, c.signalled, got, c.want)
+		}
+	}
+}

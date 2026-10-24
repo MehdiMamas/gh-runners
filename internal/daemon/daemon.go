@@ -73,6 +73,7 @@ type Daemon struct {
 	strays   map[string]int // runner id -> processes left after a stop, see sweep.go
 	seen     map[int]bool   // strays the last sweep saw
 	sweeping atomic.Bool
+	updated  atomic.Bool // a new binary was installed; see stopResult
 
 	updateNow chan struct{}
 	upd       control.UpdateState
@@ -194,11 +195,25 @@ func (d *Daemon) Run(ctx context.Context) error {
 			d.stopAll()
 			d.jit.stopAll()
 			d.Log.Printf("daemon stopped")
-			return nil
+			return stopResult(d.updated.Load(), signalled.Err() != nil)
 		case <-t.C:
 		case <-d.reload:
 		}
 	}
+}
+
+// ErrUpdated is returned when a signal stops a daemon that has just
+// installed a new binary. It makes the process exit non-zero, which launchd
+// (KeepAlive SuccessfulExit=false) and systemd (Restart=on-failure) treat
+// as a crash and start again, even when the helper that was to restart the
+// service died with the old daemon. Existing service files need no change.
+var ErrUpdated = errors.New("stopped after installing an update; the service manager starts the new version")
+
+func stopResult(updated, signalled bool) error {
+	if updated && signalled {
+		return ErrUpdated
+	}
+	return nil
 }
 
 // keepRunningForRestart leaves the keep-running marker when a signal stops
