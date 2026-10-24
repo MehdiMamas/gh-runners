@@ -64,8 +64,85 @@ func Env() []string { return env() }
 // only .env is loaded at startup), so its entries are put first on PATH here
 // and reach job steps. The daemon's own PATH entries follow, so tools
 // installed since then stay found. The runner's .env still applies on top.
+//
+// On Windows, Git Bash (and the Rust, node and pnpm dirs that exist) go ahead
+// of everything else: otherwise `shell: bash` finds the WSL launcher in
+// WindowsApps, which cannot run the runner's temp script.
 func EnvFor(dir string) []string {
-	return withPathFile(Env(), dir)
+	env := withPathFile(Env(), dir)
+	if runtime.GOOS == "windows" {
+		env = withFirstDirs(env, windowsToolDirs(os.Getenv, dirExists))
+	}
+	return env
+}
+
+func dirExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.IsDir()
+}
+
+// windowsToolDirs lists the tool dirs jobs need first on PATH, only those
+// that exist: Git Bash, rustup/cargo, node and pnpm.
+func windowsToolDirs(getenv func(string) string, exists func(string) bool) []string {
+	var cand []string
+	for _, pf := range []string{getenv("ProgramFiles"), getenv("ProgramW6432")} {
+		if pf != "" {
+			cand = append(cand, pf+`\Git\bin`, pf+`\Git\usr\bin`)
+		}
+	}
+	if la := getenv("LOCALAPPDATA"); la != "" {
+		cand = append(cand, la+`\Programs\Git\bin`, la+`\Programs\Git\usr\bin`)
+	}
+	if h := getenv("USERPROFILE"); h != "" {
+		cand = append(cand, h+`\.cargo\bin`)
+	}
+	for _, pf := range []string{getenv("ProgramFiles"), getenv("ProgramW6432")} {
+		if pf != "" {
+			cand = append(cand, pf+`\nodejs`)
+		}
+	}
+	if a := getenv("APPDATA"); a != "" {
+		cand = append(cand, a+`\npm`)
+	}
+	if la := getenv("LOCALAPPDATA"); la != "" {
+		cand = append(cand, la+`\pnpm`)
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, d := range cand {
+		if k := strings.ToLower(d); !seen[k] && exists(d) {
+			seen[k] = true
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// withFirstDirs puts dirs at the front of PATH in env.
+func withFirstDirs(base []string, dirs []string) []string {
+	if len(dirs) == 0 {
+		return base
+	}
+	if base == nil {
+		base = os.Environ()
+	}
+	var cur string
+	for _, kv := range base {
+		if envKey(kv) == "PATH" {
+			cur = kv[len("PATH="):]
+		}
+	}
+	seen := map[string]bool{}
+	var parts []string
+	for _, list := range [][]string{dirs, filepath.SplitList(cur)} {
+		for _, d := range list {
+			if k := strings.ToLower(d); d != "" && !seen[k] {
+				seen[k] = true
+				parts = append(parts, d)
+			}
+		}
+	}
+	return mergeEnv(base, []string{"PATH=" + strings.Join(parts, string(os.PathListSeparator))})
 }
 
 func withPathFile(base []string, dir string) []string {
