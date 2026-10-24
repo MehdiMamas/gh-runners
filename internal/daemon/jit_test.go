@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/MehdiMamas/gh-runners/internal/ops"
 	"github.com/MehdiMamas/gh-runners/internal/store"
 )
 
@@ -28,9 +29,23 @@ func TestJobMatches(t *testing.T) {
 }
 
 func TestMachineLabels(t *testing.T) {
+	defer func(f func() bool) { ops.DockerAvailable = f }(ops.DockerAvailable)
+	ops.DockerAvailable = func() bool { return false }
 	got := MachineLabels(store.Config{Labels: []string{"gh-runners"}, RunnerName: "Box"})
 	want := map[string]string{"darwin": "macOS", "linux": "Linux", "windows": "Windows"}[runtime.GOOS]
 	if len(got) != 5 || got[0] != "self-hosted" || got[1] != want || got[3] != "gh-runners" || got[4] != "box" {
 		t.Errorf("MachineLabels = %v", got)
+	}
+}
+
+func TestMachineLabelsDocker(t *testing.T) {
+	defer func(f func() bool) { ops.DockerAvailable = f }(ops.DockerAvailable)
+	ops.DockerAvailable = func() bool { return true }
+	got := MachineLabels(store.Config{Labels: []string{"gh-runners"}, RunnerName: "Box"})
+	if got[len(got)-1] != "docker" {
+		t.Errorf("MachineLabels = %v, want docker last", got)
+	}
+	if !JobMatches([]string{"self-hosted", "gh-runners", "docker"}, got) {
+		t.Error("a docker job should match a machine with docker")
 	}
 }
