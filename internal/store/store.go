@@ -277,6 +277,20 @@ type Config struct {
 	MainHost bool `json:"main_host,omitempty"`
 	// FleetPort is the main host's port for its machines (default 47322).
 	FleetPort int `json:"fleet_port,omitempty"`
+	// CI is the local CI setting per "owner/repo" (see `gh-runners ci`).
+	CI map[string]CIRepo `json:"ci,omitempty"`
+}
+
+// CIRepo says what `gh-runners ci` may do on a repo. Everything is off
+// until switched on.
+type CIRepo struct {
+	// Post sets commit statuses and the results comment.
+	Post bool `json:"post,omitempty"`
+	// Merge squash-merges an approved pull request whose jobs all passed.
+	Merge bool `json:"merge,omitempty"`
+	// Allow lists the authors whose pull requests run on their own; empty
+	// means only the signed-in user.
+	Allow []string `json:"allow,omitempty"`
 }
 
 // AutoUpdateOn reports whether the daemon installs new releases itself.
