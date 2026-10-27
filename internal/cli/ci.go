@@ -25,7 +25,7 @@ func newCICmd() *cobra.Command {
 		Use:   "ci",
 		Short: "Run a repo's ci.yml on this machine and report back on the pull request",
 	}
-	cmd.AddCommand(newCIRunCmd(), newCIWatchCmd(), newCIConfigCmd(), newCIDoctorCmd(), newCIEmulatorCmd())
+	cmd.AddCommand(newCIRunCmd(), newCIQueueCmd(), newCIWatchCmd(), newCIConfigCmd(), newCIDoctorCmd(), newCIEmulatorCmd())
 	return cmd
 }
 
@@ -62,6 +62,9 @@ func newCIRunCmd() *cobra.Command {
 			n, err := strconv.Atoi(args[1])
 			if err != nil {
 				return fmt.Errorf("%q is not a pull request number", args[1])
+			}
+			if hasDashboard() {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: the gh-runners daemon is running. `ci run` bypasses its queue and may clash with runs it has queued.\n  To join the queue instead: gh-runners ci queue %s %d\n", args[0], n)
 			}
 			c, err := client()
 			if err != nil {
