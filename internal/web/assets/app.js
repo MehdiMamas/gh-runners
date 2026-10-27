@@ -1076,6 +1076,37 @@ function nothingRunning(runners) {
 }
 
 // ---------- this machine ----------
+// ciActiveRows lists Local CI jobs running right now, like a busy runner.
+function ciActiveRows(jobs) {
+  return (jobs || []).map((a) => h('div', { class: 'mrunner' },
+    h('div', { class: 'who' },
+      h('div', { class: 'name' }, a.repo + (a.pr ? ' #' + a.pr : ''), h('span', { class: 'muted small' }, ' · ' + a.job)),
+      h('div', { class: 'muted small' }, 'on ' + a.machine + (a.for ? ' for ' + a.for : '') + ' · started ' + ago(a.started))),
+    h('div', { class: 'row' }, pill('busy'))));
+}
+
+// ciLiveCard is the Local CI part of This machine: queued and running runs,
+// and each job that runs now on this computer or another machine for it.
+function ciLiveCard(st) {
+  const tasks = st.ci_tasks || [];
+  const jobs = st.ci_active || [];
+  return h('div', { class: 'card' },
+    h('div', { class: 'card-head' }, h('h3', {}, 'Local CI'),
+      jobs.length ? h('span', { class: 'pill info' }, jobs.length + (jobs.length === 1 ? ' job running' : ' jobs running')) : h('span', { class: 'pill plain' }, 'Idle')),
+    tasks.map((t) => h('div', { class: 'row' }, pill(t.state), h('span', {}, t.title))),
+    jobs.length ? h('div', { class: 'mrunners' }, ciActiveRows(jobs))
+      : h('p', { class: 'muted small' }, tasks.length ? 'Getting the jobs ready ...' : 'No Local CI job is running. Runs started from Repositories, the watch or "gh-runners ci run" show up here while they run.'));
+}
+
+// memberNotice tells a fleet member where its machines are managed.
+function memberNotice() {
+  const m = S.fleet && !S.fleet.main_host && S.fleet.member;
+  if (!m || !m.joined) return null;
+  return h('div', { class: 'notice' }, h('div', { class: 'grow' },
+    'This computer is part of ' + (m.host_name || 'a main host') + '\'s fleet' + (m.connected ? '' : ' (not connected right now)') +
+    '. Other machines are managed from the main host\'s dashboard; its Machines tab shows this computer too.'));
+}
+
 function renderMachine() {
   const el = $('tab-machine');
   const st = S.state;
@@ -1109,11 +1140,13 @@ function renderMachine() {
   mount(el,
     h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Runners on ' + st.hostname),
       h('span', { class: 'muted small' }, 'Folder: ', h('code', {}, st.runners_dir))),
+    memberNotice(),
     foundBanner(),
     nothingRunning(st.runners),
     st.runners.some((r) => r.disabled) && !st.paused ? h('div', { class: 'row', 'data-gap': '1' }, startSetButtons(null, st.last_session, true)) : null,
     h('p', { class: 'muted' }, 'Target any runner of this computer from a workflow with ', h('code', {}, 'runs-on: [self-hosted, ' + st.machine_labels[3 + (st.config.labels || []).length] + ']'), ' or by its OS: ', h('code', {}, 'runs-on: [self-hosted, ' + osName(st.os) + ']'), '.'),
     od,
+    ciLiveCard(st),
     cards.length ? h('div', { class: 'grid' }, cards) : h('div', { class: 'card empty' },
       h('h2', {}, 'No runners on this computer yet'),
       h('p', {}, 'Go to Repositories and click "Add runner" next to a repository, or turn on on-demand runners under Automation.'),
@@ -1191,7 +1224,8 @@ function renderMachines() {
     st.runners.length ? h('div', { class: 'mrunners' }, st.runners.map((r) => h('div', { class: 'mrunner' },
       h('div', { class: 'who' }, h('div', { class: 'name' }, r.kind === 'org' ? r.scope + ' (organization)' : who(r)), h('div', { class: 'muted small' }, r.name)),
       h('div', { class: 'row' }, S.remote[r.id] ? pill(S.remote[r.id]) : null, pill(r.state)))))
-      : h('p', { class: 'muted' }, 'No runners on this computer.'));
+      : h('p', { class: 'muted' }, 'No runners on this computer.'),
+    (st.ci_active || []).length ? [h('h3', {}, 'Local CI running now'), h('div', { class: 'mrunners' }, ciActiveRows(st.ci_active))] : null);
   mount(el,
     h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Machines'),
       h('button', { class: 'btn primary', onclick: addMachine }, 'Add a machine')),
@@ -1238,7 +1272,8 @@ function machineCard(m) {
         h('button', { class: 'btn small danger', onclick: () => removeMachine(m) }, 'Remove machine'))),
     info.paused ? h('p', { class: 'muted small' }, 'Paused: no runner, on-demand runner, sync or update runs on this machine until you resume it.') : null,
     off ? h('p', { class: 'muted small' }, 'Offline: its runners keep running, but you can change them here only when it is back.') : null,
-    rows.length ? h('div', { class: 'mrunners' }, rows) : h('p', { class: 'muted' }, 'No runners on this machine yet.'));
+    rows.length ? h('div', { class: 'mrunners' }, rows) : h('p', { class: 'muted' }, 'No runners on this machine yet.'),
+    info.ci && (info.ci.active || []).length ? [h('h3', {}, 'Local CI running now'), h('div', { class: 'mrunners' }, ciActiveRows(info.ci.active))] : null);
 }
 
 // machineRunnerAction runs start, stop, restart or remove on a runner of

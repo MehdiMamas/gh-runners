@@ -39,8 +39,9 @@ const (
 // CIInfo is what a member says about its ability to run CI jobs. A member
 // that sends none gets no jobs.
 type CIInfo struct {
-	Tools      []string `json:"tools"`
-	EmulatorOK bool     `json:"emulator_ok"`
+	Tools      []string            `json:"tools"`
+	EmulatorOK bool                `json:"emulator_ok"`
+	Active     []localci.ActiveJob `json:"active,omitempty"` // jobs running there now
 }
 
 // ciJob is the request body of a "ci" request.
@@ -307,6 +308,13 @@ func (m *Member) runCI(ctx context.Context, c *conn, f frame) frame {
 		case <-jctx.Done():
 		}
 	}()
+
+	// The main host sees the job on this machine's card at once, not only
+	// with the next status.
+	host, _ := os.Hostname()
+	done := localci.StartActive(localci.ActiveJob{Repo: job.Repo, PR: localci.PRFromRef(job.RunEnv.Ref), Job: job.Name, Machine: host, For: "the main host"})
+	m.Reload()
+	defer func() { done(); m.Reload() }()
 
 	dir := filepath.Join(m.CIDir, "jobs", job.JobID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

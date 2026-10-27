@@ -139,6 +139,7 @@ func (d *Dispatcher) RunJob(ctx context.Context, spec JobSpec) Result {
 		d.mu.Unlock()
 	}()
 	var res Result
+	active := ActiveJob{Repo: spec.RunEnv.Repo, PR: PRFromRef(spec.RunEnv.Ref), Job: spec.Name, Machine: m.Name}
 	if m.Host || m.ID == "" {
 		local := d.Local
 		if local == nil {
@@ -151,9 +152,13 @@ func (d *Dispatcher) RunJob(ctx context.Context, spec JobSpec) Result {
 			}
 			defer unlock()
 		}
+		done := StartActive(active)
 		res = local.RunJob(ctx, spec)
+		done()
 	} else {
+		done := StartActive(active)
 		res = d.Remote(m).RunJob(ctx, spec)
+		done()
 	}
 	res.Machine = m.Name
 	return res
