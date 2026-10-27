@@ -122,7 +122,7 @@ func (j *Job) Requires() (tools []string, emulator bool) {
 			break
 		}
 	}
-	if j.NeedsJava() {
+	if j.NeedsEmulator() {
 		tools = append(tools, "java")
 		emulator = true
 	}

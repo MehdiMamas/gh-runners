@@ -89,13 +89,27 @@ func ParseEmulatorPorts(data []byte) []int {
 	return out
 }
 
-// portFree reports whether something can listen on 127.0.0.1:port.
+// portFree reports whether nothing listens on port. Listening on 127.0.0.1
+// alone is not enough: on macOS that succeeds while another process holds
+// 0.0.0.0:port (the Firebase emulators bind there), so the wildcard address
+// is probed too, and a connect to loopback (IPv4 and IPv6) catches any
+// listener the binds miss.
 func portFree(port int) bool {
-	l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-	if err != nil {
-		return false
+	p := strconv.Itoa(port)
+	for _, addr := range []string{"0.0.0.0:" + p, "127.0.0.1:" + p} {
+		l, err := net.Listen("tcp", addr)
+		if err != nil {
+			return false
+		}
+		l.Close()
 	}
-	l.Close()
+	for _, host := range []string{"127.0.0.1", "::1"} {
+		c, err := net.DialTimeout("tcp", net.JoinHostPort(host, p), 300*time.Millisecond)
+		if err == nil {
+			c.Close()
+			return false
+		}
+	}
 	return true
 }
 

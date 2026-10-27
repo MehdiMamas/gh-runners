@@ -137,7 +137,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		}
 		j := wf.Jobs[n]
 		t := Task{Name: n, Needs: j.Needs}
-		if _, self := o.Exec.(interface{ SelfLocking() bool }); j.NeedsJava() && !self {
+		if _, self := o.Exec.(interface{ SelfLocking() bool }); j.NeedsEmulator() && !self {
 			t.Lock = "emulator"
 		}
 		tasks = append(tasks, t)
