@@ -222,6 +222,10 @@ func (LocalExecutor) RunJob(ctx context.Context, spec JobSpec) Result {
 		return finish(Fail, err.Error())
 	}
 	defer lf.Close()
+	// Whatever the steps started and left running (an emulator that
+	// detached itself) goes with the job, whether it passed, failed or was
+	// cancelled.
+	defer KillUnder(spec.RunDir)
 	ws := filepath.Join(spec.RunDir, "src")
 	if err := Extract(spec.Tarball, ws); err != nil {
 		fmt.Fprintln(lf, "extract failed:", err)

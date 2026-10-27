@@ -141,3 +141,50 @@ func TestSweepSkipsRunOwnedByLiveProcess(t *testing.T) {
 		t.Fatalf("history: %+v", h)
 	}
 }
+
+func TestSweepFleetJobFolder(t *testing.T) {
+	t.Setenv("GH_RUNNERS_HOME", t.TempDir())
+	job := filepath.Join(store.Home(), "ci", "fleet", "jobs", "abcd1234", "src")
+	if err := os.MkdirAll(job, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := exec.Command("sleep", "300")
+	c.Dir = job
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	go c.Wait()
+	defer c.Process.Kill()
+	time.Sleep(300 * time.Millisecond)
+	if n := SweepOrphans(t.Logf); n < 1 {
+		t.Fatalf("killed %d processes", n)
+	}
+	waitGone(t, c.Process.Pid)
+	if len(History()) != 0 {
+		t.Fatalf("a fleet job was recorded as a lost run: %+v", History())
+	}
+}
+
+// A job's detached child (its own session, so no group kill reaches it)
+// is gone once the job ends.
+func TestRunJobLeavesNoProcess(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GH_RUNNERS_HOME", home)
+	dir := filepath.Join(store.Home(), "ci", "fleet", "jobs", "beef0001")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tgz := makeTarball(t, 59999)
+	pidFile := filepath.Join(dir, "child.pid")
+	// python gives the child its own session, as an emulator launcher does.
+	job := &Job{Steps: []Step{{Run: "python3 -c 'import os;os.setsid();os.execvp(\"sleep\",[\"sleep\",\"300\"])' >/dev/null 2>&1 & echo $! > " + pidFile + "; sleep 0.3"}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := LocalExecutor{}.RunJob(ctx, JobSpec{Name: "emu", Job: job, Tarball: tgz, RunDir: dir, Log: filepath.Join(dir, "job.log"), Env: os.Environ()})
+	b, _ := os.ReadFile(pidFile)
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	if pid == 0 {
+		t.Fatalf("child did not start: %+v", r)
+	}
+	waitGone(t, pid)
+}

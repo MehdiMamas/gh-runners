@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -15,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/MehdiMamas/gh-runners/internal/store"
 )
 
 // DefaultEmulatorPorts are the Firebase emulator defaults (plus the hub and
@@ -118,6 +121,7 @@ func portFree(port int) bool {
 // found, its process and pid.
 func CheckPorts(ctx context.Context, ports []int) string {
 	deadline := time.Now().Add(PortWait)
+	stopped := map[string]bool{}
 	for {
 		taken := 0
 		for _, p := range ports {
@@ -129,9 +133,23 @@ func CheckPorts(ctx context.Context, ports []int) string {
 		if taken == 0 {
 			return ""
 		}
+		name, pid := portOwner(taken)
+		holder := holderOf(ciRoot(), pid, procCwdOf, folderLive)
+		// A leftover of an earlier job holds the port for nothing: stop it
+		// and look again at once.
+		if holder.Stale != "" && !stopped[pid] {
+			stopped[pid] = true
+			n, _ := strconv.Atoi(pid)
+			log.Printf("local ci: stopping %s (pid %s), left running by a finished job in %s, so port %d is free", name, pid, holder.Stale, taken)
+			killPIDs([]int{n})
+			continue
+		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
+			if holder.Live != "" {
+				return fmt.Sprintf("port %d is used by a gh-runners job (%s)%s", taken, holder.Live, ownerSuffix(name, pid))
+			}
 			who := ""
-			if name, pid := portOwner(taken); pid != "" {
+			if pid != "" {
 				who = " by " + name + " (pid " + pid + ")"
 				if name == "" {
 					who = " by pid " + pid
@@ -144,6 +162,45 @@ func CheckPorts(ctx context.Context, ports []int) string {
 		case <-time.After(PortPoll):
 		}
 	}
+}
+
+func ownerSuffix(name, pid string) string {
+	if pid == "" {
+		return ""
+	}
+	return ": " + name + ", pid " + pid
+}
+
+// ciRoot is the folder Local CI runs and fleet jobs work in, as lsof and
+// /proc report it (the home may sit behind a symlink).
+func ciRoot() string {
+	root := filepath.Join(store.Home(), "ci")
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	return root
+}
+
+// holder says whose a port holder is: Live is the gh-runners job folder
+// that still owns it, Stale a folder whose job is over; both empty when it
+// is not from gh-runners at all.
+type holder struct{ Live, Stale string }
+
+// holderOf classifies the process pid by its working folder. cwdOf looks the
+// folder up and live says whether a job folder still has a running owner.
+func holderOf(root, pid string, cwdOf func(int) string, live func(string) bool) holder {
+	n, err := strconv.Atoi(pid)
+	if err != nil || n <= 1 {
+		return holder{}
+	}
+	folder := runFolder(root, cwdOf(n))
+	switch {
+	case folder == "":
+		return holder{}
+	case live(folder):
+		return holder{Live: folder}
+	}
+	return holder{Stale: folder}
 }
 
 // portOwner finds the process listening on port; empty pid when unknown.

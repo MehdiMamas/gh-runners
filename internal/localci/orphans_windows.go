@@ -11,3 +11,5 @@ func selfPID() int { return os.Getpid() }
 func listCwds() []procCwd { return nil }
 
 func killPIDs([]int) {}
+
+func procCwdOf(int) string { return "" }

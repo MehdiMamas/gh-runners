@@ -321,6 +321,7 @@ func (m *Member) runCI(ctx context.Context, c *conn, f frame) frame {
 		return ciError(http.StatusInternalServerError, err.Error())
 	}
 	defer os.RemoveAll(dir)
+	localci.WriteOwner(dir)
 	logPath := filepath.Join(dir, "job.log")
 	tarball := filepath.Join(dir, "source.tgz")
 

@@ -36,14 +36,47 @@ type procCwd struct {
 	Cwd string
 }
 
-// runFolder returns the run folder (ci/<repo>/<run>) that cwd is inside, or
-// "" when cwd is not under root, or not inside a run.
+// WriteOwner marks folder as owned by this process, so a sweep or the port
+// guard leaves it alone while it lives.
+func WriteOwner(folder string) {
+	_ = os.WriteFile(filepath.Join(folder, ownerFile), []byte(strconv.Itoa(os.Getpid())), 0o644)
+}
+
+// folderLive reports whether folder still exists and its owner process runs.
+// A fleet job's folder is deleted when the job ends, so a process still
+// working in a missing folder is a leftover.
+func folderLive(folder string) bool {
+	if _, err := os.Stat(folder); err != nil {
+		return false
+	}
+	b, err := os.ReadFile(filepath.Join(folder, ownerFile))
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	return err == nil && pid > 0 && proc.Alive(pid)
+}
+
+// isFleetFolder reports whether folder is a fleet job's (ci/fleet/jobs/<id>).
+func isFleetFolder(root, folder string) bool {
+	rel, err := filepath.Rel(root, folder)
+	return err == nil && strings.HasPrefix(filepath.ToSlash(rel), "fleet/jobs/")
+}
+
+// runFolder returns the run folder that cwd is inside (ci/<repo>/<run> for
+// a Local CI run, ci/fleet/jobs/<id> for a fleet job), or "" when cwd is not
+// under root, or not inside one.
 func runFolder(root, cwd string) string {
+	// Linux appends this to the path of a deleted folder.
+	cwd = strings.TrimSuffix(cwd, " (deleted)")
 	rel, ok := strings.CutPrefix(filepath.Clean(cwd), filepath.Clean(root)+string(filepath.Separator))
 	if !ok {
 		return ""
 	}
 	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) >= 3 && parts[0] == "fleet" && parts[1] == "jobs" {
+		return filepath.Join(root, "fleet", "jobs", parts[2])
+	}
 	// Only a run's own folder counts: not ci/locks, not a repo folder.
 	if len(parts) < 2 || !strings.HasPrefix(parts[1], "pr") {
 		return ""
@@ -109,6 +142,9 @@ func SweepOrphans(logf func(string, ...any)) int {
 		if logf != nil {
 			logf("local ci: killed %d leftover process(es) of %s", len(pids), folder)
 		}
+		if isFleetFolder(root, folder) {
+			continue // not a PR run: nothing to record
+		}
 		hr := orphanHistory(folder, time.Now())
 		known := false
 		for _, h := range History() {
@@ -121,4 +157,25 @@ func SweepOrphans(logf func(string, ...any)) int {
 		}
 	}
 	return n
+}
+
+// KillUnder kills every process whose working folder is inside dir, with
+// its process group. A job calls it when it ends, so nothing it started
+// (an emulator that detached itself) outlives it. It returns the count.
+func KillUnder(dir string) int {
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = r
+	}
+	dir = filepath.Clean(dir)
+	var pids []int
+	for _, p := range listCwds() {
+		cwd := strings.TrimSuffix(p.Cwd, " (deleted)")
+		if p.PID != selfPID() && p.PID > 1 && (cwd == dir || strings.HasPrefix(cwd, dir+string(filepath.Separator))) {
+			pids = append(pids, p.PID)
+		}
+	}
+	if len(pids) > 0 {
+		killPIDs(pids)
+	}
+	return len(pids)
 }
