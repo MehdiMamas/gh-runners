@@ -1,11 +1,13 @@
 package localci
 
 import (
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/MehdiMamas/gh-runners/internal/proc"
 	"github.com/MehdiMamas/gh-runners/internal/store"
 )
 
@@ -13,6 +15,20 @@ import (
 // When the daemon stops in the middle of a run, the job's processes (an
 // emulator, npm, vite) can outlive it and keep their ports. SweepOrphans
 // finds them by their working folder and kills them.
+
+const ownerFile = "owner.pid"
+
+// ownedByOther reports whether the run folder belongs to a live gh-runners
+// process other than self (a CLI run, a second daemon). A folder with no
+// owner file, or whose owner is gone, is not.
+func ownedByOther(folder string, self int) bool {
+	b, err := os.ReadFile(filepath.Join(folder, ownerFile))
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	return err == nil && pid > 0 && pid != self && proc.Alive(pid)
+}
 
 // procCwd is one process and the folder it runs in.
 type procCwd struct {
@@ -85,6 +101,9 @@ func SweepOrphans(logf func(string, ...any)) int {
 	}
 	n := 0
 	for folder, pids := range orphanRuns(root, listCwds(), selfPID()) {
+		if ownedByOther(folder, selfPID()) {
+			continue
+		}
 		killPIDs(pids)
 		n += len(pids)
 		if logf != nil {

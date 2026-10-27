@@ -90,3 +90,54 @@ func TestSweepOrphans(t *testing.T) {
 		t.Fatalf("second sweep added history: %+v", History())
 	}
 }
+
+func TestSweepSkipsRunOwnedByLiveProcess(t *testing.T) {
+	t.Setenv("GH_RUNNERS_HOME", t.TempDir())
+	ci := filepath.Join(store.Home(), "ci", "octo-repo")
+	liveRun := filepath.Join(ci, "pr1-aaaaaaa-1700000001", "build", "src")
+	deadRun := filepath.Join(ci, "pr2-bbbbbbb-1700000002", "build", "src")
+	for _, d := range []string{liveRun, deadRun} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk := func(dir string) *exec.Cmd {
+		c := exec.Command("sleep", "300")
+		c.Dir = dir
+		if err := c.Start(); err != nil {
+			t.Fatal(err)
+		}
+		go c.Wait()
+		return c
+	}
+	// A live owner: another process that is not us.
+	owner := mk(t.TempDir())
+	defer owner.Process.Kill()
+	// A dead owner: started and reaped.
+	d := exec.Command("true")
+	if err := d.Run(); err != nil {
+		t.Fatal(err)
+	}
+	write := func(run string, pid int) {
+		f := filepath.Join(filepath.Dir(filepath.Dir(run)), ownerFile)
+		if err := os.WriteFile(f, []byte(strconv.Itoa(pid)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(liveRun, owner.Process.Pid)
+	write(deadRun, d.Process.Pid)
+
+	live, dead := mk(liveRun), mk(deadRun)
+	defer live.Process.Kill()
+	time.Sleep(300 * time.Millisecond)
+
+	SweepOrphans(t.Logf)
+	waitGone(t, dead.Process.Pid)
+	if syscall.Kill(live.Process.Pid, 0) != nil {
+		t.Fatal("a run owned by a live process was killed")
+	}
+	h := History()
+	if len(h) != 1 || h[0].PR != 2 {
+		t.Fatalf("history: %+v", h)
+	}
+}

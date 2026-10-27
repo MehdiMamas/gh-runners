@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -115,6 +116,9 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return rep, err
 	}
+	// Marks which process owns the run, so another daemon's startup sweep
+	// leaves a live run alone.
+	_ = os.WriteFile(filepath.Join(runDir, ownerFile), []byte(strconv.Itoa(os.Getpid())), 0o644)
 	tarball := filepath.Join(runDir, "source.tgz")
 	if err := c.DownloadTarball(ctx, o.Owner, o.Repo, sha, tarball); err != nil {
 		return rep, fmt.Errorf("download source: %w", err)
