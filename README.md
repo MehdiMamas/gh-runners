@@ -215,6 +215,21 @@ gh-runners ci watch owner/repo              # poll every minute and run each new
 - Jobs run with a scrubbed environment (no tokens), and jobs that start the Firebase emulators take turns.
 - With posting on, each job is a `local-ci/<job>` status, the aggregate job is the plain `ci-passed` status, and one PR comment holds the table. Logs are under `~/.gh-runners/ci/`.
 
+### Windows laptops
+
+A Windows laptop can take CI jobs from the main host. Joining the fleet is the opt-in: the main host then sends it the jobs its OS and tools fit, and it runs them with the same scrubbed environment. Do these steps on the laptop, in PowerShell:
+
+1. Install Git for Windows (it brings Git Bash, which runs the `run:` steps). Get it from https://git-scm.com/download/win, then open a new PowerShell and run `bash --version`. You should see `GNU bash, version ...`.
+2. Install Node, the version the repo's `.nvmrc` names (for example from https://nodejs.org). Run `node --version`. You should see that version.
+3. Install a Temurin JDK 21 (https://adoptium.net, choose "Add to PATH" in the installer). Run `java -version`. You should see `openjdk version "21...`.
+4. Install Flutter (https://docs.flutter.dev/get-started/install/windows) and add its `bin` folder to PATH. Run `flutter --version`. You should see a Flutter version line.
+5. Install the browser the end-to-end tests use: `npx playwright install chromium`. Run `npx playwright --version`. You should see `Version 1...`.
+6. Join the fleet: in the main host's dashboard open Machines, then Add a machine, and paste the Windows command it shows into PowerShell (see "Machines" above). The laptop appears there as online.
+7. Check the laptop: `gh-runners ci doctor owner/repo`. You should see a table with every tool marked `yes`, and at the end "This machine can run every job." A missing tool is listed per job; install it and run the command again.
+8. Optional: let this laptop run jobs that start the Firebase emulators with `gh-runners ci emulator on` (off by default on Windows, on by default on a Mac). Without it, those jobs go to a machine that allows them, and if none does they are marked unsupported with the reason.
+
+If a laptop goes offline while it runs a job, that job fails with "machine went offline" instead of hanging. `gh-runners ci run` shows which machine ran each job in its `machine` column.
+
 ## Pause a machine
 
 Pause stops everything gh-runners runs on one machine at once: every runner and
