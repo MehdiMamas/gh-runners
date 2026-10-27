@@ -23,6 +23,7 @@ type task struct {
 	Created time.Time `json:"created"`
 	Ended   time.Time `json:"ended,omitzero"`
 	Scopes  []string  `json:"scopes,omitempty"` // repos it adds to or changes
+	key     string    // dedupe key: at most one queued task per key
 	out     []byte
 	// cancel stops a running task; cancelled is set when someone asked for
 	// it, so the task ends as cancelled, not failed.
@@ -179,12 +180,28 @@ func (t *task) setCancel(c context.CancelFunc) bool {
 
 // add queues a task and returns its id.
 func (q *taskQueue) add(title string, scopes []string, run func(w io.Writer) error) (*task, error) {
+	t, _, err := q.addKeyed("", title, scopes, run)
+	return t, err
+}
+
+// addKeyed is add with a dedupe key: when a task with the same non-empty key
+// is still waiting in the queue, it is returned (existing true) and nothing is
+// added. A running task with the key does not count.
+func (q *taskQueue) addKeyed(key, title string, scopes []string, run func(w io.Writer) error) (*task, bool, error) {
 	q.mu.Lock()
+	if key != "" {
+		for _, p := range q.pending {
+			if p.key == key {
+				q.mu.Unlock()
+				return p, true, nil
+			}
+		}
+	}
 	q.next++
-	t := &task{ID: q.next, Title: title, State: "queued", Created: time.Now(), Scopes: scopes, run: run}
+	t := &task{ID: q.next, Title: title, State: "queued", Created: time.Now(), Scopes: scopes, run: run, key: key}
 	if len(q.pending) >= maxPending {
 		q.mu.Unlock()
-		return nil, fmt.Errorf("too many tasks waiting; try again in a minute")
+		return nil, false, fmt.Errorf("too many tasks waiting; try again in a minute")
 	}
 	q.list = append(q.list, t)
 	if len(q.list) > 50 {
@@ -196,7 +213,7 @@ func (q *taskQueue) add(title string, scopes []string, run func(w io.Writer) err
 	case q.wake <- struct{}{}:
 	default:
 	}
-	return t, nil
+	return t, false, nil
 }
 
 func (q *taskQueue) get(id int) *task {

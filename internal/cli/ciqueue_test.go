@@ -22,7 +22,7 @@ func TestQueueCISendsAuthAndReturnsTask(t *testing.T) {
 		_, _ = w.Write([]byte(`{"task":7}`))
 	}))
 	defer srv.Close()
-	id, err := queueCI(context.Background(), strings.TrimPrefix(srv.URL, "http://"), "sekret", "o/r", 12, true, false)
+	id, _, err := queueCI(context.Background(), strings.TrimPrefix(srv.URL, "http://"), "sekret", "o/r", 12, true, false)
 	if err != nil || id != 7 {
 		t.Fatalf("id=%d err=%v", id, err)
 	}
@@ -37,7 +37,7 @@ func TestQueueCIRefused(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"locked"}`))
 	}))
 	defer srv.Close()
-	_, err := queueCI(context.Background(), strings.TrimPrefix(srv.URL, "http://"), "bad", "o/r", 1, false, false)
+	_, _, err := queueCI(context.Background(), strings.TrimPrefix(srv.URL, "http://"), "bad", "o/r", 1, false, false)
 	if err == nil || !strings.Contains(err.Error(), "locked") {
 		t.Fatalf("err=%v", err)
 	}
@@ -50,8 +50,20 @@ func TestQueueCIDaemonDown(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	addr := strings.TrimPrefix(srv.URL, "http://")
 	srv.Close()
-	_, err := queueCI(context.Background(), addr, "s", "o/r", 1, false, false)
+	_, _, err := queueCI(context.Background(), addr, "s", "o/r", 1, false, false)
 	if _, down := err.(errNoDaemon); !down {
 		t.Fatalf("want errNoDaemon, got %v", err)
+	}
+}
+
+func TestQueueCIExisting(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"task":4,"existing":true}`))
+	}))
+	defer srv.Close()
+	id, existing, err := queueCI(context.Background(), strings.TrimPrefix(srv.URL, "http://"), "s", "o/r", 1, false, false)
+	if err != nil || id != 4 || !existing {
+		t.Fatalf("id=%d existing=%v err=%v", id, existing, err)
 	}
 }

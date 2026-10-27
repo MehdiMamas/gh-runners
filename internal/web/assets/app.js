@@ -1021,6 +1021,7 @@ function ciDialog(full) {
     const pr = parseInt(prInput.value, 10);
     if (!(pr > 0)) { toast('Type a pull request number', true); return; }
     const r = await api('POST', '/api/ci/run', { repo: full, pr, dry_run: dry.checked, approve: approve.checked });
+    if (r.existing) toast(`Already queued as task ${r.task}`);
     follow(r.task);
   });
   prInput.onkeydown = (e) => { if (e.key === 'Enter') run(); };
