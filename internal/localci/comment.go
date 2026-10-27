@@ -48,7 +48,7 @@ func CommentBody(in CommentInput) string {
 	for _, r := range in.Results {
 		res := string(r.Status)
 		if r.Reason != "" && r.Status != Pass {
-			res += " - " + r.Reason
+			res += " - " + Scrub(r.Reason, in.Secrets)
 		}
 		mach := r.Machine
 		if mach == "" {
@@ -360,7 +360,26 @@ func Scrub(s string, secrets []string) string {
 	for _, re := range secretRes {
 		s = re.ReplaceAllString(s, "***")
 	}
-	return keyValRe.ReplaceAllString(s, "${1}***")
+	s = keyValRe.ReplaceAllString(s, "${1}***")
+	return ScrubPaths(s)
+}
+
+var (
+	// a run folder: <anything>/.gh-runners/ci/<repo>/<run>, either separator
+	runDirRe = regexp.MustCompile(`(?:[A-Za-z]:)?[^\s"'<>|*?:]*[/\\]\.gh-runners[/\\]ci[/\\][^/\\\s"'<>|]+[/\\][^/\\\s"'<>|]+`)
+	// a home folder of any user on macOS, Linux or Windows
+	homeRe = regexp.MustCompile(`(?:[A-Za-z]:[/\\]Users[/\\]|/Users/|/home/)[^/\\\s"'<>|:]+`)
+)
+
+// ScrubPaths hides this machine's local paths: a run folder becomes
+// <workdir> and a home folder becomes ~. Both / and \ separators work.
+func ScrubPaths(s string) string {
+	s = runDirRe.ReplaceAllString(s, "<workdir>")
+	if h, err := os.UserHomeDir(); err == nil && len(h) > 3 {
+		s = strings.ReplaceAll(s, h, "~")
+		s = strings.ReplaceAll(s, strings.ReplaceAll(h, "\\", "/"), "~")
+	}
+	return homeRe.ReplaceAllString(s, "~")
 }
 
 // envValues returns the values of KEY=VALUE entries long enough to be worth
