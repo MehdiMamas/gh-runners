@@ -149,8 +149,17 @@ func TestRemoteExecutorMemberDropsMidJob(t *testing.T) {
 	stubGitHub(t, &hits)
 	h := newHost(t)
 	h.CIRepos = func() []string { return []string{"o/r"} }
-	_, drop := connectCI(t, h)
+	m, drop := connectCI(t, h)
 	id := ciMemberID(t, h)
+	// The member's job winds down after the drop; Windows cannot delete the
+	// temp dir while it still holds the log open.
+	t.Cleanup(func() {
+		waitFor(t, func() bool {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			return len(m.jobs) == 0
+		})
+	})
 
 	s := spec(t, "echo started; sleep 30")
 	go func() {
