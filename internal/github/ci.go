@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -217,4 +218,35 @@ func (c *Client) Approved(ctx context.Context, owner, repo string, n int) (bool,
 func (c *Client) SquashMerge(ctx context.Context, owner, repo string, n int, sha string) error {
 	return c.Do(ctx, http.MethodPut, fmt.Sprintf("/repos/%s/%s/pulls/%d/merge", owner, repo, n),
 		map[string]string{"merge_method": "squash", "sha": sha}, nil)
+}
+
+// Issue is an open issue: its number and title.
+type Issue struct {
+	Number int
+	Title  string
+}
+
+// ListOpenIssues lists open issues (not pull requests), at most 300.
+func (c *Client) ListOpenIssues(ctx context.Context, owner, repo string) ([]Issue, error) {
+	const limit = 300
+	var all []Issue
+	for page := 1; page <= 6 && len(all) < limit; page++ {
+		var r []struct {
+			Number      int             `json:"number"`
+			Title       string          `json:"title"`
+			PullRequest json.RawMessage `json:"pull_request"`
+		}
+		if err := c.Do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/issues?state=open&per_page=100&page=%d", owner, repo, page), nil, &r); err != nil {
+			return all, err
+		}
+		for _, x := range r {
+			if len(x.PullRequest) == 0 && len(all) < limit {
+				all = append(all, Issue{Number: x.Number, Title: x.Title})
+			}
+		}
+		if len(r) < 100 {
+			break
+		}
+	}
+	return all, nil
 }
