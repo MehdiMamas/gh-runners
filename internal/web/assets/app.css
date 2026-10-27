@@ -322,3 +322,9 @@ dialog::backdrop { background: rgba(10, 14, 20, .45); }
 body.locked { display: grid; place-items: center; min-height: 100vh; padding: 16px; }
 .locked-box { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 28px; max-width: 460px; text-align: center; box-shadow: var(--shadow); }
 .locked-box pre { background: var(--panel-2); padding: 10px; border-radius: 8px; font-size: 14px; }
+
+/* Local CI dialog */
+.ci-h { margin-top: 18px; }
+.ci-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ci-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 4px 6px; border-bottom: 1px solid var(--border); }
+.ci-table td { padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
