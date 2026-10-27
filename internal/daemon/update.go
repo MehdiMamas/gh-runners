@@ -145,6 +145,11 @@ func (d *Daemon) applyUpdate(ctx context.Context, tag string) (waiting bool, err
 // busy says what is running a job on this machine, or "" when nothing is.
 // When GitHub can't be asked, it assumes a job is running.
 func (d *Daemon) busy(ctx context.Context) string {
+	if f := d.ciBusy; f != nil {
+		if why := f(); why != "" {
+			return why
+		}
+	}
 	if n := len(d.jit.states()); n > 0 {
 		return fmt.Sprintf("%d on-demand runner(s) to finish their job", n)
 	}

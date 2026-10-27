@@ -362,3 +362,12 @@ func (s *Server) WaitCI(d time.Duration) {
 
 // ciBusy reports whether a Local CI run is queued or running.
 func (s *Server) ciBusy() bool { return s.ci.busy() > 0 }
+
+// CIBusy says what Local CI task the daemon is waiting on before it may
+// restart, or "" when none is queued or running.
+func (s *Server) CIBusy() string {
+	if id, ok := s.ci.first(); ok {
+		return fmt.Sprintf("Local CI task %d to finish", id)
+	}
+	return ""
+}

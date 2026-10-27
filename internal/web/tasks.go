@@ -235,6 +235,21 @@ func (q *taskQueue) busy() int {
 	return n
 }
 
+// first returns the id of the oldest task that is queued or running.
+func (q *taskQueue) first() (id int, ok bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, t := range q.list {
+		t.mu.Lock()
+		st := t.State
+		t.mu.Unlock()
+		if st == "queued" || st == "running" {
+			return t.ID, true
+		}
+	}
+	return 0, false
+}
+
 func (s *Server) startTask(w http.ResponseWriter, title string, run func(w io.Writer) error) {
 	s.startScopedTask(w, title, nil, run)
 }
