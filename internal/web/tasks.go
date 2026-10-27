@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -17,13 +18,17 @@ type task struct {
 	mu      sync.Mutex
 	ID      int       `json:"id"`
 	Title   string    `json:"title"`
-	State   string    `json:"state"` // queued | running | done | failed
+	State   string    `json:"state"` // queued | running | done | failed | cancelled
 	Error   string    `json:"error,omitempty"`
 	Created time.Time `json:"created"`
 	Ended   time.Time `json:"ended,omitzero"`
 	Scopes  []string  `json:"scopes,omitempty"` // repos it adds to or changes
 	out     []byte
-	run     func(w io.Writer) error
+	// cancel stops a running task; cancelled is set when someone asked for
+	// it, so the task ends as cancelled, not failed.
+	cancel    context.CancelFunc
+	cancelled bool
+	run       func(w io.Writer) error
 }
 
 const maxTaskLog = 256 << 10
@@ -60,24 +65,27 @@ func (t *task) view(full bool) taskView {
 }
 
 type taskQueue struct {
-	log   *log.Logger
-	mu    sync.Mutex
-	next  int
-	list  []*task
-	queue chan *task
+	log  *log.Logger
+	mu   sync.Mutex
+	next int
+	list []*task
+	// pending are the queued tasks in the order they run; wake tells the
+	// worker one was added.
+	pending []*task
+	wake    chan struct{}
 }
 
+const maxPending = 64
+
 func newTaskQueue(l *log.Logger) *taskQueue {
-	q := &taskQueue{log: l, queue: make(chan *task, 64)}
+	q := &taskQueue{log: l, wake: make(chan struct{}, 1)}
 	go q.work()
 	return q
 }
 
 func (q *taskQueue) work() {
-	for t := range q.queue {
-		t.mu.Lock()
-		t.State = "running"
-		t.mu.Unlock()
+	for {
+		t := q.pop()
 		q.log.Printf("dashboard: %s", t.Title)
 		err := func() (err error) {
 			defer func() {
@@ -89,7 +97,10 @@ func (q *taskQueue) work() {
 		}()
 		t.mu.Lock()
 		t.State, t.Ended = "done", time.Now()
-		if err != nil {
+		if t.cancelled {
+			t.State = "cancelled"
+			q.log.Printf("dashboard: %s cancelled", t.Title)
+		} else if err != nil {
 			t.State, t.Error = "failed", err.Error()
 			q.log.Printf("dashboard: %s failed: %v", t.Title, err)
 		}
@@ -97,22 +108,95 @@ func (q *taskQueue) work() {
 	}
 }
 
+// pop waits for the first queued task and marks it running.
+func (q *taskQueue) pop() *task {
+	for {
+		q.mu.Lock()
+		if len(q.pending) > 0 {
+			t := q.pending[0]
+			q.pending = q.pending[1:]
+			t.mu.Lock()
+			t.State = "running"
+			t.mu.Unlock()
+			q.mu.Unlock()
+			return t
+		}
+		q.mu.Unlock()
+		<-q.wake
+	}
+}
+
+// moveFront moves a queued task to the front. It returns false when the task is
+// not queued.
+func (q *taskQueue) moveFront(t *task) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i, p := range q.pending {
+		if p == t {
+			copy(q.pending[1:i+1], q.pending[:i])
+			q.pending[0] = t
+			return true
+		}
+	}
+	return false
+}
+
+// stop cancels a task: a queued one is taken out of the queue, a running one
+// has its context cancelled. It returns false when the task has ended.
+func (q *taskQueue) stop(t *task) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	switch t.State {
+	case "queued":
+		for i, p := range q.pending {
+			if p == t {
+				q.pending = append(q.pending[:i:i], q.pending[i+1:]...)
+				break
+			}
+		}
+		t.State, t.cancelled, t.Ended = "cancelled", true, time.Now()
+	case "running":
+		t.cancelled = true
+		if t.cancel != nil {
+			t.cancel()
+		}
+	default:
+		return false
+	}
+	return true
+}
+
+// setCancel lets a running task register how to stop it. It reports whether
+// the task was cancelled already.
+func (t *task) setCancel(c context.CancelFunc) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.cancel = c
+	return t.cancelled
+}
+
 // add queues a task and returns its id.
 func (q *taskQueue) add(title string, scopes []string, run func(w io.Writer) error) (*task, error) {
 	q.mu.Lock()
 	q.next++
 	t := &task{ID: q.next, Title: title, State: "queued", Created: time.Now(), Scopes: scopes, run: run}
+	if len(q.pending) >= maxPending {
+		q.mu.Unlock()
+		return nil, fmt.Errorf("too many tasks waiting; try again in a minute")
+	}
 	q.list = append(q.list, t)
 	if len(q.list) > 50 {
 		q.list = q.list[len(q.list)-50:]
 	}
+	q.pending = append(q.pending, t)
 	q.mu.Unlock()
 	select {
-	case q.queue <- t:
-		return t, nil
+	case q.wake <- struct{}{}:
 	default:
-		return nil, fmt.Errorf("too many tasks waiting; try again in a minute")
 	}
+	return t, nil
 }
 
 func (q *taskQueue) get(id int) *task {

@@ -25,7 +25,7 @@ func newCICmd() *cobra.Command {
 		Use:   "ci",
 		Short: "Run a repo's ci.yml on this machine and report back on the pull request",
 	}
-	cmd.AddCommand(newCIRunCmd(), newCIQueueCmd(), newCIWatchCmd(), newCIConfigCmd(), newCIDoctorCmd(), newCIEmulatorCmd())
+	cmd.AddCommand(newCIRunCmd(), newCIQueueCmd(), newCICancelCmd(), newCIWatchCmd(), newCIConfigCmd(), newCIDoctorCmd(), newCIEmulatorCmd())
 	return cmd
 }
 
