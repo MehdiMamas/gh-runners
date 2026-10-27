@@ -168,12 +168,12 @@ func newCIWatchCmd() *cobra.Command {
 }
 
 func newCIConfigCmd() *cobra.Command {
-	var post, merge, allow string
+	var watch, post, merge, allow string
 	cmd := &cobra.Command{
 		Use:   "config <owner/repo>",
-		Short: "Show or change whether results are posted and approved PRs merged (both off by default)",
+		Short: "Show or change auto-run, posting results and merging approved PRs (all off by default)",
 		Example: `  gh-runners ci config owner/repo
-  gh-runners ci config owner/repo --post on --allow alice,bob`,
+  gh-runners ci config owner/repo --watch on --post on --allow alice,bob`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if _, _, err := splitRepo(args[0]); err != nil {
@@ -188,7 +188,7 @@ func newCIConfigCmd() *cobra.Command {
 			for _, f := range []struct {
 				v   string
 				dst *bool
-			}{{post, &s.Post}, {merge, &s.Merge}} {
+			}{{watch, &s.Watch}, {post, &s.Post}, {merge, &s.Merge}} {
 				switch f.v {
 				case "":
 				case "on":
@@ -220,10 +220,11 @@ func newCIConfigCmd() *cobra.Command {
 			if len(s.Allow) > 0 {
 				who = strings.Join(s.Allow, ", ")
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s: post results %s, merge approved PRs %s, authors allowed: %s\n", args[0], onOffWord(s.Post), onOffWord(s.Merge), who)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s: auto-run %s, post results %s, merge approved PRs %s, authors allowed: %s\n", args[0], onOffWord(s.Watch), onOffWord(s.Post), onOffWord(s.Merge), who)
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&watch, "watch", "", "on|off: run my PRs automatically on every new commit")
 	cmd.Flags().StringVar(&post, "post", "", "on|off: post statuses and a comment on the PR")
 	cmd.Flags().StringVar(&merge, "merge", "", "on|off: squash-merge when every job passed and the PR is approved")
 	cmd.Flags().StringVar(&allow, "allow", "", "comma separated authors whose PRs run on their own (default: you)")

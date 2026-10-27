@@ -979,21 +979,20 @@ function ciDialog(full) {
   const cur = ciSettingsOf(full);
   const set = { watch: !!cur.watch, post: !!cur.post, merge: !!cur.merge };
   let timer = null;
-  const allow = h('input', { type: 'text', value: list(cur.allow), placeholder: (S.state && S.state.auth.login) || 'you', 'aria-label': 'Allowed authors' });
+  const allow = h('input', { type: 'text', value: list(cur.allow), placeholder: (S.state && S.state.auth.login) || 'you', 'aria-label': 'Allowed authors', onchange: () => save() });
   const save = () => guard(async () => {
     await api('PUT', '/api/ci/' + full.split('/').map(encodeURIComponent).join('/'), { ...set, allow: split(allow.value) });
     toast('Local CI settings saved for ' + full);
     await loadCI();
   });
-  const opt = (key, title, hint) => sw(set[key], (v) => { set[key] = v; },
+  const opt = (key, title, hint) => sw(set[key], (v) => { set[key] = v; save(); },
     h('span', { class: 'ci-sw-text' }, h('span', {}, title), h('span', { class: 'hint' }, hint)));
   const settings = h('div', { class: 'ci-settings' },
     opt('watch', 'Run pull requests automatically', 'Every new commit on an open pull request runs here, if its author is allowed below.'),
     opt('post', 'Post results on the pull request', 'Adds a check with the result of each job. Off: results stay on this machine.'),
     opt('merge', 'Merge when everything passes', 'Only pull requests that are approved and green on every job.'),
     h('label', { class: 'field' }, 'Authors whose pull requests run on their own', allow,
-      h('span', { class: 'hint' }, 'Comma separated. Empty means only you. Pull requests from forks never run on their own.')),
-    h('div', {}, h('button', { class: 'btn primary small', onclick: save }, 'Save settings')));
+      h('span', { class: 'hint' }, 'Comma separated. Empty means only you. Pull requests from forks never run on their own.')));
 
   const prInput = h('input', { type: 'number', min: 1, placeholder: 'PR number', 'aria-label': 'Pull request number' });
   const dry = h('input', { type: 'checkbox', checked: true });
