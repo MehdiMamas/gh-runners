@@ -344,16 +344,16 @@ func CheckUpdateInterval(d time.Duration) error {
 	return nil
 }
 
-// ParseUpdateInterval reads "10m", "2h" and so on; "default" or "" gives 0,
+// ParseUpdateInterval reads "10m", "10min", "2 hours" and so on; "default" or "" gives 0,
 // which means the default.
 func ParseUpdateInterval(s string) (time.Duration, error) {
 	s = strings.TrimSpace(s)
 	if s == "" || strings.EqualFold(s, "default") {
 		return 0, nil
 	}
-	d, err := time.ParseDuration(s)
+	d, err := ParseHumanDuration(s)
 	if err != nil {
-		return 0, fmt.Errorf("%q is not a duration like 10m or 2h (or \"default\")", s)
+		return 0, err
 	}
 	return d, CheckUpdateInterval(d)
 }
@@ -407,7 +407,7 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 		d.Duration = 0
 		return nil
 	}
-	v, err := time.ParseDuration(s)
+	v, err := ParseHumanDuration(s)
 	if err != nil {
 		return err
 	}
