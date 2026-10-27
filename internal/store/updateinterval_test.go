@@ -6,7 +6,7 @@ import (
 )
 
 func TestParseUpdateInterval(t *testing.T) {
-	ok := map[string]time.Duration{"10m": 10 * time.Minute, "2h": 2 * time.Hour, "5m": 5 * time.Minute, "168h": 7 * 24 * time.Hour, "default": 0, "": 0, " Default ": 0}
+	ok := map[string]time.Duration{"10m": 10 * time.Minute, "2h": 2 * time.Hour, "5m": 5 * time.Minute, "168h": 7 * 24 * time.Hour, "default": 0, "": 0, " Default ": 0, "10min": 10 * time.Minute, "2 hours": 2 * time.Hour, "1 day": 24 * time.Hour}
 	for in, want := range ok {
 		if got, err := ParseUpdateInterval(in); err != nil || got != want {
 			t.Errorf("%q = %v, %v; want %v", in, got, err, want)

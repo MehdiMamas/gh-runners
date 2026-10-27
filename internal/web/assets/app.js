@@ -186,6 +186,24 @@ function setOffline(v) {
   $('offline').classList.toggle('hidden', !v);
 }
 
+// Background refreshes (every few seconds) never redraw a tab while someone
+// is typing in it or has unsaved changes there: a redraw replaces every input
+// and throws away what was typed. A card with unsaved edits carries
+// data-dirty="1" until its Save clears it.
+function editing(tab) {
+  const el = $('tab-' + tab);
+  if (!el) return false;
+  if (el.querySelector('[data-dirty="1"]')) return true;
+  const a = document.activeElement;
+  return !!a && el.contains(a) && (a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' ||
+    (a.tagName === 'INPUT' && !/^(checkbox|radio|button|submit|range)$/.test(a.type)));
+}
+
+// redraw redraws tab if it is open and nobody is editing it.
+function redraw(tab) {
+  if (S.tab === tab && !editing(tab)) ({ repos: renderRepos, machine: renderMachine, machines: renderMachines, automation: renderAutomation, settings: renderSettings })[tab]();
+}
+
 async function refreshState() {
   try {
     S.state = await api('GET', '/api/state');
@@ -196,27 +214,27 @@ async function refreshState() {
 async function loadRepos(force) {
   if (!S.state || !S.state.auth.signed_in) return;
   S.reposLoading = true;
-  if (S.tab === 'repos') renderRepos();
+  redraw('repos');
   try {
     const r = await api('GET', '/api/repos' + (force ? '?refresh=1' : ''));
     S.repos = r; S.reposErr = '';
   } catch (e) { S.reposErr = e.message; }
   S.reposLoading = false;
-  renderRepos();
+  if (!editing('repos')) renderRepos();
   loadGhRunners(force);
   loadCI();
 }
 
 async function loadCI() {
   try { S.ci = await api('GET', '/api/ci'); } catch { return; }
-  if (S.tab === 'repos') renderRepos();
+  redraw('repos');
 }
 
 async function loadRemote() {
   if (!S.state || !S.state.auth.signed_in || !S.state.runners.length) return;
   try { S.remote = await api('GET', '/api/github-runners'); } catch { /* shown as unknown */ }
-  if (S.tab === 'machine') renderMachine();
-  if (S.tab === 'machines') renderMachines();
+  redraw('machine');
+  redraw('machines');
 }
 
 async function loadTasks() {
@@ -238,7 +256,7 @@ async function loadTasks() {
     S.firstTasks = false;
     const before = busySig();
     S.tasks = list;
-    if (busySig() !== before && S.tab === 'repos') renderRepos();
+    if (busySig() !== before) redraw('repos');
   } catch { return; }
   renderDock();
   if (S.tab === 'activity') renderActivity(false);
@@ -250,11 +268,11 @@ function render() {
   renderBanner();
   const n = S.state.runners.length;
   $('count-runners').textContent = n ? String(n) : '';
-  if (S.tab === 'repos') renderRepos();
-  if (S.tab === 'machine') renderMachine();
-  if (S.tab === 'machines') renderMachines();
-  if (S.tab === 'automation' && !document.querySelector('#tab-automation [data-dirty="1"]')) renderAutomation();
-  if (S.tab === 'settings' && !document.querySelector('#tab-settings [data-dirty="1"]')) renderSettings();
+  redraw('repos');
+  redraw('machine');
+  redraw('machines');
+  redraw('automation');
+  redraw('settings');
 }
 
 function renderHeader() {
@@ -823,7 +841,7 @@ async function loadGhRunners(refresh, only) {
     const d = await api('POST', '/api/repo-runners', { repos, refresh: !!refresh });
     Object.assign(S.ghRunners, d.runners || {});
   } catch { return; }
-  if (S.tab === 'repos') renderRepos();
+  redraw('repos');
 }
 
 function ghState(x) { return x.status === 'online' ? (x.busy ? 'busy' : 'online') : 'offline'; }
@@ -838,7 +856,7 @@ async function repoRunnersDialog(full) {
     runners = (d.runners && d.runners[full]) || [];
     S.ghRunners[full] = runners;
   } catch (e) { mount(body, h('p', { class: 'err' }, e.message)); return; }
-  if (S.tab === 'repos') renderRepos();
+  redraw('repos');
   mount(body,
     runners.length ? runners.map((x) => h('div', { class: 'gh-runner' },
       h('div', { class: 'row' }, h('b', { class: 'grow' }, x.name),
@@ -855,8 +873,8 @@ async function repoRunnersDialog(full) {
 // ---------- runners set up by hand ----------
 async function loadFound(refresh) {
   try { S.found = (await api('GET', '/api/found' + (refresh ? '?refresh=1' : ''))) || []; } catch { return; }
-  if (S.tab === 'repos') renderRepos();
-  if (S.tab === 'machine') renderMachine();
+  redraw('repos');
+  redraw('machine');
 }
 
 function foundHere() {
@@ -1303,7 +1321,8 @@ function mbase(m) { return '/api/machines/' + encodeURIComponent(m.id); }
 async function loadFleet() {
   try { S.fleet = await api('GET', '/api/machines'); } catch { return; }
   syncMachinesTab();
-  if (S.tab === 'machines') { renderMachines(); loadMachineGh(); }
+  redraw('machines');
+  if (S.tab === 'machines') loadMachineGh();
 }
 
 // syncMachinesTab shows the Machines tab only on a main host.
@@ -1321,7 +1340,7 @@ async function loadMachineGh() {
   await Promise.all(S.fleet.machines.filter((m) => m.online).map(async (m) => {
     try { S.mgh[m.id] = await api('GET', mbase(m) + '/api/github-runners'); } catch { /* shown as unknown */ }
   }));
-  if (S.tab === 'machines') renderMachines();
+  redraw('machines');
 }
 
 // watchTask follows a task of a machine and reports how it ended.
@@ -1633,6 +1652,54 @@ function renderDock() {
 }
 
 // ---------- settings ----------
+// goSeconds turns a Go duration string ("10m0s", "1h30m0s") into seconds.
+function goSeconds(d) {
+  let t = 0;
+  for (const [, n, u] of String(d || '').matchAll(/(\d+(?:\.\d+)?)(h|m|s)/g)) t += parseFloat(n) * { h: 3600, m: 60, s: 1 }[u];
+  return t;
+}
+
+// intervalField is the "Check for updates every" setting: a number and a
+// unit, so there is no format to get wrong, with the result spelled out live.
+function intervalField(card, cfg) {
+  const units = [['minutes', 60], ['hours', 3600], ['days', 86400]];
+  const cur = goSeconds(cfg.update_interval);
+  const [u0, f0] = cur ? units.slice().reverse().find(([, f]) => cur % f === 0) || units[0] : ['hours', 3600];
+  const num = h('input', { type: 'number', min: 1, step: 1, value: cur ? String(cur / f0) : '6', 'aria-label': 'Update check interval', style: 'width:6em' });
+  const unit = h('select', { 'aria-label': 'Unit' }, units.map(([n]) => h('option', { value: n, selected: n === u0 }, n)));
+  const say = h('span', { class: 'hint' });
+  const save = h('button', { class: 'btn' }, 'Save');
+  const secs = () => parseFloat(num.value) * units.find(([n]) => n === unit.value)[1];
+  const words = (t) => { const [n, f] = units.slice().reverse().find(([, f]) => t >= f && t % f === 0) || ['minutes', 60]; const v = t / f; return v + ' ' + (v === 1 ? n.slice(0, -1) : n); };
+  const check = () => {
+    const t = secs();
+    let err = '';
+    if (!(t > 0)) err = 'Enter a number.';
+    else if (t < 300) err = 'At least 5 minutes, so GitHub is not asked too often.';
+    else if (t > 7 * 86400) err = 'At most 7 days.';
+    say.className = err ? 'err' : 'hint';
+    say.textContent = err || (t === 6 * 3600 ? 'Checks every 6 hours (the default).' : 'Checks every ' + words(t) + '.');
+    save.disabled = !!err;
+    return err ? 0 : t;
+  };
+  const edited = () => { markDirty(card); check(); };
+  num.oninput = edited; unit.onchange = edited;
+  const put = (val, msg) => guard(async () => {
+    cfg.update_interval = val;
+    await api('PUT', '/api/config', cfg);
+    card.removeAttribute('data-dirty');
+    toast(msg);
+    await refreshState();
+  });
+  save.onclick = () => { const t = check(); if (t) put(t === 6 * 3600 ? '' : t + 's', 'Checking for updates every ' + words(t)); };
+  num.onkeydown = (e) => { if (e.key === 'Enter') save.click(); };
+  check();
+  return h('div', { class: 'field' },
+    h('div', { class: 'row' }, h('label', { class: 'muted small' }, 'Check every '), num, unit, save,
+      cur ? h('button', { class: 'btn ghost', onclick: () => put('', 'Checking for updates every 6 hours (default)') }, 'Use default') : null),
+    say);
+}
+
 function renderSettings() {
   const el = $('tab-settings');
   const st = S.state;
@@ -1678,7 +1745,8 @@ function renderSettings() {
   const u = st.update || {};
   const autoUpdate = cfg.auto_update !== false;
   const newer = u.latest && u.latest !== st.version && u.note !== 'up to date';
-  const updates = h('div', { class: 'card' },
+  const updates = h('div', { class: 'card' });
+  mount(updates,
     h('div', { class: 'card-head' }, h('div', {}, h('h2', {}, 'Updates'),
       h('p', { class: 'muted' }, 'gh-runners checks for a new version every few hours. With auto-update on it installs it and restarts by itself, but only while no runner here is running a job.')),
     sw(autoUpdate, (v) => guard(async () => { cfg.auto_update = v; await api('PUT', '/api/config', cfg); toast('Auto-update ' + (v ? 'on' : 'off')); await refreshState(); }), 'Auto-update')),
@@ -1687,24 +1755,7 @@ function renderSettings() {
       h('dt', {}, 'Latest'), h('dd', {}, (u.latest || 'not checked yet') + (u.checked ? ' · checked ' + ago(u.checked) : '')),
       h('dt', {}, 'Check every'), h('dd', {}, (u.every || '6h') + (u.next ? ' · next ' + new Date(u.next).toLocaleString() : ''))),
     h('div', { class: 'row' },
-      (() => {
-        const inp = h('input', { type: 'text', value: cfg.update_interval && cfg.update_interval !== '0s' ? cfg.update_interval : '', placeholder: '6h (default)', 'aria-label': 'Update check interval', size: 10 });
-        return h('span', {}, h('label', { class: 'muted small' }, 'Check every '), inp, ' ',
-          h('button', { class: 'btn', onclick: () => guard(async () => {
-            const v = inp.value.trim();
-            let d = 0;
-            if (v && v.toLowerCase() !== 'default') {
-              const m = v.match(/^(?:(\d+(?:\.\d+)?)(h|m|s))+$/);
-              if (!m) throw new Error('Use a duration like 10m or 2h, or leave it empty for the default (6h).');
-              d = [...v.matchAll(/(\d+(?:\.\d+)?)(h|m|s)/g)].reduce((a, x) => a + parseFloat(x[1]) * { h: 3600, m: 60, s: 1 }[x[2]], 0);
-              if (d < 300 || d > 7 * 86400) throw new Error('The interval must be between 5m and 7 days (168h).');
-            }
-            cfg.update_interval = v && d ? v : '';
-            await api('PUT', '/api/config', cfg);
-            toast(d ? 'Checking for updates every ' + v : 'Checking for updates every 6h (default)');
-            await refreshState();
-          }) }, 'Save'));
-      })()),
+      intervalField(updates, cfg)),
     u.note ? h('p', {}, u.note) : null,
     u.error ? h('p', { class: 'err' }, 'Last check failed: ' + u.error) : null,
     h('div', { class: 'row' },
