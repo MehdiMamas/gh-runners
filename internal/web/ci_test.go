@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,5 +197,28 @@ func TestCITaskRoutesGuarded(t *testing.T) {
 		if w := do(t, h, req{method: c.method, path: c.path, cookie: true, header: true, origin: "http://evil.example"}); w.Code != http.StatusForbidden {
 			t.Errorf("%s %s cross-origin: %d", c.method, c.path, w.Code)
 		}
+	}
+}
+
+func TestCIBusyNamesQueuedOrRunningTask(t *testing.T) {
+	s := New(Hooks{}, "x")
+	if why := s.CIBusy(); why != "" {
+		t.Fatalf("empty queue: %q", why)
+	}
+	release := make(chan struct{})
+	tk, err := s.ci.add("run", nil, func(io.Writer) error { <-release; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if why := s.CIBusy(); !strings.Contains(why, strconv.Itoa(tk.ID)) {
+		t.Fatalf("busy = %q, want task %d", why, tk.ID)
+	}
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for s.CIBusy() != "" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if why := s.CIBusy(); why != "" {
+		t.Fatalf("after finish: %q", why)
 	}
 }

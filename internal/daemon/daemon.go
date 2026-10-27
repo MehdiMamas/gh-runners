@@ -79,6 +79,8 @@ type Daemon struct {
 
 	updateNow chan struct{}
 	upd       control.UpdateState
+	// ciBusy names the queued or running Local CI task, or "" when none.
+	ciBusy func() string
 
 	tokMu    sync.Mutex
 	tok      string
@@ -162,6 +164,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		Member:      d.member,
 	}, uiSecret)
 	d.member.API = dash.FleetAPI()
+	d.ciBusy = dash.CIBusy
 	d.member.OnChange = func() {
 		d.resetClient()
 		dash.Reset()
