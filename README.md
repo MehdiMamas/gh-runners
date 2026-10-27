@@ -199,6 +199,22 @@ How the PCs talk, in plain words:
   registration, runner lists and labels, workflow files for the label hints,
   queued jobs for on-demand runners).
 
+## Local CI (no admin access)
+
+For a repo where you cannot add runners or branch protection, `gh-runners ci` runs the repo's `.github/workflows/ci.yml` on your own machine and reports back on the pull request.
+
+```
+gh-runners ci run owner/repo 12 --dry-run   # run the jobs here, print a table, post nothing
+gh-runners ci config owner/repo --post on   # turn posting on (off by default)
+gh-runners ci config owner/repo --merge on  # squash-merge when all jobs passed and the PR is approved (off by default)
+gh-runners ci watch owner/repo              # poll every minute and run each new head
+```
+
+- Only the jobs the changed files select run, by the workflow's own path filters. Jobs that need secrets, another OS, or an action it does not know are skipped or marked unsupported, never guessed.
+- Pull requests from forks, and from authors not on the allowlist (default: you), never run on their own; read the changes and pass `--approve`.
+- Jobs run with a scrubbed environment (no tokens), and jobs that start the Firebase emulators take turns.
+- With posting on, each job is a `local-ci/<job>` status, the aggregate job is the plain `ci-passed` status, and one PR comment holds the table. Logs are under `~/.gh-runners/ci/`.
+
 ## Pause a machine
 
 Pause stops everything gh-runners runs on one machine at once: every runner and
