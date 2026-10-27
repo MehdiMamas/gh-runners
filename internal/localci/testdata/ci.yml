@@ -1,0 +1,326 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      backend: ${{ steps.f.outputs.backend }}
+      dashboard: ${{ steps.f.outputs.dashboard }}
+      rules: ${{ steps.f.outputs.rules }}
+      legacy: ${{ steps.f.outputs.legacy }}
+      mobile: ${{ steps.f.outputs.mobile }}
+      deploy_plan: ${{ steps.f.outputs.deploy_plan }}
+      legacy_golden: ${{ steps.f.outputs.legacy_golden }}
+      legacy_two_screen: ${{ steps.f.outputs.legacy_two_screen }}
+      dashboard_e2e: ${{ steps.f.outputs.dashboard_e2e }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dorny/paths-filter@v3
+        id: f
+        with:
+          filters: |
+            backend:
+              - 'aces_backend/**'
+              - 'packages/shared/**'
+              - '.nvmrc'
+              - '.github/workflows/ci.yml'
+            dashboard:
+              - 'aces_dashboard/**'
+              - 'packages/shared/**'
+              - 'design/tokens/**'
+              - '.nvmrc'
+              - '.github/workflows/ci.yml'
+            rules:
+              - 'firebase/**'
+              - 'firebase.json'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.nvmrc'
+              - '.github/workflows/ci.yml'
+            legacy:
+              - 'aces_dashboard/src/data/legacy/**'
+              - 'aces_dashboard/package.json'
+              - 'aces_dashboard/package-lock.json'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.nvmrc'
+              - '.github/workflows/ci.yml'
+            legacy_two_screen:
+              - 'aces_dashboard/src/**'
+              - 'aces_dashboard/test/legacy-golden/**'
+              - 'aces_dashboard/package.json'
+              - 'aces_dashboard/package-lock.json'
+              - 'aces_dashboard/vite.config.*'
+              - 'aces_backend/integration/bridge/fixtures.js'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.nvmrc'
+              - '.github/workflows/ci.yml'
+            dashboard_e2e:
+              - 'aces_dashboard/**'
+              - 'packages/shared/**'
+              - 'aces_backend/**'
+              - 'firebase/**'
+              - 'firestore.rules'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.nvmrc'
+              - '.github/workflows/ci.yml'
+            legacy_golden:
+              - 'aces_dashboard/test/legacy-golden/**'
+              - 'aces_backend/integration/bridge/fixtures.js'
+              - 'firebase.json'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.nvmrc'
+              - '.github/workflows/ci.yml'
+            mobile:
+              - 'aces_mobile/**'
+              - 'packages/shared/**'
+              - 'design/tokens/**'
+              - '.github/workflows/ci.yml'
+            deploy_plan:
+              - 'scripts/deploy-*.sh'
+              - '.github/workflows/deploy.yml'
+              - '.github/workflows/ci.yml'
+
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aces_backend
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: aces_backend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+
+  dashboard:
+    needs: changes
+    if: needs.changes.outputs.dashboard == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aces_dashboard
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: aces_dashboard/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  rules:
+    needs: changes
+    if: needs.changes.outputs.rules == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - run: java -version
+      - run: npm run test:rules
+
+  legacy-golden:
+    needs: changes
+    if: needs.changes.outputs.legacy_golden == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            aces_dashboard/test/legacy-golden/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - run: npm ci
+        working-directory: aces_dashboard/test/legacy-golden
+      - run: npx playwright install --with-deps chromium
+        working-directory: aces_dashboard/test/legacy-golden
+      # Records the old dispatcher again and fails when fixtures/ differ.
+      - run: npm run test:legacy-golden
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: legacy-golden-actual
+          path: aces_dashboard/test/legacy-golden/recorded-actual
+          if-no-files-found: ignore
+
+  legacy-two-screen:
+    needs: changes
+    if: needs.changes.outputs.legacy_two_screen == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            aces_dashboard/package-lock.json
+            aces_dashboard/test/legacy-golden/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - run: npm ci
+        working-directory: aces_dashboard
+      - run: npm ci
+        working-directory: aces_dashboard/test/legacy-golden
+      - run: npx playwright install --with-deps chromium
+        working-directory: aces_dashboard/test/legacy-golden
+      # The old dispatcher and the new dashboard side by side on one emulator database.
+      - run: npm run test:legacy-two-screen
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: legacy-two-screen-actual
+          path: aces_dashboard/test/legacy-golden/recorded-actual
+          if-no-files-found: ignore
+
+  # A real browser clicks through the dashboard on the Firebase emulators (Auth + Firestore) with the real backend.
+  dashboard-e2e:
+    needs: changes
+    if: needs.changes.outputs.dashboard_e2e == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            aces_dashboard/package-lock.json
+            aces_backend/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - run: npm ci
+        working-directory: aces_dashboard
+      - run: npm ci
+        working-directory: aces_backend
+      - run: npx playwright install --with-deps chromium
+        working-directory: aces_dashboard
+      - run: npm run test:dashboard-e2e
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dashboard-e2e-report
+          path: |
+            aces_dashboard/e2e/playwright-report
+            aces_dashboard/e2e/test-results
+          if-no-files-found: ignore
+
+  legacy-e2e:
+    needs: changes
+    if: needs.changes.outputs.legacy == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            aces_dashboard/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - run: npm ci
+        working-directory: aces_dashboard
+      - run: npm run test:legacy
+
+  mobile:
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aces_mobile
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.41.9
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - run: sh ios/scripts/next-build-number-test.sh
+
+  deploy-plan:
+    needs: changes
+    if: needs.changes.outputs.deploy_plan == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - run: sh scripts/deploy-plan-test.sh
+
+  # The one check branch protection requires. Passes when every job above
+  # passed or was skipped by its path filter; fails on any failure or cancel.
+  ci-passed:
+    if: always()
+    needs: [changes, backend, dashboard, rules, legacy-golden, legacy-two-screen, dashboard-e2e, legacy-e2e, mobile, deploy-plan]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Results: $RESULTS"
+          for r in $RESULTS; do
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+              echo "A job ended with: $r"
+              exit 1
+            fi
+          done
