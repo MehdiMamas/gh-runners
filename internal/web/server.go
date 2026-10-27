@@ -259,6 +259,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/ci/tasks/{id}/next", s.postCINext)
 	mux.HandleFunc("DELETE /api/ci/tasks/{id}", s.deleteCITask)
 	mux.HandleFunc("GET /api/ci/runs/{id}/logs/{job}", s.getCILog)
+	mux.HandleFunc("POST /api/feedback/preview", s.postFeedbackPreview)
+	mux.HandleFunc("POST /api/feedback", s.postFeedback)
 	return mux
 }
 

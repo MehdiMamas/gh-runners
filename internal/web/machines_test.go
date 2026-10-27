@@ -214,6 +214,8 @@ func TestMachineAllowlist(t *testing.T) {
 		{"POST", "/api/runners-dir"},
 		{"POST", "/api/adopt"},
 		{"GET", "/api/doctor"},
+		{"POST", "/api/feedback"},
+		{"POST", "/api/feedback/preview"},
 		{"POST", "/api/sync/apply"},
 		{"POST", "/api/machines/leave"},
 		{"POST", "/api/machines/x/pause"},

@@ -338,3 +338,8 @@ body.locked { display: grid; place-items: center; min-height: 100vh; padding: 16
 .ci-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .ci-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 4px 6px; border-bottom: 1px solid var(--border); }
 .ci-table td { padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+
+.fb-check { display: flex; align-items: center; gap: 6px; font-size: 13px; margin: 6px 0; }
+.fb-out { margin-top: 10px; }
+.fb-warn { color: var(--warn, #b45309); }
+dialog textarea { width: 100%; resize: vertical; margin-bottom: 8px; }

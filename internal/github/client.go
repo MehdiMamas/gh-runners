@@ -529,3 +529,17 @@ func (c *Client) RunJobs(ctx context.Context, owner, repo string, runID int64) (
 	_, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/actions/runs/%d/jobs?filter=latest&per_page=100", url.PathEscape(owner), url.PathEscape(repo), runID), nil, &r)
 	return r.Jobs, err
 }
+
+// NewIssue is a created issue.
+type NewIssue struct {
+	Number  int    `json:"number"`
+	HTMLURL string `json:"html_url"`
+}
+
+// CreateIssue opens an issue as the token's user.
+func (c *Client) CreateIssue(ctx context.Context, owner, repo, title, body string, labels []string) (NewIssue, error) {
+	var out NewIssue
+	_, err := c.do(ctx, http.MethodPost, "/repos/"+owner+"/"+repo+"/issues",
+		map[string]any{"title": title, "body": body, "labels": labels}, &out)
+	return out, err
+}

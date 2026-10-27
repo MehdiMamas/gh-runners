@@ -266,13 +266,66 @@ function renderHeader() {
     st.paused ? h('span', { class: 'pill warn' }, 'Paused') : null,
     h('button', { class: 'btn small pause-btn' + (st.paused ? ' primary' : ''), title: st.paused ? 'Start the runners again' : 'Stop every runner and all background work on this computer until you resume', onclick: () => setPaused(null, !st.paused) }, st.paused ? 'Resume' : 'Pause this machine'));
   const a = st.auth;
+  const fb = h('button', { class: 'btn small', title: 'Report a problem or an idea, with logs, as a GitHub issue', onclick: feedbackDialog }, 'Feedback');
   if (a.signed_in) {
-    mount($('account'),
+    mount($('account'), fb,
       a.avatar ? h('img', { class: 'avatar', src: a.avatar + (a.avatar.includes('?') ? '&' : '?') + 's=52', alt: '' }) : null,
       h('span', { class: 'login' }, a.login));
   } else {
-    mount($('account'), h('button', { class: 'btn primary', onclick: signIn }, 'Sign in to GitHub'));
+    mount($('account'), fb, h('button', { class: 'btn primary', onclick: signIn }, 'Sign in to GitHub'));
   }
+}
+
+// feedbackDialog: tell what happened, pick what to attach, read the exact
+// scrubbed text, then send it as an issue under the user's own GitHub sign-in.
+async function feedbackDialog() {
+  if (!S.ci) await loadCI();
+  const runs = ((S.ci && S.ci.runs) || []).slice(0, 15);
+  const text = h('textarea', { rows: 4, placeholder: 'What happened? What did you expect?', 'aria-label': 'What happened' });
+  const run = h('select', { 'aria-label': 'Local CI run to attach' }, h('option', { value: '' }, 'No Local CI run'),
+    runs.map((r) => h('option', { value: r.id }, r.repo + (r.pr ? ' #' + r.pr : '') + (r.title ? ' · ' + r.title : '') + (r.passed ? '' : ' (failed)'))));
+  const doctor = h('input', { type: 'checkbox', checked: true });
+  const daemon = h('input', { type: 'checkbox' });
+  const out = h('div', { class: 'fb-out' });
+  const note = h('p', { class: 'hint' }, 'Nothing is sent until you press Send. Tokens, e-mail addresses and your home folder are removed first, and you read the exact text below.');
+  let body = '';
+  const send = h('button', { class: 'btn primary', disabled: true }, 'Send as GitHub issue');
+  const payload = () => ({ text: text.value, run_id: run.value, doctor: doctor.checked, daemon_log: daemon.checked });
+  const preview = h('button', { class: 'btn' }, 'Preview');
+  preview.onclick = () => guard(async () => {
+    if (!text.value.trim()) { toast('Write what happened first', true); return; }
+    preview.disabled = true;
+    try {
+      const v = await api('POST', '/api/feedback/preview', payload());
+      if (!v.signed_in) {
+        body = '';
+        send.disabled = true;
+        mount(out, h('p', { class: 'fb-warn' }, v.message || 'Sign in to GitHub first.'),
+          h('button', { class: 'btn', onclick: () => { closeDialog(); signIn(); } }, 'Sign in to GitHub'));
+        return;
+      }
+      body = v.body;
+      send.disabled = false;
+      mount(out, h('p', { class: 'hint' }, 'Will be filed as ' + v.login + ' in MehdiMamas/gh-runners:'), h('pre', { class: 'log' }, v.body));
+    } finally { preview.disabled = false; }
+  });
+  text.oninput = () => { send.disabled = true; body = ''; };
+  send.onclick = () => guard(async () => {
+    send.disabled = true;
+    const v = await api('POST', '/api/feedback', Object.assign(payload(), { body }));
+    mount(out, h('p', {}, 'Sent. ', h('a', { href: v.url, target: '_blank', rel: 'noopener' }, 'Issue #' + v.number)));
+    toast('Feedback sent');
+  });
+  openDialog({
+    title: 'Send feedback',
+    wide: true,
+    body: [text,
+      h('label', { class: 'field' }, 'Attach a Local CI run (its logs)', run),
+      h('label', { class: 'fb-check' }, doctor, ' Health check output'),
+      h('label', { class: 'fb-check' }, daemon, ' End of the background log'),
+      note, out],
+    foot: [h('button', { class: 'btn', onclick: closeDialog }, 'Close'), preview, send],
+  });
 }
 
 function renderBanner() {
