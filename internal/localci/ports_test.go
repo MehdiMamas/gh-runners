@@ -300,3 +300,30 @@ func TestEmulatorJobsSerializedAndBlocked(t *testing.T) {
 		}
 	}
 }
+
+func TestHolderOf(t *testing.T) {
+	root := "/h/ci"
+	cwds := map[int]string{
+		10: "/h/ci/fleet/jobs/abcd/src/functions",
+		11: "/h/ci/octo-repo/pr7-abc1234-1/build/src",
+		12: "/home/me/other",
+		13: "/h/ci/fleet/jobs/dead (deleted)",
+	}
+	cwdOf := func(pid int) string { return cwds[pid] }
+	live := func(f string) bool { return f == filepath.FromSlash("/h/ci/fleet/jobs/abcd") }
+	for _, c := range []struct {
+		pid  string
+		want holder
+	}{
+		{"10", holder{Live: filepath.FromSlash("/h/ci/fleet/jobs/abcd")}},
+		{"11", holder{Stale: filepath.FromSlash("/h/ci/octo-repo/pr7-abc1234-1")}},
+		{"12", holder{}},
+		{"13", holder{Stale: filepath.FromSlash("/h/ci/fleet/jobs/dead")}},
+		{"", holder{}},
+		{"99", holder{}},
+	} {
+		if got := holderOf(root, c.pid, cwdOf, live); got != c.want {
+			t.Errorf("pid %q: %+v, want %+v", c.pid, got, c.want)
+		}
+	}
+}

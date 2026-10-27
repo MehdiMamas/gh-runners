@@ -53,6 +53,21 @@ func listCwds() []procCwd {
 	return out
 }
 
+// procCwdOf returns the working folder of one process, "" when unknown.
+func procCwdOf(pid int) string {
+	if runtime.GOOS == "linux" {
+		c, _ := os.Readlink("/proc/" + strconv.Itoa(pid) + "/cwd")
+		return c
+	}
+	b, _ := exec.Command("lsof", "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn").Output()
+	for _, line := range bytes.Split(b, []byte("\n")) {
+		if len(line) > 1 && line[0] == 'n' {
+			return string(line[1:])
+		}
+	}
+	return ""
+}
+
 // killPIDs sends SIGTERM to each process and its group (the job started its
 // processes in their own group), then SIGKILL to what is left.
 func killPIDs(pids []int) {
