@@ -315,3 +315,78 @@ func TestCIRunWhileSamePRRunningQueuesOne(t *testing.T) {
 		t.Fatalf("third: %v existing=%v id=%d pending=%d", err, existing, b.ID, pendingCount(s))
 	}
 }
+
+func TestCIEventsAPI(t *testing.T) {
+	s, h := setup(t)
+	dir := filepath.Join(store.Home(), "ci", "o-r", "pr1-abc-1")
+	_ = os.MkdirAll(dir, 0o755)
+	ev := localci.OpenEvents(dir)
+	ev.Add("queued", "Queued Local CI for PR #1.")
+	ev.AddEvent(localci.Event{Kind: "job_finished", Job: "a", Machine: "mac", Status: "PASS", Text: "Job a passed on mac."})
+	s.addCIRun(ciRun{ID: "r1", Repo: "o/r", PR: 1, Dir: dir,
+		Outcome: localci.Outcome{State: localci.NotPosted, Reason: "No comment: posting is off", Next: "Turn it on"}})
+
+	var out struct {
+		Events []localci.Event `json:"events"`
+	}
+	if code := api(t, h, "GET", "/api/ci/runs/r1/events", "", &out); code != http.StatusOK || len(out.Events) != 2 {
+		t.Fatalf("events: %d %+v", code, out)
+	}
+	if out.Events[1].Machine != "mac" || out.Events[0].Kind != "queued" {
+		t.Errorf("events = %+v", out.Events)
+	}
+	// The outcome is part of the list of runs.
+	var list struct {
+		Runs []ciRun `json:"runs"`
+	}
+	api(t, h, "GET", "/api/ci", "", &list)
+	if len(list.Runs) != 1 || list.Runs[0].Outcome.Next != "Turn it on" {
+		t.Errorf("runs = %+v", list.Runs)
+	}
+	if code := api(t, h, "GET", "/api/ci/runs/nope/events", "", nil); code != http.StatusNotFound {
+		t.Errorf("unknown run: %d", code)
+	}
+	// A folder outside the CI folder is never read.
+	s.addCIRun(ciRun{ID: "bad", Repo: "o/r", PR: 2, Dir: store.Home()})
+	if code := api(t, h, "GET", "/api/ci/runs/bad/events", "", nil); code != http.StatusNotFound {
+		t.Errorf("outside folder: %d", code)
+	}
+}
+
+func TestCILiveRunAndLog(t *testing.T) {
+	_, h := setup(t)
+	dir := filepath.Join(store.Home(), "ci", "o-r", "pr5-def-2")
+	_ = os.MkdirAll(filepath.Join(dir, "logs"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "logs", "build.log"), []byte("compiling\n"), 0o644)
+	setJobs, done := localci.StartRunning(localci.RunningRun{Repo: "o/r", PR: 5, SHA: "def5678", Dir: dir})
+	defer done()
+	setJobs([]string{"build", "test"})
+	ev := localci.OpenEvents(dir)
+	ev.AddEvent(localci.Event{Kind: "job_started", Job: "build", Text: "Job build started."})
+
+	var live struct {
+		Runs []liveRun `json:"runs"`
+	}
+	if code := api(t, h, "GET", "/api/ci/live", "", &live); code != http.StatusOK || len(live.Runs) != 1 {
+		t.Fatalf("live: %d %+v", code, live)
+	}
+	r := live.Runs[0]
+	if r.PR != 5 || len(r.JobStates) != 2 || r.JobStates[0].State != "running" || r.JobStates[1].State != "queued" {
+		t.Errorf("live run = %+v", r)
+	}
+	var lg map[string]string
+	if code := api(t, h, "GET", "/api/ci/runs/"+r.ID+"/logs/build", "", &lg); code != http.StatusOK || !strings.Contains(lg["text"], "compiling") {
+		t.Errorf("live log: %d %v", code, lg)
+	}
+	var evs struct {
+		Events []localci.Event `json:"events"`
+	}
+	if code := api(t, h, "GET", "/api/ci/runs/"+r.ID+"/events", "", &evs); code != http.StatusOK || len(evs.Events) != 1 {
+		t.Errorf("live events: %d %+v", code, evs)
+	}
+	done()
+	api(t, h, "GET", "/api/ci/live", "", &live)
+	if len(live.Runs) != 0 {
+		t.Errorf("ended run still live: %+v", live.Runs)
+	}
+}

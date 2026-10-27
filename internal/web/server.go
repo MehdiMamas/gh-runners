@@ -261,6 +261,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/ci/runs/{id}/logs/{job}", s.getCILog)
 	mux.HandleFunc("POST /api/feedback/preview", s.postFeedbackPreview)
 	mux.HandleFunc("POST /api/feedback", s.postFeedback)
+	mux.HandleFunc("GET /api/ci/runs/{id}/events", s.getCIEvents)
+	mux.HandleFunc("GET /api/ci/live", s.getCILive)
 	return mux
 }
 

@@ -185,6 +185,17 @@ func (s *Server) getCITask(w http.ResponseWriter, r *http.Request) {
 // getCILog is the end of one job's log of a recorded run.
 func (s *Server) getCILog(w http.ResponseWriter, r *http.Request) {
 	id, job := r.PathValue("id"), r.PathValue("job")
+	for _, rr := range localci.RunningRuns() {
+		if rr.ID != id || !inCIFolder(rr.Dir) {
+			continue
+		}
+		text, err := tailFile(filepath.Join(rr.Dir, "logs", filepath.Base(job)+".log"), lineCount(r))
+		if err != nil {
+			text = "No log yet for this job (" + err.Error() + ")."
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"text": text})
+		return
+	}
 	for _, run := range s.ciRuns() {
 		if run.ID != id {
 			continue
@@ -214,6 +225,112 @@ func (s *Server) getCILog(w http.ResponseWriter, r *http.Request) {
 	fail(w, http.StatusNotFound, fmt.Errorf("no job %s in run %s", job, id))
 }
 
+// runDir finds the folder of a run by its ID: a recorded run or one going on.
+func (s *Server) runDir(id string) (string, bool) {
+	for _, run := range s.ciRuns() {
+		if run.ID == id && run.Dir != "" {
+			return run.Dir, true
+		}
+	}
+	for _, r := range localci.RunningRuns() {
+		if r.ID == id {
+			return r.Dir, true
+		}
+	}
+	return "", false
+}
+
+// inCIFolder reports whether path is under the CI folder.
+func inCIFolder(path string) bool {
+	root := filepath.Join(store.Home(), "ci") + string(filepath.Separator)
+	return strings.HasPrefix(filepath.Clean(path), root)
+}
+
+// getCIEvents is the feed of one run, recorded or going on.
+func (s *Server) getCIEvents(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	dir, ok := s.runDir(id)
+	if !ok || !inCIFolder(dir) {
+		fail(w, http.StatusNotFound, fmt.Errorf("no event feed for run %s", id))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": localci.ReadEvents(dir)})
+}
+
+// liveRun is a run going on now, as the dashboard shows it.
+type liveRun struct {
+	localci.RunningRun
+	JobStates []liveJob `json:"job_states"`
+}
+
+type liveJob struct {
+	Job     string    `json:"job"`
+	State   string    `json:"state"` // queued, running, or the result: pass, fail, skipped, unsupported, blocked
+	Machine string    `json:"machine,omitempty"`
+	Started time.Time `json:"started,omitempty"`
+	Ended   time.Time `json:"ended,omitempty"`
+	Reason  string    `json:"reason,omitempty"`
+}
+
+// liveRuns lists the runs going on, with each job's state from the feed and
+// the machine of the jobs that run now from the active-job files.
+func liveRuns() []liveRun {
+	active := localci.ActiveJobs()
+	out := []liveRun{}
+	for _, r := range localci.RunningRuns() {
+		lr := liveRun{RunningRun: r, JobStates: []liveJob{}}
+		idx := map[string]int{}
+		for _, j := range r.Jobs {
+			idx[j] = len(lr.JobStates)
+			lr.JobStates = append(lr.JobStates, liveJob{Job: j, State: "queued"})
+		}
+		get := func(name string) *liveJob {
+			if i, ok := idx[name]; ok {
+				return &lr.JobStates[i]
+			}
+			idx[name] = len(lr.JobStates)
+			lr.JobStates = append(lr.JobStates, liveJob{Job: name, State: "queued"})
+			return &lr.JobStates[len(lr.JobStates)-1]
+		}
+		for _, e := range localci.ReadEvents(r.Dir) {
+			if e.Job == "" {
+				continue
+			}
+			switch e.Kind {
+			case "job_started":
+				j := get(e.Job)
+				j.State, j.Started = "running", e.Time
+			case "job_finished":
+				j := get(e.Job)
+				j.State, j.Ended, j.Machine = e.Status, e.Time, e.Machine
+				if j.Started.IsZero() {
+					j.Started = e.Time
+				}
+				if e.Status != string(localci.Pass) {
+					j.Reason = e.Text
+				}
+			}
+		}
+		for i := range lr.JobStates {
+			j := &lr.JobStates[i]
+			if j.State != "running" {
+				continue
+			}
+			for _, a := range active {
+				if a.Repo == r.Repo && a.PR == r.PR && a.Job == j.Job {
+					j.Machine = a.Machine
+				}
+			}
+		}
+		out = append(out, lr)
+	}
+	return out
+}
+
+func (s *Server) getCILive(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"runs": liveRuns()})
+}
+
 func orDash(s string) string {
 	if s == "" {
 		return "-"
@@ -236,6 +353,12 @@ func (s *Server) queueCI(owner, repo string, pr int, dry, approve, auto bool) (*
 	if dry {
 		title += " (dry run)"
 	}
+	var before []localci.Event
+	queuedAt := time.Now()
+	if auto {
+		before = append(before, localci.Event{Time: queuedAt, Kind: "head", Text: fmt.Sprintf("The watcher saw a new commit on PR #%d.", pr)})
+	}
+	before = append(before, localci.Event{Time: queuedAt, Kind: "queued", Text: fmt.Sprintf("Queued Local CI for PR #%d.", pr)})
 	return s.ci.addKeyed(ciKey(full, pr, dry, approve), title, []string{full}, func(w io.Writer) error {
 		ctx, cancel := context.WithCancel(s.ciContext())
 		defer cancel()
@@ -244,7 +367,7 @@ func (s *Server) queueCI(owner, repo string, pr int, dry, approve, auto bool) (*
 			return nil
 		}
 		start := time.Now()
-		o := localci.Options{Owner: owner, Repo: repo, PR: pr, DryRun: dry, Approve: approve, Out: w}
+		o := localci.Options{Owner: owner, Repo: repo, PR: pr, DryRun: dry, Approve: approve, Out: w, Before: before}
 		var rep localci.Report
 		err := func() error {
 			c, login, err := s.client(ctx)

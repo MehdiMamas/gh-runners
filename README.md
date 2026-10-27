@@ -216,6 +216,7 @@ gh-runners ci watch owner/repo              # poll every minute and run each new
 - Pull requests from forks, and from authors not on the allowlist (default: you), never run on their own; read the changes and pass `--approve`.
 - Jobs run with a scrubbed environment (no tokens), and jobs that start the Firebase emulators take turns.
 - With posting on, each job is a `local-ci/<job>` status, the aggregate job is the plain `ci-passed` status, and one PR comment holds the table. Logs are under `~/.gh-runners/ci/`.
+- The dashboard shows what a run is doing: open a repository's Local CI dialog for the runs going on now (each job with its machine, state and time, and a Log button that opens the tail of its log) and, on every past run, whether a comment was posted. A run that posts nothing on purpose (a job that cannot run on any machine, an infrastructure error, a dry run, posting off, or GitHub refusing the comment) says so with the reason and the next step, and `Details and event feed` lists what happened, step by step. The feed is the `events.jsonl` file in the run's folder.
 
 ### Windows laptops
 

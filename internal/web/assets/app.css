@@ -335,6 +335,13 @@ body.locked { display: grid; place-items: center; min-height: 100vh; padding: 16
 .ci-run { gap: 10px; }
 .ci-run input[type=number] { width: 140px; }
 .ci-run pre.log { align-self: stretch; }
+.ci-outcome { border-left: 3px solid var(--border); padding: 6px 10px; margin: 6px 0; font-size: 13px; background: var(--panel-2); }
+.ci-outcome.ok { border-left-color: var(--ok); background: var(--ok-soft); }
+.ci-outcome.warn { border-left-color: var(--warn); background: var(--warn-soft); }
+.ci-outcome-row td { border-bottom: 0; padding-top: 12px; }
+.ci-live { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 6px 0; }
+.ci-events { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+.ci-events li { padding: 3px 0; border-bottom: 1px solid var(--border); }
 .ci-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .ci-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 4px 6px; border-bottom: 1px solid var(--border); }
 .ci-table td { padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }

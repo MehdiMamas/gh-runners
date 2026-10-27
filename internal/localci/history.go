@@ -30,6 +30,8 @@ type HistoryRun struct {
 	Passed  bool      `json:"passed"`
 	Merged  bool      `json:"merged,omitempty"`
 	Error   string    `json:"error,omitempty"`
+	Dir     string    `json:"dir,omitempty"` // the run folder: logs and the event feed
+	Outcome Outcome   `json:"outcome"`
 }
 
 var historyMu sync.Mutex
@@ -44,8 +46,15 @@ func NewHistoryRun(o Options, auto bool, start time.Time, rep Report, err error)
 		Title: rep.PR.Title, SHA: rep.PR.Head.SHA, Results: rep.Results, Merged: rep.Merged,
 		Passed: err == nil && len(rep.Results) > 0 && rep.AllPassed(),
 	}
+	r.Dir, r.Outcome = rep.Dir, rep.Outcome
 	if err != nil {
 		r.Error = err.Error()
+		if r.Outcome.State == "" {
+			r.Outcome = Outcome{State: NotPosted, Reason: "No comment: the run stopped before it finished: " + err.Error(), Next: "Fix the cause above and run it again."}
+		}
+	}
+	if r.Outcome.State == "" && len(rep.Results) > 0 {
+		r.Outcome = Outcome{State: NotPosted, Reason: "No comment: the run did not finish.", Next: "Run it again."}
 	}
 	return r
 }
