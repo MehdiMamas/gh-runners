@@ -22,18 +22,18 @@ func (e errNoDaemon) Error() string { return "the gh-runners daemon is not runni
 
 // queueCI asks the daemon at addr (host:port) to queue a Local CI run. The
 // secret is only sent as the dashboard cookie, never printed.
-func queueCI(ctx context.Context, addr, secret, repo string, pr int, dry, approve bool) (int, error) {
+func queueCI(ctx context.Context, addr, secret, repo string, pr int, dry, approve bool) (int, bool, error) {
 	body, _ := json.Marshal(map[string]any{"repo": repo, "pr": pr, "dry_run": dry, "approve": approve})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/api/ci/run", bytes.NewReader(body))
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-GHR", "1")
 	req.AddCookie(&http.Cookie{Name: "ghr_ui", Value: secret})
 	res, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
-		return 0, errNoDaemon{err}
+		return 0, false, errNoDaemon{err}
 	}
 	defer res.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
@@ -42,17 +42,18 @@ func queueCI(ctx context.Context, addr, secret, repo string, pr int, dry, approv
 			Error string `json:"error"`
 		}
 		if json.Unmarshal(data, &e) == nil && e.Error != "" {
-			return 0, fmt.Errorf("the daemon refused the run (%d): %s", res.StatusCode, e.Error)
+			return 0, false, fmt.Errorf("the daemon refused the run (%d): %s", res.StatusCode, e.Error)
 		}
-		return 0, fmt.Errorf("the daemon refused the run (%d)", res.StatusCode)
+		return 0, false, fmt.Errorf("the daemon refused the run (%d)", res.StatusCode)
 	}
 	var out struct {
-		Task int `json:"task"`
+		Task     int  `json:"task"`
+		Existing bool `json:"existing"`
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
-		return 0, fmt.Errorf("unexpected answer from the daemon: %w", err)
+		return 0, false, fmt.Errorf("unexpected answer from the daemon: %w", err)
 	}
-	return out.Task, nil
+	return out.Task, out.Existing, nil
 }
 
 // ciTaskCall sends one request about a queued task (move it next, or cancel
@@ -157,7 +158,7 @@ It needs the daemon to be running (gh-runners ui starts it).`,
 			if err != nil {
 				return err
 			}
-			id, err := queueCI(ctx(cmd), info.Addr, secret, args[0], n, dry, approve)
+			id, existing, err := queueCI(ctx(cmd), info.Addr, secret, args[0], n, dry, approve)
 			if _, down := err.(errNoDaemon); down {
 				return fmt.Errorf("the gh-runners daemon is not reachable at %s; start it with `gh-runners ui`, or run the PR here without the queue with `gh-runners ci run %s %d`", info.Addr, args[0], n)
 			}
@@ -165,7 +166,11 @@ It needs the daemon to be running (gh-runners ui starts it).`,
 				return err
 			}
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "Queued as task %d\n", id)
+			if existing {
+				fmt.Fprintf(out, "Already queued as task %d\n", id)
+			} else {
+				fmt.Fprintf(out, "Queued as task %d\n", id)
+			}
 			fmt.Fprintf(out, "Watch it on the dashboard: http://%s/ (open it with `gh-runners ui`)\n", info.Addr)
 			return nil
 		},

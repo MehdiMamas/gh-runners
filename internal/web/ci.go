@@ -130,9 +130,13 @@ func (s *Server) postCIRun(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, errors.New("give a repository as owner/repo and a pull request number"))
 		return
 	}
-	t, err := s.queueCI(owner, repo, req.PR, req.DryRun, req.Approve, false)
+	t, existing, err := s.queueCI(owner, repo, req.PR, req.DryRun, req.Approve, false)
 	if err != nil {
 		fail(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	if existing {
+		writeJSON(w, http.StatusAccepted, map[string]any{"task": t.ID, "existing": true})
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]int{"task": t.ID})
@@ -217,15 +221,22 @@ func orDash(s string) string {
 	return s
 }
 
+// ciKey is what makes two run requests the same: repository, pull request and
+// the dry-run and approve options.
+func ciKey(full string, pr int, dry, approve bool) string {
+	return fmt.Sprintf("%s#%d/dry=%t/approve=%t", full, pr, dry, approve)
+}
+
 // queueCI queues one run of a pull request. auto marks runs the watch
-// started.
-func (s *Server) queueCI(owner, repo string, pr int, dry, approve, auto bool) (*task, error) {
+// started. At most one run per pull request (and dry/approve kind) waits in
+// the queue: a repeat request returns that task with existing true.
+func (s *Server) queueCI(owner, repo string, pr int, dry, approve, auto bool) (*task, bool, error) {
 	full := owner + "/" + repo
 	title := fmt.Sprintf("Local CI: %s #%d", full, pr)
 	if dry {
 		title += " (dry run)"
 	}
-	return s.ci.add(title, []string{full}, func(w io.Writer) error {
+	return s.ci.addKeyed(ciKey(full, pr, dry, approve), title, []string{full}, func(w io.Writer) error {
 		ctx, cancel := context.WithCancel(s.ciContext())
 		defer cancel()
 		t, _ := w.(*task)
@@ -338,7 +349,7 @@ func (s *Server) ciWatchOnce(ctx context.Context) {
 			if seen[key] || localci.CheckTrust(pr, localci.Allowlist(cfg.CI[full], login), false) != nil {
 				continue
 			}
-			if _, err := s.queueCI(owner, repo, pr.Number, false, false, true); err != nil {
+			if _, _, err := s.queueCI(owner, repo, pr.Number, false, false, true); err != nil {
 				s.h.Log.Printf("local ci: %s #%d: %v", full, pr.Number, err)
 				continue
 			}
