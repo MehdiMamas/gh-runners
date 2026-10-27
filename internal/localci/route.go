@@ -145,7 +145,7 @@ func (d *Dispatcher) RunJob(ctx context.Context, spec JobSpec) Result {
 		if local == nil {
 			local = LocalExecutor{}
 		}
-		if _, emu := spec.Job.Requires(); emu && d.Locks != nil {
+		if spec.Job.StartsServers() && d.Locks != nil {
 			unlock, err := d.Locks.Lock("emulator")
 			if err != nil {
 				return Result{Job: spec.Name, Status: Fail, Reason: "lock: " + err.Error(), Machine: m.Name}

@@ -275,6 +275,9 @@ func (LocalExecutor) RunJob(ctx context.Context, spec JobSpec) Result {
 		}
 	}
 	if failed {
+		if portClashLog(spec.Log) {
+			return finish(Blocked, "port clash with another process")
+		}
 		return finish(Fail, "step failed: "+failedStep)
 	}
 	return finish(Pass, "")
@@ -476,4 +479,22 @@ func copyTree(src, dst string) error {
 		}
 		return nil
 	})
+}
+
+var portClashRe = regexp.MustCompile(`(?i)is already used|EADDRINUSE|address already in use|port taken|Could not start .*port`)
+
+// portClashLog reports whether the tail of a job log shows a port-in-use
+// error: another process held the port, so the job did not really fail.
+func portClashLog(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	const tail = 64 << 10
+	if st, err := f.Stat(); err == nil && st.Size() > tail {
+		f.Seek(st.Size()-tail, io.SeekStart)
+	}
+	b, _ := io.ReadAll(f)
+	return portClashRe.Match(b)
 }
