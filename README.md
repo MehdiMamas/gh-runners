@@ -250,6 +250,12 @@ can resume it.
 - The pause is kept across restarts, sleep and reboots until you resume.
   `list` and `doctor` show it.
 
+## Send feedback
+
+Something broke, or you have an idea? Press **Feedback** at the top of the dashboard, or run `gh-runners feedback "what happened"`. You can attach the health check, the end of the background log and the logs of a Local CI run. Tokens, e-mail addresses and your home folder are removed first, and you read the exact text before anything is sent.
+
+It is filed as an issue in this repository under your own GitHub sign-in. There is no relay and no anonymous path: if you are not signed in, nothing is sent. Your token goes only to api.github.com.
+
 ## Sign in
 
 gh-runners needs a GitHub token with admin rights on the repos it manages. It

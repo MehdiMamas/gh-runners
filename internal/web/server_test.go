@@ -22,6 +22,11 @@ import (
 
 const secret = "s3cret"
 
+type issueCall struct{ auth, body string }
+
+// lastIssue is the last issue the fake GitHub was asked to create.
+var lastIssue atomic.Pointer[issueCall]
+
 // fakeGitHub answers the few API calls the dashboard makes.
 func fakeGitHub(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -35,6 +40,12 @@ func fakeGitHub(t *testing.T) *httptest.Server {
 		}
 		w.Header().Set("X-OAuth-Scopes", "repo")
 		_, _ = io.WriteString(w, `{"login":"octo","name":"Octo Cat","avatar_url":"https://avatars.githubusercontent.com/u/1"}`)
+	})
+	mux.HandleFunc("POST /repos/MehdiMamas/gh-runners/issues", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		lastIssue.Store(&issueCall{auth: r.Header.Get("Authorization"), body: string(b)})
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"number":99,"html_url":"https://github.com/MehdiMamas/gh-runners/issues/99"}`)
 	})
 	mux.HandleFunc("GET /user/repos", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `[
