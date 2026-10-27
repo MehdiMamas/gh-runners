@@ -1028,10 +1028,72 @@ function ciJobLog(run, job) {
     .catch((e) => { pre.textContent = e.message; });
 }
 
+// ciElapsed is a duration since a time, as "1m 05s".
+function ciElapsed(from, to) {
+  const sec = Math.max(0, Math.round(((to ? new Date(to) : new Date()) - new Date(from)) / 1000));
+  return sec >= 60 ? Math.floor(sec / 60) + 'm ' + String(sec % 60).padStart(2, '0') + 's' : sec + 's';
+}
+
+// ciOutcome says in plain words whether a run put a comment on the pull
+// request, and when not, why and what to do.
+function ciOutcome(r) {
+  const o = r.outcome || {};
+  if (!o.state) return null;
+  const posted = o.state === 'posted';
+  return h('div', { class: 'ci-outcome ' + (posted && !o.post_error ? 'ok' : 'warn'), 'data-outcome': o.state },
+    h('div', {}, h('strong', {}, posted ? 'Posted. ' : 'Not posted. '), o.reason || ''),
+    o.next ? h('div', { class: 'small' }, 'Next: ', o.next) : null,
+    o.post_error ? h('div', { class: 'small err' }, 'GitHub said: ' + o.post_error) : null);
+}
+
+// ciEventList renders a run's feed, oldest first.
+function ciEventList(events) {
+  if (!events.length) return h('p', { class: 'muted small' }, 'No events recorded for this run.');
+  return h('ul', { class: 'ci-events' }, events.map((e) => h('li', { class: e.kind === 'error' ? 'err' : '' },
+    h('span', { class: 'muted small', title: e.time }, new Date(e.time).toLocaleTimeString()),
+    ' ', e.text, e.machine ? h('span', { class: 'muted small' }, ' (' + e.machine + ')') : null)));
+}
+
+// ciRunDetails opens a run's outcome, jobs and event feed.
+function ciRunDetails(run) {
+  const feed = h('div', {}, h('p', { class: 'muted small' }, 'Loading ...'));
+  const jobs = (run.results || []).map((x) => h('tr', {},
+    h('td', {}, x.Job), h('td', {}, x.Machine || '-'),
+    h('td', {}, ciStatusPill(x.Status), x.Reason && x.Status !== 'PASS' ? h('span', { class: 'muted small' }, ' ' + x.Reason) : null),
+    h('td', {}, x.Log ? h('button', { class: 'linkbtn small', onclick: () => ciJobLog(run, x.Job) }, 'Log') : null)));
+  openDialog({
+    title: `${run.repo} #${run.pr}${run.sha ? ' · ' + run.sha.slice(0, 7) : ''}`, wide: true, onclose: () => ciDialog(run.repo),
+    body: h('div', {}, ciOutcome(run),
+      jobs.length ? h('table', { class: 'ci-table' }, h('thead', {}, h('tr', {}, ['Job', 'Machine', 'Result', ''].map((t) => h('th', {}, t)))), h('tbody', {}, jobs)) : null,
+      h('h3', { class: 'ci-h' }, 'What happened'), feed),
+  });
+  api('GET', `/api/ci/runs/${encodeURIComponent(run.id)}/events`)
+    .then((d) => mount(feed, ciEventList(d.events || [])))
+    .catch((e) => mount(feed, h('p', { class: 'muted small' }, 'No event feed for this run (' + e.message + ').')));
+}
+
+// ciLiveRuns shows the runs of this repository going on now, each job with
+// its machine, state and time, and a click-to-open log tail.
+function ciLiveRuns(full, runs) {
+  const mine = (runs || []).filter((r) => r.repo === full);
+  if (!mine.length) return h('p', { class: 'muted small', 'data-ci-live-empty': '1' }, 'Nothing is running for this repository right now.');
+  return h('div', { 'data-ci-live': '1' }, mine.map((r) => h('div', { class: 'ci-live' },
+    h('div', {}, h('strong', {}, 'PR #' + r.pr), ' · ' + r.sha.slice(0, 7) + (r.title ? ' · ' + r.title : ''),
+      h('span', { class: 'muted small' }, ' · running for ' + ciElapsed(r.started))),
+    h('table', { class: 'ci-table' }, h('tbody', {}, (r.job_states || []).map((j) => h('tr', {},
+      h('td', {}, j.job),
+      h('td', {}, j.machine ? 'on ' + j.machine : '-'),
+      h('td', {}, j.state === 'running' ? pill('busy') : j.state === 'queued' ? h('span', { class: 'muted small' }, 'waiting') : ciStatusPill(j.state),
+        j.started ? h('span', { class: 'muted small' }, ' ' + ciElapsed(j.started, j.ended)) : null),
+      h('td', {}, j.state === 'queued' ? null : h('button', { class: 'linkbtn small', onclick: () => ciJobLog({ id: r.id, repo: r.repo, pr: r.pr }, j.job) }, 'Log')))))),
+    h('button', { class: 'linkbtn small', onclick: () => ciRunDetails({ id: r.id, repo: r.repo, pr: r.pr, sha: r.sha, results: [] }) }, 'What happened so far'))));
+}
+
 function ciDialog(full) {
   const cur = ciSettingsOf(full);
   const set = { watch: !!cur.watch, post: !!cur.post, merge: !!cur.merge };
   let timer = null;
+  let liveTimer = null;
   const allow = h('input', { type: 'text', value: list(cur.allow), placeholder: (S.state && S.state.auth.login) || 'you', 'aria-label': 'Allowed authors', onchange: () => save() });
   const save = () => guard(async () => {
     await api('PUT', '/api/ci/' + full.split('/').map(encodeURIComponent).join('/'), { ...set, allow: split(allow.value) });
@@ -1085,14 +1147,28 @@ function ciDialog(full) {
     pre);
 
   const recent = h('div', {}, ciRecent(full));
+  const liveBox = h('div', {}, h('p', { class: 'muted small' }, 'Looking ...'));
+  let liveCount = 0;
+  const pollLive = async () => {
+    try {
+      const d = await api('GET', '/api/ci/live');
+      const n = (d.runs || []).filter((r) => r.repo === full).length;
+      mount(liveBox, ciLiveRuns(full, d.runs));
+      if (liveCount > 0 && n === 0) { await loadCI(); mount(recent, ciRecent(full)); }
+      liveCount = n;
+    } catch (e) { /* the next poll tries again */ }
+  };
+  pollLive();
+  liveTimer = setInterval(pollLive, 2000);
   // A run of this repo still going on: follow it.
   const live = S.ci && S.ci.tasks.find((t) => (t.scopes || []).includes(full) && (t.state === 'queued' || t.state === 'running'));
   openDialog({
-    title: 'Local CI: ' + full, wide: true, onclose: () => clearInterval(timer),
+    title: 'Local CI: ' + full, wide: true, onclose: () => { clearInterval(timer); clearInterval(liveTimer); },
     body: h('div', {},
       h('p', { class: 'muted small' }, 'Runs this repository\'s .github/workflows/ci.yml on this machine and your other machines, without adding a runner. Only your pull requests and those of the authors below run on their own.'),
       h('h3', { class: 'ci-h' }, 'Settings'), settings,
       h('h3', { class: 'ci-h' }, 'Run a pull request'), runForm,
+      h('h3', { class: 'ci-h' }, 'Running now'), liveBox,
       h('h3', { class: 'ci-h' }, 'Recent results'), recent),
   });
   if (live) follow(live.id);
@@ -1104,6 +1180,9 @@ function ciRecent(full) {
   const rows = [];
   for (const r of runs) {
     const when = h('span', { class: 'muted small', title: r.started }, ago(r.ended || r.started));
+    const oc = ciOutcome(r);
+    if (oc) rows.push(h('tr', { class: 'ci-outcome-row' }, h('td', { colspan: 6 }, oc,
+      r.dir ? h('button', { class: 'linkbtn small', onclick: () => ciRunDetails(r) }, 'Details and event feed') : null)));
     const head = 'PR #' + r.pr + (r.sha ? ' · ' + r.sha.slice(0, 7) : '') + (r.dry_run ? ' · dry run' : '') + (r.auto ? ' · automatic' : '') + (r.merged ? ' · merged' : '');
     if (!r.results || !r.results.length) {
       rows.push(h('tr', {}, h('td', {}, head), h('td', {}, '-'), h('td', {}, '-'), h('td', { class: 'err' }, r.error || 'Nothing ran'), h('td', {}, when), h('td', {})));

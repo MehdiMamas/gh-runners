@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -33,6 +34,7 @@ type Options struct {
 	Conc     int    // parallel jobs; default NumCPU/2
 	Exec     Executor
 	Out      io.Writer
+	Before   []Event // events from before the run started (head seen, queued), put first in its feed
 }
 
 // Report is the outcome of a run, in workflow order.
@@ -40,6 +42,8 @@ type Report struct {
 	PR      github.PullRequest
 	Results []Result
 	Merged  bool
+	Dir     string  // the run folder: logs and the event feed
+	Outcome Outcome // whether the run posted on the pull request, and why not
 }
 
 // AllPassed reports whether nothing failed or was unsupported.
@@ -129,6 +133,14 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	// Marks which process owns the run, so another daemon's startup sweep
 	// leaves a live run alone.
 	WriteOwner(runDir)
+	rep.Dir = runDir
+	ev := OpenEvents(runDir)
+	for _, e := range o.Before {
+		ev.AddEvent(e)
+	}
+	ev.Add("started", "Run started for PR #%d at %s.", pr.Number, sha[:7])
+	setJobs, runDone := StartRunning(RunningRun{Repo: o.Owner + "/" + o.Repo, PR: o.PR, SHA: sha, Title: pr.Title, Dir: runDir})
+	defer runDone()
 	tarball := filepath.Join(runDir, "source.tgz")
 	if err := c.DownloadTarball(ctx, o.Owner, o.Repo, sha, tarball); err != nil {
 		return rep, fmt.Errorf("download source: %w", err)
@@ -144,6 +156,13 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		}
 	}
 	selected := selectJobs(wf, o.Jobs)
+	var planned []string
+	for _, n := range wf.Order {
+		if selected[n] {
+			planned = append(planned, n)
+		}
+	}
+	setJobs(planned)
 	var tasks []Task
 	for _, n := range wf.Order {
 		if !selected[n] {
@@ -157,12 +176,24 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		tasks = append(tasks, t)
 	}
 
+	var statusMu sync.Mutex
+	statusErr := ""
 	status := func(state, name, desc string) {
 		if !post {
 			return
 		}
 		if err := c.SetStatus(ctx, o.Owner, o.Repo, sha, state, name, desc); err != nil {
 			fmt.Fprintf(o.Out, "could not set status %s: %v\n", name, err)
+			ev.AddEvent(Event{Kind: "error", Text: fmt.Sprintf("Could not set the %s status on GitHub: %v", name, err)})
+			statusMu.Lock()
+			if statusErr == "" {
+				statusErr = fmt.Sprintf("status %s: %v", name, err)
+			}
+			statusMu.Unlock()
+			return
+		}
+		if state != "pending" {
+			ev.AddEvent(Event{Kind: "status", Text: fmt.Sprintf("Status %s set to %s.", name, state)})
 		}
 	}
 	for _, n := range wf.Order {
@@ -179,6 +210,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		res := Decide(wf, j, needs, outputs, changesName == t.Name)
 		if res.Status == "" {
 			ctxName := "local-ci/" + t.Name
+			ev.AddEvent(Event{Kind: "job_started", Job: t.Name, Text: "Job " + t.Name + " started."})
 			status("pending", ctxName, "Running")
 			jobDir := filepath.Join(runDir, t.Name)
 			res = o.Exec.RunJob(ctx, JobSpec{
@@ -210,6 +242,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			}
 		}
 		res.Job = t.Name
+		ev.AddEvent(Event{Kind: "job_finished", Job: t.Name, Machine: res.Machine, Status: string(res.Status), Text: jobEventText(t.Name, res)})
 		fmt.Fprintf(o.Out, "  %-5s %-18s %s\n", res.Status, t.Name, res.Reason)
 		return res
 	}
@@ -226,7 +259,12 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	}
 	fmt.Fprint(o.Out, "\n"+FormatTable(rep.Results))
 
+	finish := func() {
+		ev.AddEvent(Event{Kind: "outcome", Text: rep.Outcome.Summary()})
+	}
 	if rep.HasBlocked() {
+		rep.Outcome = BlockedOutcome(rep.Results)
+		finish()
 		fmt.Fprintln(o.Out, "\nBLOCKED: a job hit an infrastructure error, not a test failure. Nothing was posted or merged; fix it and run again.")
 		return rep, nil
 	}
@@ -238,10 +276,14 @@ func Run(ctx context.Context, o Options) (Report, error) {
 				reasons = append(reasons, x.Reason)
 			}
 		}
+		rep.Outcome = UnsupportedOutcome(rep.Results)
+		finish()
 		fmt.Fprintf(o.Out, "\nNOT SUPPORTED: no machine here can run %s: %s. Nothing was posted or merged.\n", strings.Join(names, ", "), strings.Join(reasons, "; "))
 		return rep, nil
 	}
 	if !post {
+		rep.Outcome = NotPostingOutcome(o.DryRun)
+		finish()
 		return rep, nil
 	}
 	hasAgg := false
@@ -263,7 +305,13 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		},
 	})); err != nil {
 		fmt.Fprintf(o.Out, "could not post the results comment: %v\n", err)
+		ev.AddEvent(Event{Kind: "error", Text: "Could not post the results comment: " + err.Error()})
+		rep.Outcome = CommentFailedOutcome(o.Owner+"/"+o.Repo, err.Error())
+	} else {
+		ev.Add("comment", "Results comment posted on PR #%d.", o.PR)
+		rep.Outcome = PostedOutcome(statusErr)
 	}
+	finish()
 	if o.Settings.Merge && rep.AllPassed() && len(o.Jobs) == 0 {
 		ok, err := c.Approved(ctx, o.Owner, o.Repo, o.PR)
 		switch {
@@ -277,6 +325,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 				fmt.Fprintf(o.Out, "merge failed: %v\n", err)
 			} else {
 				rep.Merged = true
+				ev.Add("merge", "Squash-merged PR #%d.", o.PR)
 				fmt.Fprintln(o.Out, "merged")
 			}
 		}
@@ -390,4 +439,29 @@ func FormatTable(rs []Result) string {
 	}
 	tw.Flush()
 	return b.String()
+}
+
+// jobEventText says in plain words how a job ended.
+func jobEventText(name string, r Result) string {
+	on := ""
+	if r.Machine != "" {
+		on = " on " + r.Machine
+	}
+	took := ""
+	if r.Duration > 0 {
+		took = " in " + r.Duration.Round(time.Second).String()
+	}
+	switch r.Status {
+	case Pass:
+		return "Job " + name + " passed" + took + on + "."
+	case Fail:
+		return "Job " + name + " failed" + took + on + ": " + r.Reason
+	case Skipped:
+		return "Job " + name + " was skipped: " + r.Reason
+	case Unsupported:
+		return "Job " + name + " cannot run here: " + r.Reason
+	case Blocked:
+		return "Job " + name + " hit an infrastructure error" + on + ": " + r.Reason
+	}
+	return "Job " + name + " ended."
 }
