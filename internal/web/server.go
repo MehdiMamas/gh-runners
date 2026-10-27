@@ -104,6 +104,9 @@ func New(h Hooks, secret string) *Server {
 			return nil, ""
 		}
 	}
+	if h.Host != nil {
+		h.Host.SetFleetHandler(s.fleetManageAPI())
+	}
 	s.wfLabels.ttl, s.ghRunners.ttl, s.found.ttl = 5*time.Minute, time.Minute, 2*time.Minute
 	s.spawn = func(logName string, args ...string) error {
 		return service.Spawn(filepath.Join(store.Home(), logName), args...)
@@ -264,6 +267,7 @@ func (s *Server) api() http.Handler {
 	mux.HandleFunc("POST /api/machines/invite", s.postInvite)
 	mux.HandleFunc("POST /api/machines/leave", s.postLeave)
 	mux.HandleFunc("POST /api/machines/{id}/remove", s.postRemoveMachine)
+	mux.HandleFunc("POST /api/machines/{id}/manage", s.postManage)
 	mux.HandleFunc("/api/machines/{id}/api/{rest...}", s.proxyMachine)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-GHR") != "1" {

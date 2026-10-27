@@ -139,7 +139,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			os.Remove(store.DaemonPath())
 		}
 	}()
-	d.host = &fleet.Host{Dir: store.FleetDir(), Token: d.hostToken, Log: d.Log.Printf, CIRepos: ciRepos}
+	d.host = &fleet.Host{Dir: store.FleetDir(), Token: d.hostToken, Log: d.Log.Printf, CIRepos: ciRepos, Info: d.fleetInfo}
 	d.member = &fleet.Member{
 		Dir: store.FleetDir(), Info: d.fleetInfo, Log: d.Log.Printf,
 		CIDir:        filepath.Join(store.Home(), "ci", "fleet"),

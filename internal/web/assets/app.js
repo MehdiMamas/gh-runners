@@ -1100,11 +1100,12 @@ function ciLiveCard(st) {
 
 // memberNotice tells a fleet member where its machines are managed.
 function memberNotice() {
-  const m = S.fleet && !S.fleet.main_host && S.fleet.member;
-  if (!m || !m.joined) return null;
+  const m0 = S.fleet && !S.fleet.main_host && S.fleet.member;
+  const m = m0 && Object.assign({}, m0, { can_manage: !!S.fleet.can_manage });
+  if (!m0 || !m0.joined) return null;
   return h('div', { class: 'notice' }, h('div', { class: 'grow' },
     'This computer is part of ' + (m.host_name || 'a main host') + '\'s fleet' + (m.connected ? '' : ' (not connected right now)') +
-    '. Other machines are managed from the main host\'s dashboard; its Machines tab shows this computer too.'));
+    (m.can_manage ? '. You can manage the fleet from the Machines tab.' : '. Other machines are managed from the main host\'s dashboard; its Machines tab shows this computer too. The main host can allow this computer to manage the fleet.')));
 }
 
 function renderMachine() {
@@ -1167,7 +1168,7 @@ async function loadFleet() {
 
 // syncMachinesTab shows the Machines tab only on a main host.
 function syncMachinesTab() {
-  const on = !!(S.fleet && S.fleet.main_host);
+  const on = !!(S.fleet && (S.fleet.main_host || S.fleet.can_manage));
   document.querySelector('#tabs button[data-tab="machines"]').classList.toggle('hidden', !on);
   $('count-machines').textContent = on && S.fleet.machines.length ? String(S.fleet.machines.length) : '';
   if (!on && S.tab === 'machines') selectTab('machine');
@@ -1214,6 +1215,11 @@ function renderMachines() {
   const f = S.fleet;
   if (!st || !f) return;
   const members = f.machines || [];
+  if (!f.main_host) {
+    // A member the main host lets manage the fleet: the host is in the list.
+    mount(el, h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Machines')), members.map(machineCard));
+    return;
+  }
   const mine = h('div', { class: 'card' },
     h('div', { class: 'card-head' },
       h('div', {}, h('div', { class: 'row' }, h('h2', {}, st.hostname), h('span', { class: 'pill plain info' }, 'Main host'), st.paused ? h('span', { class: 'pill warn' }, 'Paused') : null),
@@ -1269,7 +1275,10 @@ function machineCard(m) {
         (info.paused || off) ? null : (info.runners || []).some((r) => r.state === 'stopped') ? [btn('Run what was on before it closed', () => startSet(m, 'last')), btn('Run all', () => startSet(m, 'all'))] : null,
         btn('Add runner', () => addToMachine(m)),
         btn('Update gh-runners', () => updateMachine(m)),
-        h('button', { class: 'btn small danger', onclick: () => removeMachine(m) }, 'Remove machine'))),
+        (S.fleet.can_manage || m.id === 'host') ? null : h('button', { class: 'btn small danger', onclick: () => removeMachine(m) }, 'Remove machine'))),
+    S.fleet.main_host && m.id !== 'host' ? h('div', { class: 'manage-switch' },
+      sw(!!m.manage, (on) => setManage(m, on), 'Can manage the fleet'),
+      h('p', { class: 'muted small' }, 'Lets that computer start, stop and watch runners here and on the other machines.')) : null,
     info.paused ? h('p', { class: 'muted small' }, 'Paused: no runner, on-demand runner, sync or update runs on this machine until you resume it.') : null,
     off ? h('p', { class: 'muted small' }, 'Offline: its runners keep running, but you can change them here only when it is back.') : null,
     rows.length ? h('div', { class: 'mrunners' }, rows) : h('p', { class: 'muted' }, 'No runners on this machine yet.'),
@@ -1299,6 +1308,14 @@ async function updateMachine(m) {
     if (res === null) return;
     toast('Updating gh-runners on ' + machineName(m) + ' ...');
     watchTask(m, res, 'Update gh-runners');
+  });
+}
+
+async function setManage(m, on) {
+  await guard(async () => {
+    await api('POST', mbase(m) + '/manage', { on });
+    toast(machineName(m) + (on ? ' can now manage the fleet' : ' can no longer manage the fleet'));
+    await loadFleet();
   });
 }
 

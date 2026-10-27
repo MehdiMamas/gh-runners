@@ -357,6 +357,26 @@ func (r *recorder) Write(b []byte) (int, error) {
 // ErrNotConnected is a GitHub call made while the host is unreachable.
 var ErrNotConnected = errors.New("not connected to the main host")
 
+// FleetCall makes a fleet dashboard call through the main host: the machine
+// list, or an allowlisted call on a machine. The host answers 403 unless it
+// allowed this machine to manage the fleet.
+func (m *Member) FleetCall(ctx context.Context, method, pathQuery string, body []byte) (int, []byte, error) {
+	m.mu.Lock()
+	c := m.c
+	m.mu.Unlock()
+	if c == nil {
+		return 0, nil, ErrNotConnected
+	}
+	r, err := c.call(ctx, frame{Kind: kindFleet, Method: method, Path: pathQuery, Body: body})
+	if err != nil {
+		return 0, nil, err
+	}
+	if r.Error != "" {
+		return 0, nil, errors.New(r.Error)
+	}
+	return r.Status, r.Body, nil
+}
+
 // Client is a GitHub client whose calls the main host makes with its own
 // token. This machine never sees that token.
 func (m *Member) Client() *github.Client {

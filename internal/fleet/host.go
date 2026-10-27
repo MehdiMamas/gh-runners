@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"sync"
@@ -49,6 +50,11 @@ type Host struct {
 	// CIRepos lists the owner/repo names whose source members may download
 	// for CI jobs. Nil means none.
 	CIRepos func() []string
+	// Info describes the main host itself, for members allowed to manage
+	// the fleet; nil means just its name.
+	Info func() Info
+
+	fleetHandler http.Handler // the dashboard routes a managing member may use, under mu
 
 	tarMu    sync.Mutex           // the tarball cache
 	ciLogs   map[string]io.Writer // CI job id → where its log goes
@@ -83,6 +89,8 @@ type memberRec struct {
 	Added    time.Time `json:"added"`
 	LastSeen time.Time `json:"last_seen"`
 	Info     Info      `json:"info"`
+	// Manage lets this member manage the fleet from its own dashboard.
+	Manage bool `json:"manage,omitempty"`
 }
 
 type inviteRec struct {
@@ -99,6 +107,8 @@ type Machine struct {
 	Added    time.Time `json:"added"`
 	LastSeen time.Time `json:"last_seen,omitzero"`
 	Info     Info      `json:"info"`
+	// Manage means this machine may manage the fleet.
+	Manage bool `json:"manage,omitempty"`
 }
 
 func (h *Host) logf(format string, args ...any) {
@@ -414,7 +424,13 @@ func (h *Host) hello(c *conn, f frame, remote string) {
 	h.logf("main host: machine %s connected from %s", f.MemberID, remote)
 
 	_ = c.send(frame{Type: tWelcome, HostName: h.name(), Addrs: h.addrs()})
-	_ = c.serve(h.broker, func(f2 frame) error {
+	memberID := f.MemberID
+	_ = c.serve(func(r frame) frame {
+		if r.Kind == kindFleet {
+			return h.fleetCall(memberID, r)
+		}
+		return h.broker(r)
+	}, func(f2 frame) error {
 		switch f2.Type {
 		case tStatus:
 			// Kept in memory; host.json gets the last one when it goes.
@@ -504,13 +520,95 @@ func (h *Host) Machines() ([]Machine, error) {
 	defer h.mu.Unlock()
 	out := make([]Machine, 0, len(s.Members))
 	for _, m := range s.Members {
-		mm := Machine{ID: m.ID, Added: m.Added, LastSeen: m.LastSeen, Info: m.Info}
+		mm := Machine{ID: m.ID, Added: m.Added, LastSeen: m.LastSeen, Info: m.Info, Manage: m.Manage}
 		if ss := h.sessions[m.ID]; ss != nil {
 			mm.Online, mm.Since, mm.Info, mm.LastSeen = true, ss.since, ss.info, time.Now()
 		}
 		out = append(out, mm)
 	}
 	return out, nil
+}
+
+// SetManage turns on or off whether a member may manage the fleet.
+func (h *Host) SetManage(id string, on bool) error {
+	return h.update(func(s *hostState) error {
+		i := slices.IndexFunc(s.Members, func(m memberRec) bool { return m.ID == id })
+		if i < 0 {
+			return fmt.Errorf("no machine %q", id)
+		}
+		s.Members[i].Manage = on
+		return nil
+	})
+}
+
+// SetFleetHandler sets the dashboard routes a managing member may use:
+// GET /api/machines and /api/machines/{id}/api/...
+func (h *Host) SetFleetHandler(fh http.Handler) {
+	h.mu.Lock()
+	h.fleetHandler = fh
+	h.mu.Unlock()
+}
+
+// Self describes the main host as a machine.
+func (h *Host) Self() Machine {
+	m := Machine{ID: HostID, Online: true, Info: Info{Hostname: h.name(), Runners: []RunnerInfo{}}}
+	if h.Info != nil {
+		m.Info = h.Info()
+	}
+	return m
+}
+
+// HostID is the machine id of the main host itself in a managing member's
+// view of the fleet.
+const HostID = "host"
+
+var fleetPathRe = regexp.MustCompile(`^/api/machines/(` + id + `)(/api/.+)$`)
+
+// fleetCall answers a member's fleet dashboard call: only while the main
+// host's switch for that member is on, and only the machine list and the
+// allowlisted calls on a machine. host.json is read on every call, so
+// turning the switch off stops it at once.
+func (h *Host) fleetCall(from string, f frame) frame {
+	on := false
+	h.smu.Lock()
+	s, err := h.load()
+	h.smu.Unlock()
+	if err == nil {
+		for _, m := range s.Members {
+			if m.ID == from {
+				on = m.Manage
+			}
+		}
+	}
+	if !on {
+		return githubError(http.StatusForbidden, "the main host has not allowed this machine to manage the fleet")
+	}
+	ok := f.Method == http.MethodGet && f.Path == "/api/machines"
+	if m := fleetPathRe.FindStringSubmatch(f.Path); m != nil {
+		ok = MemberAllowed(f.Method, m[2])
+	}
+	h.mu.Lock()
+	fh := h.fleetHandler
+	h.mu.Unlock()
+	if !ok || fh == nil {
+		return githubError(http.StatusForbidden, "the main host does not allow this call for other machines")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, f.Method, "http://fleet"+f.Path, bytes.NewReader(f.Body))
+	if err != nil {
+		return frame{Error: err.Error()}
+	}
+	req.RemoteAddr = "member-" + from
+	if len(f.Body) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	rec := &recorder{header: http.Header{}}
+	fh.ServeHTTP(rec, req)
+	if rec.status == 0 {
+		rec.status = http.StatusOK
+	}
+	return frame{Status: rec.status, Header: map[string]string{"Content-Type": "application/json"}, Body: rec.body.Bytes()}
 }
 
 // Remove revokes a member: its credential stops working, and if it is

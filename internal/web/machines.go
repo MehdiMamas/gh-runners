@@ -1,12 +1,14 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strconv"
 	"strings"
@@ -37,6 +39,71 @@ type machinesView struct {
 	Error     string              `json:"error,omitempty"`
 	Machines  []fleet.Machine     `json:"machines"`
 	Member    *fleet.MemberStatus `json:"member,omitempty"`
+	// CanManage is set on a member whose main host lets it manage the fleet:
+	// Machines is then the host's list, and calls go through the host.
+	CanManage bool `json:"can_manage,omitempty"`
+}
+
+// fleetManageAPI is what the main host serves to a member it lets manage
+// the fleet (see Host.fleetCall, which has checked the path already).
+func (s *Server) fleetManageAPI() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/machines", func(w http.ResponseWriter, r *http.Request) {
+		ms, err := s.h.Host.Machines()
+		if err != nil {
+			fail(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, machinesView{MainHost: true, Machines: append([]fleet.Machine{s.h.Host.Self()}, ms...)})
+	})
+	mux.HandleFunc("/api/machines/{id}/api/{rest...}", s.proxyMachine)
+	return mux
+}
+
+// viaHost reports whether this machine is a joined member, whose fleet
+// calls go through the main host.
+func (s *Server) viaHost() bool {
+	cfg, _ := store.LoadConfig()
+	return !cfg.MainHost && s.h.Member != nil && s.h.Member.Joined()
+}
+
+func (s *Server) postManage(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		On bool `json:"on"`
+	}
+	if err := readBody(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, err)
+		return
+	}
+	if s.h.Host == nil {
+		fail(w, http.StatusServiceUnavailable, errors.New("the daemon is not running"))
+		return
+	}
+	if err := s.h.Host.SetManage(r.PathValue("id"), body.On); err != nil {
+		fail(w, http.StatusNotFound, err)
+		return
+	}
+	s.getMachines(w, r)
+}
+
+// callMachine runs a dashboard call on a machine: "host" is this machine.
+func (s *Server) callMachine(ctx context.Context, id, method, pq string, body []byte) (int, []byte, error) {
+	if id != fleet.HostID {
+		return s.h.Host.Call(ctx, id, method, pq, body)
+	}
+	if !fleet.MemberAllowed(method, pq) {
+		return 0, nil, fmt.Errorf("%s %s is not allowed on another machine", method, pq)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, "http://fleet"+pq, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(body) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	rec := httptest.NewRecorder()
+	s.FleetAPI().ServeHTTP(rec, req)
+	return rec.Code, rec.Body.Bytes(), nil
 }
 
 func (s *Server) getMachines(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +127,15 @@ func (s *Server) getMachines(w http.ResponseWriter, r *http.Request) {
 	if m := s.h.Member; m != nil {
 		st := m.Status()
 		v.Member = &st
+		if s.viaHost() {
+			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			status, out, err := m.FleetCall(ctx, http.MethodGet, "/api/machines", nil)
+			cancel()
+			var hv machinesView
+			if err == nil && status == http.StatusOK && json.Unmarshal(out, &hv) == nil {
+				v.Machines, v.CanManage = hv.Machines, true
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, v)
 }
@@ -171,6 +247,10 @@ var startSetPath = regexp.MustCompile(`^/api/runners/start-(last|all)$`)
 // update first ask GitHub whether a runner there is running a job; if one
 // is, the page gets a 409 to confirm, and sends confirm_busy=1 to go on.
 func (s *Server) proxyMachine(w http.ResponseWriter, r *http.Request) {
+	if s.viaHost() {
+		s.proxyViaHost(w, r)
+		return
+	}
 	if s.h.Host == nil {
 		fail(w, http.StatusServiceUnavailable, errors.New("the daemon is not running"))
 		return
@@ -215,7 +295,7 @@ func (s *Server) proxyMachine(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	status, out, err := s.h.Host.Call(ctx, id, r.Method, pq, body)
+	status, out, err := s.callMachine(ctx, id, r.Method, pq, body)
 	if err != nil {
 		code := http.StatusBadGateway
 		if errors.Is(err, fleet.ErrOffline) {
@@ -238,7 +318,7 @@ func (s *Server) proxyMachine(w http.ResponseWriter, r *http.Request) {
 // machineBusy lists the runners on a machine that GitHub says are running
 // a job: runner id only, or all of them.
 func (s *Server) machineBusy(ctx context.Context, id, runner string) ([]string, error) {
-	status, out, err := s.h.Host.Call(ctx, id, http.MethodGet, "/api/github-runners?fresh=1", nil)
+	status, out, err := s.callMachine(ctx, id, http.MethodGet, "/api/github-runners?fresh=1", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -268,6 +348,7 @@ func (s *Server) machineBusy(ctx context.Context, id, runner string) ([]string, 
 func runnerNames(h *fleet.Host, id string) map[string]string {
 	out := map[string]string{}
 	ms, _ := h.Machines()
+	ms = append(ms, h.Self())
 	for _, m := range ms {
 		if m.ID == id {
 			for _, r := range m.Info.Runners {
@@ -276,4 +357,39 @@ func runnerNames(h *fleet.Host, id string) map[string]string {
 		}
 	}
 	return out
+}
+
+// proxyViaHost passes a call on a machine to the main host, which checks
+// that it allowed this machine to manage the fleet, asks about busy runners
+// and forwards it.
+func (s *Server) proxyViaHost(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		fail(w, http.StatusBadRequest, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	defer cancel()
+	status, out, err := s.h.Member.FleetCall(ctx, r.Method, r.URL.RequestURI(), body)
+	if err != nil {
+		code := http.StatusBadGateway
+		if errors.Is(err, fleet.ErrNotConnected) {
+			code = http.StatusServiceUnavailable
+		}
+		fail(w, code, err)
+		return
+	}
+	if status == http.StatusForbidden {
+		var e struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(out, &e) == nil && e.Message != "" {
+			fail(w, status, errors.New(e.Message))
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_, _ = w.Write(out)
 }
