@@ -1334,7 +1334,9 @@ async function addToMachine(m) {
     const base = mbase(m);
     const [rs, st] = await Promise.all([api('GET', base + '/api/repos'), api('GET', base + '/api/state')]);
     const have = new Set((m.info.runners || []).map((r) => r.scope.toLowerCase()));
-    const repos = (rs.repos || []).filter((r) => r.admin && !r.archived);
+    // Repositories without admin rights take no runner, but Local CI can
+    // still run their pull requests on the fleet, this machine included.
+    const repos = (rs.repos || []).filter((r) => !r.archived);
     const q = h('input', { type: 'search', placeholder: 'Filter repositories', 'aria-label': 'Filter repositories' });
     const box = h('div', { class: 'list' });
     const draw = () => {
@@ -1344,13 +1346,17 @@ async function addToMachine(m) {
         const has = have.has(r.full_name.toLowerCase());
         return h('div', { class: 'item pick', 'data-repo': r.full_name },
           h('div', {}, h('div', { class: 'name' }, r.full_name),
-            h('div', { class: 'meta' }, h('span', { class: 'pill plain ' + (r.private ? '' : 'warn') }, r.private ? 'Private' : 'Public'), has ? h('span', { class: 'pill plain ok' }, 'Has a runner there') : null)),
-          h('div', { class: 'actions' }, h('button', { class: 'btn small primary', onclick: () => { closeDialog(); addRunnerTo(m, st, r, has); } }, has ? 'Add another' : 'Add runner')));
-      }) : h('div', { class: 'empty small' }, repos.length ? 'Nothing matches.' : 'No repositories this machine can add runners to.'));
+            h('div', { class: 'meta' }, h('span', { class: 'pill plain ' + (r.private ? '' : 'warn') }, r.private ? 'Private' : 'Public'), has ? h('span', { class: 'pill plain ok' }, 'Has a runner there') : null,
+              ciSettingsOf(r.full_name).watch ? h('span', { class: 'pill plain ok' }, 'Local CI on') : null,
+              r.admin ? null : h('span', { class: 'pill plain', title: 'Only repository admins can add runners.' }, 'No admin rights'))),
+          h('div', { class: 'actions' },
+            h('button', { class: 'btn small' + (r.admin ? '' : ' primary'), title: 'Run this repo\'s ci.yml on your machines, no runner needed.', onclick: () => { closeDialog(); ciDialog(r.full_name); } }, 'Local CI'),
+            r.admin ? h('button', { class: 'btn small primary', onclick: () => { closeDialog(); addRunnerTo(m, st, r, has); } }, has ? 'Add another' : 'Add runner') : null));
+      }) : h('div', { class: 'empty small' }, repos.length ? 'Nothing matches.' : 'No repositories on this machine\'s GitHub account.'));
     };
     q.addEventListener('input', draw);
     draw();
-    openDialog({ title: 'Add a runner on ' + machineName(m), body: [h('p', { class: 'muted' }, 'Pick a repository. The runner is set up on ' + machineName(m) + '.'), h('div', { class: 'toolbar' }, q), box], foot: [h('button', { class: 'btn', onclick: closeDialog }, 'Cancel')] });
+    openDialog({ title: 'Add a runner or Local CI on ' + machineName(m), body: [h('p', { class: 'muted' }, 'Pick a repository. Add runner sets up a runner on ' + machineName(m) + '. Local CI needs no admin rights: it runs the repo\'s ci.yml on the machines that fit each job, ' + machineName(m) + ' included.'), h('div', { class: 'toolbar' }, q), box], foot: [h('button', { class: 'btn', onclick: closeDialog }, 'Cancel')] });
     setTimeout(() => q.focus(), 50);
   });
 }
