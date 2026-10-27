@@ -66,6 +66,7 @@ const (
 const (
 	kindAPI    = "api"    // host → member: a dashboard API call
 	kindGitHub = "github" // member → host: a GitHub API call
+	kindFleet  = "fleet"  // member → host: a fleet dashboard call
 )
 
 // frame is one message on the connection. Requests and responses carry an

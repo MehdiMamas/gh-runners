@@ -414,3 +414,88 @@ func TestRemoteStartSet(t *testing.T) {
 		}
 	}
 }
+
+func TestFleetManageOffByDefault(t *testing.T) {
+	f := newFleetTest(t)
+	var mv machinesView
+	api(t, f.host, "GET", "/api/machines", "", &mv)
+	if mv.Machines[0].Manage {
+		t.Fatal("manage is on by default")
+	}
+	m := f.member.h.Member
+	for _, c := range [][2]string{
+		{"GET", "/api/machines"},
+		{"GET", "/api/machines/" + f.id + "/api/state"},
+		{"GET", "/api/machines/host/api/state"},
+	} {
+		code, out, err := m.FleetCall(context.Background(), c[0], c[1], nil)
+		if err != nil || code != http.StatusForbidden || !strings.Contains(string(out), "has not allowed") {
+			t.Fatalf("%s %s with the switch off: %d %s %v", c[0], c[1], code, out, err)
+		}
+	}
+	// The member's own dashboard shows no fleet.
+	mh := f.member.Handler(http.NotFoundHandler())
+	var v machinesView
+	if code := api(t, mh, "GET", "/api/machines", "", &v); code != 200 || v.CanManage || len(v.Machines) != 0 {
+		t.Fatalf("member view with the switch off: %d %+v", code, v)
+	}
+	if code := api(t, mh, "GET", "/api/machines/host/api/state", "", nil); code != http.StatusForbidden {
+		t.Fatalf("member proxy with the switch off: %d", code)
+	}
+}
+
+func TestFleetManageOn(t *testing.T) {
+	f := newFleetTest(t)
+	var mv machinesView
+	if code := api(t, f.host, "POST", "/api/machines/"+f.id+"/manage", `{"on":true}`, &mv); code != 200 || !mv.Machines[0].Manage {
+		t.Fatalf("switch on: %d %+v", code, mv)
+	}
+	if code := api(t, f.host, "POST", "/api/machines/nope/manage", `{"on":true}`, nil); code != http.StatusNotFound {
+		t.Fatalf("unknown machine: %d", code)
+	}
+	mh := f.member.Handler(http.NotFoundHandler())
+	var v machinesView
+	if code := api(t, mh, "GET", "/api/machines", "", &v); code != 200 || !v.CanManage || len(v.Machines) != 2 || v.Machines[0].ID != "host" || !v.Machines[0].Online {
+		t.Fatalf("member view with the switch on: %d %+v", code, v)
+	}
+	for _, id := range []string{"host", f.id} {
+		var st stateView
+		if code := api(t, mh, "GET", "/api/machines/"+id+"/api/state", "", &st); code != 200 {
+			t.Fatalf("state of %s through the host: %d", id, code)
+		}
+	}
+	// Never allowed, even with the switch on.
+	m := f.member.h.Member
+	for _, c := range [][2]string{
+		{"POST", "/api/machines/invite"},
+		{"POST", "/api/machines/leave"},
+		{"POST", "/api/machines/" + f.id + "/remove"},
+		{"POST", "/api/machines/" + f.id + "/manage"},
+		{"POST", "/api/machines/host"},
+		{"POST", "/api/machines/" + f.id + "/api/login/token"},
+		{"PUT", "/api/machines/host/api/config"},
+		{"POST", "/api/machines/host/api/machines/invite"},
+		{"GET", "/api/state"},
+		{"GET", "/api/machines/host/other"},
+	} {
+		code, _, err := m.FleetCall(context.Background(), c[0], c[1], []byte(`{"on":true,"token":"x"}`))
+		if err != nil || code != http.StatusForbidden {
+			t.Errorf("%s %s with the switch on: %d %v", c[0], c[1], code, err)
+		}
+	}
+	api(t, f.host, "GET", "/api/machines", "", &mv)
+	if !mv.Machines[0].Manage {
+		t.Fatal("the switch was changed by a refused call")
+	}
+	// Off again blocks at once.
+	api(t, f.host, "POST", "/api/machines/"+f.id+"/manage", `{"on":false}`, nil)
+	if code := api(t, mh, "GET", "/api/machines/host/api/state", "", nil); code != http.StatusForbidden {
+		t.Fatalf("after switching off: %d", code)
+	}
+	// The manage route is not part of the member API.
+	w := httptest.NewRecorder()
+	f.member.FleetAPI().ServeHTTP(w, httptest.NewRequest("POST", "/api/machines/x/manage", strings.NewReader(`{"on":true}`)))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("manage on the member API: %d", w.Code)
+	}
+}
