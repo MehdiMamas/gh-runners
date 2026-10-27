@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -209,5 +210,93 @@ func TestBlockedPostsAndMergesNothing(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "BLOCKED") {
 		t.Errorf("output lacks BLOCKED:\n%s", out.String())
+	}
+}
+
+func TestPortFreeSeesWildcardHolder(t *testing.T) {
+	l, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Skip(err)
+	}
+	defer l.Close()
+	port := l.Addr().(*net.TCPAddr).Port
+	if portFree(port) {
+		t.Fatalf("port %d held on 0.0.0.0 reported free", port)
+	}
+	l.Close()
+	if !portFree(port) {
+		t.Fatalf("port %d released but reported taken", port)
+	}
+}
+
+func TestNeedsEmulatorWithoutJava(t *testing.T) {
+	wf, err := ParseWorkflow([]byte(`
+name: ci
+on: pull_request
+jobs:
+  rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm run test:rules
+  viaexec:
+    runs-on: ubuntu-latest
+    steps:
+      - run: cd firebase && firebase emulators:exec --only firestore "node t.js"
+  plain:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wf.Jobs["viaexec"].NeedsEmulator() == false || wf.Jobs["plain"].NeedsEmulator() || wf.Jobs["rules"].NeedsEmulator() {
+		t.Fatal("emulator detection wrong")
+	}
+	if _, emu := wf.Jobs["viaexec"].Requires(); !emu {
+		t.Fatal("Requires misses emulators:exec job")
+	}
+}
+
+// Two emulator jobs of one run never overlap, and an outside holder of 8080
+// style ports blocks the job instead of failing it.
+func TestEmulatorJobsSerializedAndBlocked(t *testing.T) {
+	shortWait(t)
+	wf, err := ParseWorkflow([]byte(emuWorkflow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Skip(err)
+	}
+	defer l.Close()
+	port := l.Addr().(*net.TCPAddr).Port
+	tb := makeTarball(t, port)
+	dir := t.TempDir()
+	var cur, max int32
+	tasks := []Task{{Name: "a", Lock: "emulator"}, {Name: "b", Lock: "emulator"}}
+	res := Schedule(context.Background(), tasks, 2, &Locks{Dir: t.TempDir()}, func(ctx context.Context, tk Task, _ map[string]Result) Result {
+		n := atomic.AddInt32(&cur, 1)
+		for {
+			m := atomic.LoadInt32(&max)
+			if n <= m || atomic.CompareAndSwapInt32(&max, m, n) {
+				break
+			}
+		}
+		defer atomic.AddInt32(&cur, -1)
+		return LocalExecutor{}.RunJob(ctx, JobSpec{
+			Name: tk.Name, Job: wf.Jobs["rules"], Tarball: tb,
+			RunDir: filepath.Join(dir, tk.Name), Log: filepath.Join(dir, tk.Name+".log"),
+		})
+	})
+	if max != 1 {
+		t.Errorf("%d emulator jobs ran at once", max)
+	}
+	for n, r := range res {
+		if r.Status != Blocked {
+			t.Errorf("%s: got %v %q, want BLOCKED", n, r.Status, r.Reason)
+		}
 	}
 }

@@ -135,6 +135,21 @@ func (j *Job) NeedsJava() bool {
 	return false
 }
 
+// NeedsEmulator reports whether the job starts the Firebase emulators: it sets
+// up Java, or a step runs the firebase CLI's emulators (for example
+// `firebase emulators:exec` inside an npm script's own step).
+func (j *Job) NeedsEmulator() bool {
+	if j.NeedsJava() {
+		return true
+	}
+	for _, s := range j.Steps {
+		if strings.Contains(s.Run, "emulators:") || strings.Contains(s.Run, "firebase emulators") {
+			return true
+		}
+	}
+	return false
+}
+
 // IsAggregate reports whether the job only summarizes its needs (it reads
 // needs.*.result); the local CI computes it instead of running its script.
 func (j *Job) IsAggregate() bool { return strings.Contains(j.Raw, "needs.*.result") }
