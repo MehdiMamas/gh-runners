@@ -45,11 +45,22 @@ type Report struct {
 // AllPassed reports whether nothing failed or was unsupported.
 func (r Report) AllPassed() bool {
 	for _, x := range r.Results {
-		if x.Status == Fail || x.Status == Unsupported {
+		if x.Status == Fail || x.Status == Unsupported || x.Status == Blocked {
 			return false
 		}
 	}
 	return true
+}
+
+// HasBlocked reports whether any job ended as an infrastructure error. Such
+// a run is not a verdict: nothing is posted and nothing is merged.
+func (r Report) HasBlocked() bool {
+	for _, x := range r.Results {
+		if x.Status == Blocked {
+			return true
+		}
+	}
+	return false
 }
 
 // Allowlist is who may start runs on their own for the repo.
@@ -166,13 +177,17 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			if res.Status == Fail {
 				state, desc = "failure", "Failed: "+res.Reason
 			}
-			status(state, ctxName, desc)
+			if res.Status != Blocked {
+				status(state, ctxName, desc)
+			}
 		} else if j.IsAggregate() {
 			state, desc := "success", "Every job passed or was skipped"
 			if res.Status != Pass {
 				state, desc = "failure", res.Reason
 			}
-			status(state, t.Name, desc)
+			if res.Status != Blocked {
+				status(state, t.Name, desc)
+			}
 		}
 		res.Job = t.Name
 		fmt.Fprintf(o.Out, "  %-5s %-18s %s\n", res.Status, t.Name, res.Reason)
@@ -191,6 +206,10 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	}
 	fmt.Fprint(o.Out, "\n"+FormatTable(rep.Results))
 
+	if rep.HasBlocked() {
+		fmt.Fprintln(o.Out, "\nBLOCKED: a job hit an infrastructure error, not a test failure. Nothing was posted or merged; fix it and run again.")
+		return rep, nil
+	}
 	if !post {
 		return rep, nil
 	}
@@ -266,11 +285,16 @@ func Decide(wf *Workflow, j *Job, needs map[string]Result, outputs map[string]ma
 		if cond == CondAlways {
 			break
 		}
-		if s := needs[n].Status; s == Fail || s == Unsupported {
+		if s := needs[n].Status; s == Fail || s == Unsupported || s == Blocked {
 			return Result{Status: Skipped, Reason: "needs " + n + ", which did not pass"}
 		}
 	}
 	if j.IsAggregate() {
+		for _, n := range sortedKeys(needs) {
+			if needs[n].Status == Blocked {
+				return Result{Status: Blocked, Reason: n + " is blocked: " + needs[n].Reason}
+			}
+		}
 		for _, n := range sortedKeys(needs) {
 			if s := needs[n].Status; s != Pass && s != Skipped {
 				return Result{Status: Fail, Reason: n + " ended with " + strings.ToLower(string(s))}

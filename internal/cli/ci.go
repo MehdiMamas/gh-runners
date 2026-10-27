@@ -80,6 +80,9 @@ func newCIRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if rep.HasBlocked() {
+				return fmt.Errorf("blocked by an infrastructure error (not a test failure); nothing was posted or merged")
+			}
 			if !rep.AllPassed() {
 				return fmt.Errorf("some jobs did not pass")
 			}

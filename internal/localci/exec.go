@@ -26,6 +26,10 @@ const (
 	Fail        Status = "FAIL"
 	Skipped     Status = "SKIPPED"
 	Unsupported Status = "UNSUPPORTED"
+	// Blocked is an infrastructure error (e.g. an emulator port taken by
+	// something outside gh-runners). It is not a test failure: nothing is
+	// posted red and nothing is merged.
+	Blocked Status = "BLOCKED"
 )
 
 // Result is what happened to one job.
@@ -222,6 +226,14 @@ func (LocalExecutor) RunJob(ctx context.Context, spec JobSpec) Result {
 	if err := Extract(spec.Tarball, ws); err != nil {
 		fmt.Fprintln(lf, "extract failed:", err)
 		return finish(Fail, "extract failed")
+	}
+	// Emulator jobs need their ports free; the emulator lock is already
+	// held, so a taken port belongs to something outside gh-runners.
+	if _, emu := spec.Job.Requires(); emu {
+		if msg := CheckPorts(ctx, EmulatorPorts(ws)); msg != "" {
+			fmt.Fprintln(lf, "::error "+msg)
+			return finish(Blocked, msg)
+		}
 	}
 	env := append([]string{}, spec.Env...)
 	env = append(env, "GITHUB_WORKSPACE="+bashPath(ws))
