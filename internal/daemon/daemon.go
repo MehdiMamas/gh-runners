@@ -202,6 +202,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			d.Log.Printf("stopping all runners")
 			d.stopAll()
 			d.jit.stopAll()
+			dash.WaitCI(15 * time.Second)
 			d.Log.Printf("daemon stopped")
 			return stopResult(d.updated.Load(), signalled.Err() != nil)
 		case <-t.C:
