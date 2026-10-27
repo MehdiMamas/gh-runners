@@ -18,6 +18,7 @@ import (
 
 	"github.com/MehdiMamas/gh-runners/internal/control"
 	"github.com/MehdiMamas/gh-runners/internal/daemon"
+	"github.com/MehdiMamas/gh-runners/internal/doctor"
 	"github.com/MehdiMamas/gh-runners/internal/github"
 	"github.com/MehdiMamas/gh-runners/internal/ops"
 	"github.com/MehdiMamas/gh-runners/internal/service"
@@ -765,8 +766,42 @@ at https://github.com/settings/tokens/new?scopes=repo&description=gh-runners`,
 	}
 }
 
-func newConfigCmd() *cobra.Command {
+// newUpdateIntervalCmd shows or sets how often this machine checks for a
+// new release.
+func newUpdateIntervalCmd() *cobra.Command {
 	return &cobra.Command{
+		Use:   "update-interval [duration|default]",
+		Short: "Show or set how often to check for a new release (5m to 7 days, default 6h)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := store.LoadConfig()
+			if err != nil {
+				return err
+			}
+			if len(args) == 1 {
+				d, err := store.ParseUpdateInterval(args[0])
+				if err != nil {
+					return err
+				}
+				cfg.UpdateInterval = store.Duration{Duration: d}
+				if err := store.SaveConfig(cfg); err != nil {
+					return err
+				}
+				_ = control.Reload() // the daemon applies it without a restart
+			}
+			st, err := control.GetStatus()
+			var sp *control.Status
+			if err == nil {
+				sp = &st
+			}
+			fmt.Println(doctor.UpdateLine(cfg, sp))
+			return nil
+		},
+	}
+}
+
+func newConfigCmd() *cobra.Command {
+	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Print the config file path and contents",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -784,6 +819,8 @@ func newConfigCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.AddCommand(newUpdateIntervalCmd())
+	return cmd
 }
 
 func restartCmd() *cobra.Command {

@@ -109,12 +109,13 @@ func Run(ctx context.Context, st *control.Status) []Check {
 	if cfg.Sync.Auto {
 		add(OK, "auto-sync on (every %s)", cfg.Sync.Interval.Or(time.Hour))
 	}
-	if cfg.OnDemand.Enabled {
-		if st == nil {
-			if x, err := control.GetStatus(); err == nil {
-				st = &x
-			}
+	if st == nil {
+		if x, err := control.GetStatus(); err == nil {
+			st = &x
 		}
+	}
+	add(OK, "%s", UpdateLine(cfg, st))
+	if cfg.OnDemand.Enabled {
 		if st != nil {
 			add(OK, "on-demand: %s", st.OnDemand)
 		} else {
@@ -134,6 +135,19 @@ func Run(ctx context.Context, st *control.Status) []Check {
 		add(Fix, "%d runner folders were never registered (an add failed); add them again or remove them", unregistered)
 	}
 	return out
+}
+
+// UpdateLine says how often this machine checks for a new release and when
+// the next check is due (st is the daemon status, or nil).
+func UpdateLine(cfg store.Config, st *control.Status) string {
+	s := "update check every " + store.ShortDuration(cfg.UpdateEvery())
+	if cfg.UpdateInterval.Duration == 0 {
+		s += " (default)"
+	}
+	if st != nil && !st.Update.Next.IsZero() {
+		s += "; next " + st.Update.Next.Local().Format("15:04 Jan 2")
+	}
+	return s
 }
 
 // HasScope reports whether a comma separated X-OAuth-Scopes list has want.

@@ -667,9 +667,16 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, errors.New("sync at most every 5 minutes"))
 		return
 	}
+	if d := in.UpdateInterval.Duration; d != 0 {
+		if err := store.CheckUpdateInterval(d); err != nil {
+			fail(w, http.StatusBadRequest, err)
+			return
+		}
+	}
 	turnedOnSync := in.Sync.Auto && !cfg.Sync.Auto
 	cfg.Labels, cfg.RunnerName, cfg.Sync, cfg.OnDemand = clean(in.Labels), strings.TrimSpace(in.RunnerName), in.Sync, in.OnDemand
 	cfg.AutoUpdate = in.AutoUpdate
+	cfg.UpdateInterval = in.UpdateInterval
 	cfg.Sync.Owners, cfg.Sync.Include, cfg.Sync.Exclude = clean(cfg.Sync.Owners), clean(cfg.Sync.Include), clean(cfg.Sync.Exclude)
 	cfg.OnDemand.Owners, cfg.OnDemand.Include, cfg.OnDemand.Exclude = clean(cfg.OnDemand.Owners), clean(cfg.OnDemand.Include), clean(cfg.OnDemand.Exclude)
 	if err := store.SaveConfig(cfg); err != nil {

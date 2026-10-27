@@ -509,3 +509,28 @@ func TestRestartRunner(t *testing.T) {
 		t.Fatalf("unknown runner: %d", code)
 	}
 }
+
+func TestConfigUpdateInterval(t *testing.T) {
+	_, h := setup(t)
+	var cfg store.Config
+	if code := api(t, h, "PUT", "/api/config", `{"update_interval":"10m"}`, &cfg); code != 200 {
+		t.Fatalf("put: %d", code)
+	}
+	if got, _ := store.LoadConfig(); got.UpdateEvery() != 10*time.Minute {
+		t.Fatalf("stored %v", got.UpdateEvery())
+	}
+	for _, bad := range []string{"1m", "169h"} {
+		if code := api(t, h, "PUT", "/api/config", `{"update_interval":"`+bad+`"}`, &cfg); code != 400 {
+			t.Fatalf("%s: %d, want 400", bad, code)
+		}
+	}
+	if got, _ := store.LoadConfig(); got.UpdateEvery() != 10*time.Minute {
+		t.Fatal("a refused value changed the setting")
+	}
+	if code := api(t, h, "PUT", "/api/config", `{}`, &cfg); code != 200 {
+		t.Fatalf("reset: %d", code)
+	}
+	if got, _ := store.LoadConfig(); got.UpdateEvery() != 6*time.Hour {
+		t.Fatalf("reset %v", got.UpdateEvery())
+	}
+}

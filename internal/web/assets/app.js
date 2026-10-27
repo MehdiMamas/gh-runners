@@ -1552,7 +1552,27 @@ function renderSettings() {
     sw(autoUpdate, (v) => guard(async () => { cfg.auto_update = v; await api('PUT', '/api/config', cfg); toast('Auto-update ' + (v ? 'on' : 'off')); await refreshState(); }), 'Auto-update')),
     h('dl', { class: 'kv' },
       h('dt', {}, 'This version'), h('dd', {}, st.version),
-      h('dt', {}, 'Latest'), h('dd', {}, (u.latest || 'not checked yet') + (u.checked ? ' · checked ' + ago(u.checked) : ''))),
+      h('dt', {}, 'Latest'), h('dd', {}, (u.latest || 'not checked yet') + (u.checked ? ' · checked ' + ago(u.checked) : '')),
+      h('dt', {}, 'Check every'), h('dd', {}, (u.every || '6h') + (u.next ? ' · next ' + new Date(u.next).toLocaleString() : ''))),
+    h('div', { class: 'row' },
+      (() => {
+        const inp = h('input', { type: 'text', value: cfg.update_interval && cfg.update_interval !== '0s' ? cfg.update_interval : '', placeholder: '6h (default)', 'aria-label': 'Update check interval', size: 10 });
+        return h('span', {}, h('label', { class: 'muted small' }, 'Check every '), inp, ' ',
+          h('button', { class: 'btn', onclick: () => guard(async () => {
+            const v = inp.value.trim();
+            let d = 0;
+            if (v && v.toLowerCase() !== 'default') {
+              const m = v.match(/^(?:(\d+(?:\.\d+)?)(h|m|s))+$/);
+              if (!m) throw new Error('Use a duration like 10m or 2h, or leave it empty for the default (6h).');
+              d = [...v.matchAll(/(\d+(?:\.\d+)?)(h|m|s)/g)].reduce((a, x) => a + parseFloat(x[1]) * { h: 3600, m: 60, s: 1 }[x[2]], 0);
+              if (d < 300 || d > 7 * 86400) throw new Error('The interval must be between 5m and 7 days (168h).');
+            }
+            cfg.update_interval = v && d ? v : '';
+            await api('PUT', '/api/config', cfg);
+            toast(d ? 'Checking for updates every ' + v : 'Checking for updates every 6h (default)');
+            await refreshState();
+          }) }, 'Save'));
+      })()),
     u.note ? h('p', {}, u.note) : null,
     u.error ? h('p', { class: 'err' }, 'Last check failed: ' + u.error) : null,
     h('div', { class: 'row' },
