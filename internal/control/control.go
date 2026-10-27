@@ -3,12 +3,15 @@
 package control
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/MehdiMamas/gh-runners/internal/localci"
 	"github.com/MehdiMamas/gh-runners/internal/store"
 )
 
@@ -142,4 +145,60 @@ func WaitStopped(id string, timeout time.Duration) error {
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// CIRunRequest is POST /ci/run: run one CI job on a fleet member.
+type CIRunRequest struct {
+	MemberID string          `json:"member_id"`
+	Spec     localci.JobSpec `json:"spec"`
+}
+
+// CIMachines lists the fleet members that can run CI jobs. The error is
+// ErrNotRunning when this machine is not a running main host.
+func CIMachines() ([]localci.Machine, error) {
+	var ms []localci.Machine
+	err := call(http.MethodGet, "/ci/machines", &ms)
+	return ms, err
+}
+
+// CIExecutor runs jobs on one fleet member through the local daemon, which
+// is the main host. It implements localci.Executor.
+type CIExecutor struct{ MemberID string }
+
+// RunJob sends the job and waits for the result; a job can take a long time,
+// so there is no timeout beyond ctx.
+func (e CIExecutor) RunJob(ctx context.Context, spec localci.JobSpec) localci.Result {
+	fail := func(msg string) localci.Result {
+		return localci.Result{Job: spec.Name, Log: spec.Log, Status: localci.Fail, Reason: msg}
+	}
+	info, err := store.LoadDaemonInfo()
+	if err != nil || info.Addr == "" {
+		return fail(ErrNotRunning.Error())
+	}
+	spec.Env = nil // the member builds its own environment
+	body, err := json.Marshal(CIRunRequest{MemberID: e.MemberID, Spec: spec})
+	if err != nil {
+		return fail(err.Error())
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+info.Addr+"/ci/run", bytes.NewReader(body))
+	if err != nil {
+		return fail(err.Error())
+	}
+	req.Header.Set(SecretHeader, info.Secret)
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return localci.Result{Job: spec.Name, Log: spec.Log, Status: localci.Skipped, Reason: "cancelled"}
+		}
+		return fail("lost the daemon: " + err.Error())
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fail("daemon: " + resp.Status)
+	}
+	var res localci.Result
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return fail("bad answer from the daemon")
+	}
+	return res
 }
