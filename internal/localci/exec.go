@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/MehdiMamas/gh-runners/internal/proc"
 )
 
 // Status is the outcome of one job.
@@ -382,6 +384,11 @@ func mergeEnv(a, b map[string]string) map[string]string {
 func runCmd(ctx context.Context, dir string, env []string, log io.Writer, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = dir, env, log, log
+	// A cancelled step takes everything it started with it: a leftover
+	// child would keep the job log open (Windows cannot delete it) and keep
+	// ports such as the emulators' taken.
+	proc.Supervise(cmd)
+	cmd.Cancel = func() error { proc.Kill(cmd); return nil }
 	cmd.WaitDelay = 5 * time.Second
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%s: %w", name, err)

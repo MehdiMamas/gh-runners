@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -160,13 +159,9 @@ func TestRemoteExecutorMemberDropsMidJob(t *testing.T) {
 			defer m.mu.Unlock()
 			return len(m.jobs) == 0
 		})
-		if runtime.GOOS == "windows" {
-			// an orphaned child of the killed shell may hold the log a moment
-			time.Sleep(6 * time.Second)
-		}
 	})
 
-	s := spec(t, "echo started; exec sleep 4")
+	s := spec(t, "echo started; sleep 30")
 	go func() {
 		time.Sleep(1500 * time.Millisecond)
 		drop()
