@@ -1,12 +1,14 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/localci"
 	"github.com/MehdiMamas/gh-runners/internal/store"
@@ -102,4 +104,96 @@ func TestUpdateRefusedWhileCIRuns(t *testing.T) {
 		t.Fatalf("update during a run: %d %+v", code, e)
 	}
 	close(release)
+}
+
+// ciHold queues a run that waits for release or for its context to end.
+func ciHold(t *testing.T, s *Server, release chan struct{}, started chan int) *task {
+	t.Helper()
+	var tk *task
+	tk, err := s.ci.add("Local CI: o/r #1", []string{"o/r"}, func(w io.Writer) error {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		w.(*task).setCancel(cancel)
+		if started != nil {
+			started <- w.(*task).ID
+		}
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tk
+}
+
+func TestCIRunNextAndCancelQueued(t *testing.T) {
+	s, h := setup(t)
+	release, started := make(chan struct{}), make(chan int, 3)
+	first := ciHold(t, s, release, started)
+	if got := <-started; got != first.ID {
+		t.Fatalf("started %d", got)
+	}
+	a, b := ciHold(t, s, release, started), ciHold(t, s, release, started)
+	if code := api(t, h, "POST", fmt.Sprintf("/api/ci/tasks/%d/next", b.ID), "", nil); code != http.StatusOK {
+		t.Fatalf("next: %d", code)
+	}
+	if code := api(t, h, "POST", fmt.Sprintf("/api/ci/tasks/%d/next", first.ID), "", nil); code != http.StatusConflict {
+		t.Fatalf("next of a running task: %d", code)
+	}
+	if code := api(t, h, "POST", "/api/ci/tasks/999/next", "", nil); code != http.StatusNotFound {
+		t.Fatalf("next of an unknown task: %d", code)
+	}
+	if code := api(t, h, "DELETE", fmt.Sprintf("/api/ci/tasks/%d", a.ID), "", nil); code != http.StatusOK {
+		t.Fatalf("cancel queued: %d", code)
+	}
+	if v := a.view(false); v.State != "cancelled" || v.Ended == "" {
+		t.Fatalf("queued task after cancel: %+v", v)
+	}
+	if code := api(t, h, "DELETE", fmt.Sprintf("/api/ci/tasks/%d", a.ID), "", nil); code != http.StatusConflict {
+		t.Fatalf("cancel twice: %d", code)
+	}
+	if code := api(t, h, "DELETE", "/api/ci/tasks/999", "", nil); code != http.StatusNotFound {
+		t.Fatalf("cancel unknown: %d", code)
+	}
+	close(release)
+	if got := <-started; got != b.ID {
+		t.Fatalf("task %d ran after the first, want the moved one %d", got, b.ID)
+	}
+	select {
+	case got := <-started:
+		t.Fatalf("cancelled task %d ran", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestCICancelRunning(t *testing.T) {
+	s, h := setup(t)
+	started := make(chan int, 1)
+	tk := ciHold(t, s, make(chan struct{}), started)
+	<-started
+	if code := api(t, h, "DELETE", fmt.Sprintf("/api/ci/tasks/%d", tk.ID), "", nil); code != http.StatusOK {
+		t.Fatalf("cancel running: %d", code)
+	}
+	for end := time.Now().Add(5 * time.Second); tk.view(false).State == "running" && time.Now().Before(end); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if v := tk.view(false); v.State != "cancelled" || v.Error != "" {
+		t.Fatalf("running task after cancel: %+v", v)
+	}
+}
+
+func TestCITaskRoutesGuarded(t *testing.T) {
+	_, h := setup(t)
+	for _, c := range []struct{ method, path string }{{"POST", "/api/ci/tasks/1/next"}, {"DELETE", "/api/ci/tasks/1"}} {
+		if w := do(t, h, req{method: c.method, path: c.path, cookie: true, origin: "http://127.0.0.1:47321"}); w.Code != http.StatusForbidden {
+			t.Errorf("%s %s without X-GHR: %d", c.method, c.path, w.Code)
+		}
+		if w := do(t, h, req{method: c.method, path: c.path, cookie: true, header: true, origin: "http://evil.example"}); w.Code != http.StatusForbidden {
+			t.Errorf("%s %s cross-origin: %d", c.method, c.path, w.Code)
+		}
+	}
 }

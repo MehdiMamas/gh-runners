@@ -1007,7 +1007,7 @@ function ciDialog(full) {
         const stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
         const text = (t.log || 'Waiting to start ...') + (t.error ? '\n' + t.error : '');
         if (pre.textContent !== text) { pre.textContent = text; if (stick) pre.scrollTop = pre.scrollHeight; }
-        if (t.state === 'done' || t.state === 'failed') {
+        if (t.state === 'done' || t.state === 'failed' || t.state === 'cancelled') {
           clearInterval(timer); timer = null;
           await loadCI();
           mount(recent, ciRecent(full));
@@ -1085,6 +1085,11 @@ function ciActiveRows(jobs) {
     h('div', { class: 'row' }, pill('busy'))));
 }
 
+// ciTaskCall moves a queued Local CI run to the front, or cancels it.
+function ciTaskCall(method, id, suffix) {
+  return guard(async () => { await api(method, '/api/ci/tasks/' + id + suffix); await refreshState(); });
+}
+
 // ciLiveCard is the Local CI part of This machine: queued and running runs,
 // and each job that runs now on this computer or another machine for it.
 function ciLiveCard(st) {
@@ -1093,7 +1098,9 @@ function ciLiveCard(st) {
   return h('div', { class: 'card' },
     h('div', { class: 'card-head' }, h('h3', {}, 'Local CI'),
       jobs.length ? h('span', { class: 'pill info' }, jobs.length + (jobs.length === 1 ? ' job running' : ' jobs running')) : h('span', { class: 'pill plain' }, 'Idle')),
-    tasks.map((t) => h('div', { class: 'row' }, pill(t.state), h('span', {}, t.title))),
+    tasks.map((t) => h('div', { class: 'row' }, pill(t.state), h('span', {}, t.title),
+      t.state === 'queued' ? h('button', { class: 'btn small', onclick: () => ciTaskCall('POST', t.id, '/next') }, 'Run next') : null,
+      h('button', { class: 'btn small', onclick: () => ciTaskCall('DELETE', t.id, '') }, 'Cancel'))),
     jobs.length ? h('div', { class: 'mrunners' }, ciActiveRows(jobs))
       : h('p', { class: 'muted small' }, tasks.length ? 'Getting the jobs ready ...' : 'No Local CI job is running. Runs started from Repositories, the watch or "gh-runners ci run" show up here while they run.'));
 }

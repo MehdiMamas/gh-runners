@@ -256,6 +256,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("PUT /api/ci/{owner}/{repo}", s.putCI)
 	mux.HandleFunc("POST /api/ci/run", s.postCIRun)
 	mux.HandleFunc("GET /api/ci/tasks/{id}", s.getCITask)
+	mux.HandleFunc("POST /api/ci/tasks/{id}/next", s.postCINext)
+	mux.HandleFunc("DELETE /api/ci/tasks/{id}", s.deleteCITask)
 	mux.HandleFunc("GET /api/ci/runs/{id}/logs/{job}", s.getCILog)
 	return mux
 }

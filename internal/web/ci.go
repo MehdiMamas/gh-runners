@@ -138,6 +138,36 @@ func (s *Server) postCIRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]int{"task": t.ID})
 }
 
+// postCINext moves a queued run to the front of the queue.
+func (s *Server) postCINext(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.Atoi(r.PathValue("id"))
+	t := s.ci.get(id)
+	if t == nil {
+		fail(w, http.StatusNotFound, fmt.Errorf("no task %d", id))
+		return
+	}
+	if !s.ci.moveFront(t) {
+		fail(w, http.StatusConflict, fmt.Errorf("task %d is not waiting in the queue", id))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"task": id})
+}
+
+// deleteCITask cancels a queued or running run.
+func (s *Server) deleteCITask(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.Atoi(r.PathValue("id"))
+	t := s.ci.get(id)
+	if t == nil {
+		fail(w, http.StatusNotFound, fmt.Errorf("no task %d", id))
+		return
+	}
+	if !s.ci.stop(t) {
+		fail(w, http.StatusConflict, fmt.Errorf("task %d has already ended", id))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"task": id})
+}
+
 func (s *Server) getCITask(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(r.PathValue("id"))
 	t := s.ci.get(id)
@@ -196,7 +226,12 @@ func (s *Server) queueCI(owner, repo string, pr int, dry, approve, auto bool) (*
 		title += " (dry run)"
 	}
 	return s.ci.add(title, []string{full}, func(w io.Writer) error {
-		ctx := s.ciContext()
+		ctx, cancel := context.WithCancel(s.ciContext())
+		defer cancel()
+		t, _ := w.(*task)
+		if t != nil && t.setCancel(cancel) {
+			return nil
+		}
 		start := time.Now()
 		o := localci.Options{Owner: owner, Repo: repo, PR: pr, DryRun: dry, Approve: approve, Out: w}
 		var rep localci.Report
@@ -214,8 +249,14 @@ func (s *Server) queueCI(owner, repo string, pr int, dry, approve, auto bool) (*
 			return err
 		}()
 		run := localci.NewHistoryRun(o, auto, start, rep, err)
-		if t, ok := w.(*task); ok {
+		if t != nil {
 			run.Task = t.ID
+			t.mu.Lock()
+			stopped := t.cancelled
+			t.mu.Unlock()
+			if stopped {
+				run.Passed, run.Error = false, "cancelled"
+			}
 		}
 		s.addCIRun(run)
 		if err == nil && !run.Passed {
