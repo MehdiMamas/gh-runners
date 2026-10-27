@@ -63,6 +63,17 @@ func (r Report) HasBlocked() bool {
 	return false
 }
 
+// HasUnsupported reports whether any job could not run on any machine here.
+// Such a run is not a verdict either: another machine may be able to run it.
+func (r Report) HasUnsupported() bool {
+	for _, x := range r.Results {
+		if x.Status == Unsupported {
+			return true
+		}
+	}
+	return false
+}
+
 // Allowlist is who may start runs on their own for the repo.
 func Allowlist(s store.CIRepo, login string) []string {
 	if len(s.Allow) > 0 {
@@ -182,7 +193,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			if res.Status == Fail {
 				state, desc = "failure", "Failed: "+res.Reason
 			}
-			if res.Status != Blocked {
+			if res.Status != Blocked && res.Status != Unsupported {
 				status(state, ctxName, desc)
 			}
 		} else if j.IsAggregate() {
@@ -190,7 +201,11 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			if res.Status != Pass {
 				state, desc = "failure", res.Reason
 			}
-			if res.Status != Blocked {
+			upstream := false
+			for _, nr := range needs {
+				upstream = upstream || nr.Status == Blocked || nr.Status == Unsupported
+			}
+			if res.Status != Blocked && res.Status != Unsupported && !upstream {
 				status(state, t.Name, desc)
 			}
 		}
@@ -213,6 +228,17 @@ func Run(ctx context.Context, o Options) (Report, error) {
 
 	if rep.HasBlocked() {
 		fmt.Fprintln(o.Out, "\nBLOCKED: a job hit an infrastructure error, not a test failure. Nothing was posted or merged; fix it and run again.")
+		return rep, nil
+	}
+	if rep.HasUnsupported() {
+		var names, reasons []string
+		for _, x := range rep.Results {
+			if x.Status == Unsupported {
+				names = append(names, x.Job)
+				reasons = append(reasons, x.Reason)
+			}
+		}
+		fmt.Fprintf(o.Out, "\nNOT SUPPORTED: no machine here can run %s: %s. Nothing was posted or merged.\n", strings.Join(names, ", "), strings.Join(reasons, "; "))
 		return rep, nil
 	}
 	if !post {
