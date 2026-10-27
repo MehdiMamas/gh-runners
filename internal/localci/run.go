@@ -158,6 +158,8 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	}
 
 	renv := RunEnv{Repo: o.Owner + "/" + o.Repo, SHA: sha, Ref: fmt.Sprintf("refs/pull/%d/merge", o.PR)}
+	jobEnv := ScrubEnv(os.Environ(), renv, nil)
+	jobSecrets := envValues(jobEnv)
 	runner := func(ctx context.Context, t Task, needs map[string]Result) Result {
 		j := wf.Jobs[t.Name]
 		res := Decide(wf, j, needs, outputs, changesName == t.Name)
@@ -168,7 +170,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			res = o.Exec.RunJob(ctx, JobSpec{
 				Name: t.Name, Job: j, Tarball: tarball, RunDir: jobDir,
 				Log: filepath.Join(runDir, "logs", t.Name+".log"),
-				Env: ScrubEnv(os.Environ(), renv, nil), RunEnv: renv,
+				Env: jobEnv, RunEnv: renv,
 			})
 			if res.Status == Pass {
 				_ = os.RemoveAll(filepath.Join(jobDir, "src"))
@@ -224,7 +226,13 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			status("failure", "ci-passed", "A job failed")
 		}
 	}
-	if err := c.UpsertComment(ctx, o.Owner, o.Repo, o.PR, Marker, CommentBody(sha, rep.Results)); err != nil {
+	if err := c.UpsertComment(ctx, o.Owner, o.Repo, o.PR, Marker, CommentBody(CommentInput{
+		PR: pr, Results: rep.Results, Secrets: jobSecrets,
+		Known: func() []github.Issue {
+			is, _ := c.ListOpenIssues(ctx, o.Owner, o.Repo)
+			return is
+		},
+	})); err != nil {
 		fmt.Fprintf(o.Out, "could not post the results comment: %v\n", err)
 	}
 	if o.Settings.Merge && rep.AllPassed() && len(o.Jobs) == 0 {
@@ -352,21 +360,5 @@ func FormatTable(rs []Result) string {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.Job, mach, res, r.Duration.Round(time.Second), log)
 	}
 	tw.Flush()
-	return b.String()
-}
-
-// CommentBody is the pull request comment: a short line and the table. It
-// starts with the marker so a re-run edits it in place.
-func CommentBody(sha string, rs []Result) string {
-	var b strings.Builder
-	b.WriteString(Marker + "\n")
-	fmt.Fprintf(&b, "Test results for `%s`, run on my machines:\n\n| Job | Result | Time |\n| --- | --- | --- |\n", sha[:7])
-	for _, r := range rs {
-		res := string(r.Status)
-		if r.Reason != "" && r.Status != Pass {
-			res += " - " + r.Reason
-		}
-		fmt.Fprintf(&b, "| %s | %s | %s |\n", r.Job, res, r.Duration.Round(time.Second))
-	}
 	return b.String()
 }
