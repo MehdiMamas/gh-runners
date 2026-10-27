@@ -33,6 +33,7 @@ type Result struct {
 	Reason   string // why it was skipped or unsupported, or the failing step
 	Duration time.Duration
 	Log      string // path of the job's log file
+	Machine  string // which machine ran it; empty when nothing ran
 }
 
 // JobSpec is everything an executor needs to run one job.
@@ -43,6 +44,9 @@ type JobSpec struct {
 	RunDir  string // per-job folder: workspace and artifacts go here
 	Log     string
 	Env     []string // scrubbed environment, KEY=VALUE
+	// RunEnv lets a fleet member rebuild the environment itself; the host's
+	// Env never leaves the host.
+	RunEnv RunEnv
 }
 
 // Executor runs one job. The local executor runs it on this machine; a
@@ -62,6 +66,37 @@ type RunEnv struct {
 	Workspace string
 }
 
+// keepKeys are the parent variables jobs may see. The second group matters
+// on Windows, where nothing starts without SystemRoot and friends.
+var keepKeys = map[string]bool{
+	"PATH": true, "HOME": true, "USER": true, "LANG": true, "TMPDIR": true, "SHELL": true, "LOGNAME": true,
+	"JAVA_HOME": true, "ANDROID_HOME": true, "ANDROID_SDK_ROOT": true, "PUB_CACHE": true, "FLUTTER_ROOT": true,
+	"SYSTEMROOT": true, "TEMP": true, "TMP": true, "USERPROFILE": true, "APPDATA": true, "LOCALAPPDATA": true,
+	"PROGRAMFILES": true, "PROGRAMFILES(X86)": true, "PROGRAMDATA": true, "COMSPEC": true, "PATHEXT": true,
+	"USERNAME": true, "HOMEDRIVE": true, "HOMEPATH": true,
+}
+
+// keepEnv reports whether a parent variable is passed on. Windows names are
+// case-insensitive (Path, SystemRoot); elsewhere they are exact.
+func keepEnv(k string) bool {
+	if runtime.GOOS == "windows" {
+		return keepKeys[strings.ToUpper(k)]
+	}
+	switch k {
+	case "PATH", "HOME", "USER", "LANG", "TMPDIR", "SHELL", "LOGNAME", "JAVA_HOME", "ANDROID_HOME", "ANDROID_SDK_ROOT", "PUB_CACHE", "FLUTTER_ROOT":
+		return true
+	}
+	return false
+}
+
+// envKey gives Windows variables one spelling so Path and PATH do not clash.
+func envKey(k string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToUpper(k)
+	}
+	return k
+}
+
 var secretKey = regexp.MustCompile(`(?i)TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY`)
 
 // ScrubEnv builds the environment steps run in: a few basics from the
@@ -75,9 +110,8 @@ func ScrubEnv(parent []string, r RunEnv, extra map[string]string) []string {
 		if !ok {
 			continue
 		}
-		switch k {
-		case "PATH", "HOME", "USER", "LANG", "TMPDIR", "SHELL", "LOGNAME":
-			have[k] = v
+		if keepEnv(k) {
+			have[envKey(k)] = v
 		}
 	}
 	have["CI"] = "true"
@@ -188,7 +222,7 @@ func (LocalExecutor) RunJob(ctx context.Context, spec JobSpec) Result {
 		return finish(Fail, "extract failed")
 	}
 	env := append([]string{}, spec.Env...)
-	env = append(env, "GITHUB_WORKSPACE="+ws)
+	env = append(env, "GITHUB_WORKSPACE="+bashPath(ws))
 	failed, failedStep := false, ""
 	for i, st := range spec.Job.Steps {
 		label := st.Name
@@ -290,7 +324,48 @@ func runScript(ctx context.Context, st Step, j *Job, ws string, env []string, lo
 			stepEnv = append(stepEnv, k+"="+v)
 		}
 	}
-	return runCmd(ctx, dir, stepEnv, log, "bash", "-eo", "pipefail", "-c", script)
+	bash, stepEnv, err := bashFor(stepEnv)
+	if err != nil {
+		return err
+	}
+	return runCmd(ctx, dir, stepEnv, log, bash, "-eo", "pipefail", "-c", script)
+}
+
+// bashFor returns the bash to run and the env to run it in. On Windows that
+// is Git Bash, with Git's usr\bin (sh, ls, grep, ...) first on PATH.
+func bashFor(env []string) (string, []string, error) {
+	bash, err := BashPath()
+	if err != nil {
+		return "", nil, fmt.Errorf("bash is not installed (on Windows install Git for Windows): %w", err)
+	}
+	if runtime.GOOS != "windows" {
+		return bash, env, nil
+	}
+	gitRoot := filepath.Dir(filepath.Dir(bash))
+	if strings.EqualFold(filepath.Base(filepath.Dir(bash)), "bin") && strings.EqualFold(filepath.Base(filepath.Dir(filepath.Dir(bash))), "usr") {
+		gitRoot = filepath.Dir(filepath.Dir(filepath.Dir(bash)))
+	}
+	extra := filepath.Join(gitRoot, "usr", "bin") + ";" + filepath.Join(gitRoot, "bin")
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if k, v, _ := strings.Cut(kv, "="); strings.EqualFold(k, "PATH") {
+			kv = "PATH=" + extra + ";" + v
+			extra = ""
+		}
+		out = append(out, kv)
+	}
+	if extra != "" {
+		out = append(out, "PATH="+extra)
+	}
+	return bash, out, nil
+}
+
+// bashPath gives bash a path it understands: forward slashes on Windows.
+func bashPath(p string) string {
+	if runtime.GOOS == "windows" {
+		return filepath.ToSlash(p)
+	}
+	return p
 }
 
 func mergeEnv(a, b map[string]string) map[string]string {

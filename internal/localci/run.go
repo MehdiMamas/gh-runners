@@ -126,7 +126,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		}
 		j := wf.Jobs[n]
 		t := Task{Name: n, Needs: j.Needs}
-		if j.NeedsJava() {
+		if _, self := o.Exec.(interface{ SelfLocking() bool }); j.NeedsJava() && !self {
 			t.Lock = "emulator"
 		}
 		tasks = append(tasks, t)
@@ -152,12 +152,12 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		res := Decide(wf, j, needs, outputs, changesName == t.Name)
 		if res.Status == "" {
 			ctxName := "local-ci/" + t.Name
-			status("pending", ctxName, "Running on this Mac")
+			status("pending", ctxName, "Running")
 			jobDir := filepath.Join(runDir, t.Name)
 			res = o.Exec.RunJob(ctx, JobSpec{
 				Name: t.Name, Job: j, Tarball: tarball, RunDir: jobDir,
 				Log: filepath.Join(runDir, "logs", t.Name+".log"),
-				Env: ScrubEnv(os.Environ(), renv, nil),
+				Env: ScrubEnv(os.Environ(), renv, nil), RunEnv: renv,
 			})
 			if res.Status == Pass {
 				_ = os.RemoveAll(filepath.Join(jobDir, "src"))
@@ -287,9 +287,6 @@ func Decide(wf *Workflow, j *Job, needs map[string]Result, outputs map[string]ma
 	if j.NeedsSecrets() {
 		return Result{Status: Skipped, Reason: "needs secrets"}
 	}
-	if os := strings.ToLower(j.RunsOn); (strings.HasPrefix(os, "windows") && runtime.GOOS != "windows") || (strings.HasPrefix(os, "macos") && runtime.GOOS != "darwin") {
-		return Result{Status: Unsupported, Reason: "runs-on " + j.RunsOn + " does not match this machine"}
-	}
 	for _, s := range j.Steps {
 		if s.Uses != "" && !knownUses(s.Uses) {
 			return Result{Status: Unsupported, Reason: "unsupported action " + s.Uses}
@@ -314,7 +311,7 @@ func sortedKeys(m map[string]Result) []string {
 func FormatTable(rs []Result) string {
 	var b strings.Builder
 	tw := tabwriter.NewWriter(&b, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "JOB\tRESULT\tTIME\tLOG")
+	fmt.Fprintln(tw, "JOB\tMACHINE\tRESULT\tTIME\tLOG")
 	for _, r := range rs {
 		res := string(r.Status)
 		if r.Reason != "" && r.Status != Pass {
@@ -324,7 +321,11 @@ func FormatTable(rs []Result) string {
 		if log == "" {
 			log = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.Job, res, r.Duration.Round(time.Second), log)
+		mach := r.Machine
+		if mach == "" {
+			mach = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.Job, mach, res, r.Duration.Round(time.Second), log)
 	}
 	tw.Flush()
 	return b.String()
@@ -335,7 +336,7 @@ func FormatTable(rs []Result) string {
 func CommentBody(sha string, rs []Result) string {
 	var b strings.Builder
 	b.WriteString(Marker + "\n")
-	fmt.Fprintf(&b, "Test results for `%s`, run on my Mac:\n\n| Job | Result | Time |\n| --- | --- | --- |\n", sha[:7])
+	fmt.Fprintf(&b, "Test results for `%s`, run on my machines:\n\n| Job | Result | Time |\n| --- | --- | --- |\n", sha[:7])
 	for _, r := range rs {
 		res := string(r.Status)
 		if r.Reason != "" && r.Status != Pass {
