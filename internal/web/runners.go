@@ -19,6 +19,7 @@ import (
 	"github.com/MehdiMamas/gh-runners/internal/control"
 	"github.com/MehdiMamas/gh-runners/internal/doctor"
 	"github.com/MehdiMamas/gh-runners/internal/github"
+	"github.com/MehdiMamas/gh-runners/internal/localci"
 	"github.com/MehdiMamas/gh-runners/internal/ops"
 	"github.com/MehdiMamas/gh-runners/internal/service"
 	"github.com/MehdiMamas/gh-runners/internal/store"
@@ -70,6 +71,10 @@ type stateView struct {
 	// LastSession is how many runners of the last session are stopped now:
 	// what "Run what was on before it closed" would start.
 	LastSession int `json:"last_session"`
+	// CIActive are the Local CI jobs running now, CITasks the Local CI runs
+	// queued or running in this dashboard.
+	CIActive []localci.ActiveJob `json:"ci_active"`
+	CITasks  []taskView          `json:"ci_tasks"`
 }
 
 type serviceView struct {
@@ -113,7 +118,12 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 		Service: serviceView{svc.Installed, svc.Where}, Auth: s.authView(r.Context()),
 		Runners: s.runnerViews(st), OnDemand: st.OnDemand, LastSync: since(st.LastSync),
 		SyncErr: st.SyncErr, Config: cfg, TasksBusy: s.tasks.busy(), OnDemandProcs: []control.ProcState{},
-		Update: st.Update,
+		Update: st.Update, CIActive: localci.ActiveJobs(), CITasks: []taskView{},
+	}
+	for _, t := range s.ci.views() {
+		if t.State == "queued" || t.State == "running" {
+			v.CITasks = append(v.CITasks, t)
+		}
 	}
 	for _, r := range ops.LastSessionRunners() {
 		if r.Disabled {

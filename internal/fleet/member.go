@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/github"
+	"github.com/MehdiMamas/gh-runners/internal/localci"
 	"github.com/MehdiMamas/gh-runners/internal/store"
 )
 
@@ -183,6 +184,9 @@ func (m *Member) info() *Info {
 	i := m.Info()
 	if i.CI == nil {
 		i.CI = m.ciInfo()
+	}
+	if i.CI != nil {
+		i.CI.Active = localci.ActiveJobs()
 	}
 	return &i
 }
