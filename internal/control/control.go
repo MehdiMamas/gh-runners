@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/localci"
@@ -201,4 +203,23 @@ func (e CIExecutor) RunJob(ctx context.Context, spec localci.JobSpec) localci.Re
 		return fail("bad answer from the daemon")
 	}
 	return res
+}
+
+// CIDispatcher sends each CI job to the machine that fits: this one, or a
+// fleet member when this machine is the running main host.
+func CIDispatcher() *localci.Dispatcher {
+	host, _ := os.Hostname()
+	cfg, _ := store.LoadConfig()
+	self := localci.LocalMachine(host, cfg.CIEmulatorOK())
+	return &localci.Dispatcher{
+		Machines: func() []localci.Machine {
+			ms := []localci.Machine{self}
+			if remote, err := CIMachines(); err == nil {
+				ms = append(ms, remote...)
+			}
+			return ms
+		},
+		Remote: func(m localci.Machine) localci.Executor { return CIExecutor{MemberID: m.ID} },
+		Locks:  &localci.Locks{Dir: filepath.Join(store.Home(), "ci", "locks")},
+	}
 }

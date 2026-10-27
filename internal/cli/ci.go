@@ -71,7 +71,7 @@ func newCIRunCmd() *cobra.Command {
 			o := localci.Options{
 				Client: c, Owner: owner, Repo: repo, PR: n, DryRun: dry, Approve: approve,
 				Settings: ciSettings(args[0]), Login: me.Login, Out: cmd.OutOrStdout(),
-				Exec: ciDispatcher(),
+				Exec: control.CIDispatcher(),
 			}
 			if jobs != "" {
 				o.Jobs = strings.Split(jobs, ",")
@@ -106,7 +106,7 @@ func newCIWatchCmd() *cobra.Command {
 			sig, stop := signal.NotifyContext(ctx(cmd), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			me, _, _ := c.Me(sig)
-			disp := ciDispatcher()
+			disp := control.CIDispatcher()
 			seenPath := filepath.Join(store.Home(), "ci", "seen.json")
 			seen := map[string]bool{}
 			_ = store.ReadJSON(seenPath, &seen)
@@ -220,25 +220,6 @@ func onOffWord(b bool) string {
 		return "on"
 	}
 	return "off"
-}
-
-// ciDispatcher sends each job to the machine that fits: this one, or a
-// fleet member when this machine is the running main host.
-func ciDispatcher() *localci.Dispatcher {
-	host, _ := os.Hostname()
-	cfg, _ := store.LoadConfig()
-	self := localci.LocalMachine(host, cfg.CIEmulatorOK())
-	return &localci.Dispatcher{
-		Machines: func() []localci.Machine {
-			ms := []localci.Machine{self}
-			if remote, err := control.CIMachines(); err == nil {
-				ms = append(ms, remote...)
-			}
-			return ms
-		},
-		Remote: func(m localci.Machine) localci.Executor { return control.CIExecutor{MemberID: m.ID} },
-		Locks:  &localci.Locks{Dir: filepath.Join(store.Home(), "ci", "locks")},
-	}
 }
 
 func newCIEmulatorCmd() *cobra.Command {

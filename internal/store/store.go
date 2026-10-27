@@ -303,6 +303,9 @@ type CIRepo struct {
 	// Allow lists the authors whose pull requests run on their own; empty
 	// means only the signed-in user.
 	Allow []string `json:"allow,omitempty"`
+	// Watch has the daemon run each new pull request head that passes the
+	// trust gate.
+	Watch bool `json:"watch,omitempty"`
 }
 
 // AutoUpdateOn reports whether the daemon installs new releases itself.

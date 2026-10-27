@@ -8,6 +8,7 @@
 package web
 
 import (
+	"context"
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
@@ -18,11 +19,13 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/control"
 	"github.com/MehdiMamas/gh-runners/internal/fleet"
 	"github.com/MehdiMamas/gh-runners/internal/github"
+	"github.com/MehdiMamas/gh-runners/internal/localci"
 	"github.com/MehdiMamas/gh-runners/internal/ops"
 	"github.com/MehdiMamas/gh-runners/internal/service"
 	"github.com/MehdiMamas/gh-runners/internal/store"
@@ -69,6 +72,13 @@ type Server struct {
 	found     timedCache[[]ops.Found]
 	// spawn runs `gh-runners <args>` detached; tests replace it.
 	spawn func(logName string, args ...string) error
+	// Local CI: its own queue, the watch loop's context and wake-up, and
+	// where jobs go (tests replace ciDispatch).
+	ci         *taskQueue
+	ciMu       sync.Mutex
+	ciCtx      context.Context
+	ciWake     chan struct{}
+	ciDispatch func() *localci.Dispatcher
 }
 
 // New returns a dashboard that unlocks with secret.
@@ -84,7 +94,8 @@ func New(h Hooks, secret string) *Server {
 	if h.Status == nil {
 		h.Status = func() control.Status { return control.Status{} }
 	}
-	s := &Server{h: h, secret: secret, tasks: newTaskQueue(h.Log)}
+	s := &Server{h: h, secret: secret, tasks: newTaskQueue(h.Log),
+		ci: newTaskQueue(h.Log), ciWake: make(chan struct{}, 1), ciDispatch: control.CIDispatcher}
 	if m := h.Member; m != nil {
 		s.auth.brokered = func() (*github.Client, string) {
 			if st := m.Status(); st.Joined {
@@ -238,6 +249,11 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/logout", s.postLogout)
 	mux.HandleFunc("GET /api/tasks", s.getTasks)
 	mux.HandleFunc("GET /api/tasks/{id}", s.getTask)
+	mux.HandleFunc("GET /api/ci", s.getCI)
+	mux.HandleFunc("PUT /api/ci/{owner}/{repo}", s.putCI)
+	mux.HandleFunc("POST /api/ci/run", s.postCIRun)
+	mux.HandleFunc("GET /api/ci/tasks/{id}", s.getCITask)
+	mux.HandleFunc("GET /api/ci/runs/{id}/logs/{job}", s.getCILog)
 	return mux
 }
 

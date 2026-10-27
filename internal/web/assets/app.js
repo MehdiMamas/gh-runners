@@ -18,6 +18,7 @@ const S = {
   fleet: null, // GET /api/machines: the main host's view of its machines
   mgh: {}, // machine id -> runner id -> state GitHub reports, for that machine's runners
   mwatch: new Set(), // "machine:task" pairs being followed
+  ci: null, // GET /api/ci: Local CI settings and recent runs
 };
 
 // ---------- helpers ----------
@@ -201,6 +202,12 @@ async function loadRepos(force) {
   S.reposLoading = false;
   renderRepos();
   loadGhRunners(force);
+  loadCI();
+}
+
+async function loadCI() {
+  try { S.ci = await api('GET', '/api/ci'); } catch { return; }
+  if (S.tab === 'repos') renderRepos();
 }
 
 async function loadRemote() {
@@ -450,7 +457,10 @@ function repoRow(r, addable) {
       ? [h('button', { class: 'btn small', title: 'Add one more runner for ' + r.full_name + ', say a light one next to a heavy one', onclick: () => addRepos([r.full_name], true) }, 'Add runner')]
       : [];
   } else if (!r.admin) {
-    actions = [h('span', { class: 'muted small', title: 'Only repository admins can add runners' }, 'Needs admin rights')];
+    // No runner can be added without admin rights; Local CI runs the
+    // repo's ci.yml on this machine (and the fleet) instead.
+    if (!r.archived && ciSettingsOf(r.full_name).watch) status = h('span', { class: 'pill plain ok' }, 'Local CI on');
+    actions = [h('button', { class: 'btn small', title: 'Only repository admins can add runners. Local CI runs this repo\'s ci.yml on your machines instead.', disabled: r.archived, onclick: () => ciDialog(r.full_name) }, 'Local CI')];
   } else if (!r.archived && hand) {
     status = h('span', { class: 'pill warn', title: hand.dir }, 'Set up by hand here');
     actions = [h('button', { class: 'btn primary small', onclick: () => adopt(hand) }, 'Move into gh-runners')];
@@ -935,6 +945,124 @@ function showLog(r, base = '', title) {
   openDialog({ title: r ? 'Output of ' + (title || who(r)) : 'gh-runners background service log', body: pre, wide: true, onclose: () => clearInterval(timer) });
   load();
   timer = setInterval(load, 2000);
+}
+
+// ---------- local CI ----------
+function ciSettingsOf(full) {
+  const c = S.ci && S.ci.repos.find((x) => x.repo === full);
+  return c || { repo: full, watch: false, post: false, merge: false, allow: [] };
+}
+
+function ciDur(ns) { // time.Duration in nanoseconds -> short text
+  const s = Math.round((ns || 0) / 1e9);
+  if (s < 60) return s + 's';
+  return Math.floor(s / 60) + 'm' + (s % 60 ? ' ' + (s % 60) + 's' : '');
+}
+
+function ciStatusPill(st) {
+  const cls = { PASS: 'ok', FAIL: 'bad', UNSUPPORTED: 'warn' }[st] || '';
+  const text = { PASS: 'Passed', FAIL: 'Failed', SKIPPED: 'Skipped', UNSUPPORTED: 'Not supported' }[st] || st;
+  return h('span', { class: 'pill plain ' + cls }, text);
+}
+
+function ciJobLog(run, job) {
+  const pre = h('pre', { class: 'log' }, 'Loading ...');
+  openDialog({ title: `Log of ${job}, ${run.repo} #${run.pr}`, body: pre, wide: true, onclose: () => ciDialog(run.repo) });
+  api('GET', `/api/ci/runs/${encodeURIComponent(run.id)}/logs/${encodeURIComponent(job)}?lines=500`)
+    .then((d) => { pre.textContent = d.text; pre.scrollTop = pre.scrollHeight; })
+    .catch((e) => { pre.textContent = e.message; });
+}
+
+function ciDialog(full) {
+  const cur = ciSettingsOf(full);
+  const set = { watch: !!cur.watch, post: !!cur.post, merge: !!cur.merge };
+  let timer = null;
+  const allow = h('input', { type: 'text', value: list(cur.allow), placeholder: (S.state && S.state.auth.login) || 'you', 'aria-label': 'Allowed authors' });
+  const save = () => guard(async () => {
+    await api('PUT', '/api/ci/' + full.split('/').map(encodeURIComponent).join('/'), { ...set, allow: split(allow.value) });
+    toast('Local CI settings saved for ' + full);
+    await loadCI();
+  });
+  const settings = h('div', { class: 'fields' },
+    sw(set.watch, (v) => { set.watch = v; }, 'Run my pull requests automatically'),
+    sw(set.post, (v) => { set.post = v; }, 'Post results on the pull request'),
+    sw(set.merge, (v) => { set.merge = v; }, 'Merge approved pull requests when every job passed'),
+    h('label', { class: 'field' }, 'Authors whose pull requests run on their own', allow,
+      h('span', { class: 'hint' }, 'Comma separated. Empty means only you. Pull requests from forks never run on their own.')),
+    h('div', { class: 'row' }, h('button', { class: 'btn primary small', onclick: save }, 'Save settings')));
+
+  const prInput = h('input', { type: 'number', min: 1, placeholder: '12', 'aria-label': 'Pull request number' });
+  const dry = h('input', { type: 'checkbox', checked: true });
+  const approve = h('input', { type: 'checkbox' });
+  const pre = h('pre', { class: 'log', hidden: true });
+  const follow = (id) => {
+    pre.hidden = false; pre.textContent = 'Queued ...';
+    clearInterval(timer);
+    const load = async () => {
+      try {
+        const t = await api('GET', '/api/ci/tasks/' + id);
+        const stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+        const text = (t.log || 'Waiting to start ...') + (t.error ? '\n' + t.error : '');
+        if (pre.textContent !== text) { pre.textContent = text; if (stick) pre.scrollTop = pre.scrollHeight; }
+        if (t.state === 'done' || t.state === 'failed') {
+          clearInterval(timer); timer = null;
+          await loadCI();
+          mount(recent, ciRecent(full));
+        }
+      } catch (e) { pre.textContent = e.message; clearInterval(timer); timer = null; }
+    };
+    load();
+    timer = setInterval(load, 2000);
+  };
+  const run = () => guard(async () => {
+    const pr = parseInt(prInput.value, 10);
+    if (!(pr > 0)) { toast('Type a pull request number', true); return; }
+    const r = await api('POST', '/api/ci/run', { repo: full, pr, dry_run: dry.checked, approve: approve.checked });
+    follow(r.task);
+  });
+  const runForm = h('div', { class: 'fields' },
+    h('label', { class: 'field' }, 'Pull request #', prInput),
+    h('label', { class: 'check' }, dry, ' Dry run: post and merge nothing'),
+    h('label', { class: 'check' }, approve, ' Run even if the author is not trusted (read the changes first)'),
+    h('div', { class: 'row' }, h('button', { class: 'btn primary small', onclick: run }, 'Run now')),
+    pre);
+
+  const recent = h('div', {}, ciRecent(full));
+  // A run of this repo still going on: follow it.
+  const live = S.ci && S.ci.tasks.find((t) => (t.scopes || []).includes(full) && (t.state === 'queued' || t.state === 'running'));
+  openDialog({
+    title: 'Local CI: ' + full, wide: true, onclose: () => clearInterval(timer),
+    body: h('div', {},
+      h('p', { class: 'muted small' }, 'Runs this repository\'s .github/workflows/ci.yml on this machine and your other machines, without adding a runner. Only your pull requests and those of the authors below run on their own.'),
+      h('h3', { class: 'ci-h' }, 'Settings'), settings,
+      h('h3', { class: 'ci-h' }, 'Run a pull request'), runForm,
+      h('h3', { class: 'ci-h' }, 'Recent results'), recent),
+  });
+  if (live) follow(live.id);
+}
+
+function ciRecent(full) {
+  const runs = ((S.ci && S.ci.runs) || []).filter((r) => r.repo === full);
+  if (!runs.length) return h('p', { class: 'muted small' }, 'No runs yet.');
+  const rows = [];
+  for (const r of runs) {
+    const when = h('span', { class: 'muted small', title: r.started }, ago(r.ended || r.started));
+    const head = 'PR #' + r.pr + (r.sha ? ' · ' + r.sha.slice(0, 7) : '') + (r.dry_run ? ' · dry run' : '') + (r.auto ? ' · automatic' : '') + (r.merged ? ' · merged' : '');
+    if (!r.results || !r.results.length) {
+      rows.push(h('tr', {}, h('td', {}, head), h('td', {}, '-'), h('td', {}, '-'), h('td', { class: 'err' }, r.error || 'Nothing ran'), h('td', {}, when), h('td', {})));
+      continue;
+    }
+    r.results.forEach((x, i) => rows.push(h('tr', {},
+      h('td', {}, i === 0 ? head : ''),
+      h('td', {}, x.Job),
+      h('td', {}, x.Machine || '-'),
+      h('td', { title: x.Reason || '' }, ciStatusPill(x.Status), x.Reason && x.Status !== 'PASS' ? h('span', { class: 'muted small' }, ' ' + x.Reason) : null, x.Duration ? h('span', { class: 'muted small' }, ' ' + ciDur(x.Duration)) : null),
+      h('td', {}, i === 0 ? when : ''),
+      h('td', {}, x.Log ? h('button', { class: 'linkbtn small', onclick: () => ciJobLog(r, x.Job) }, 'Log') : null))));
+  }
+  return h('table', { class: 'ci-table' },
+    h('thead', {}, h('tr', {}, ['Pull request', 'Job', 'Machine', 'Result', 'When', ''].map((t) => h('th', {}, t)))),
+    h('tbody', {}, rows));
 }
 
 // nothingRunning explains the empty state after a start: the daemon starts
