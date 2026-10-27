@@ -99,6 +99,8 @@ type Info struct {
 	Runners  []RunnerInfo `json:"runners"`
 	// Paused means the machine is paused: none of its runners run.
 	Paused bool `json:"paused,omitempty"`
+	// CI is set when this machine accepts CI jobs from the main host.
+	CI *CIInfo `json:"ci,omitempty"`
 }
 
 // RunnerInfo is one runner of a member.
