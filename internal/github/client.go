@@ -438,16 +438,17 @@ func (c *Client) GenerateJITConfig(ctx context.Context, s Scope, name string, la
 
 // Repo is the subset of repository fields gh-runners uses.
 type Repo struct {
-	FullName    string `json:"full_name"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	HTMLURL     string `json:"html_url"`
-	Private     bool   `json:"private"`
-	Archived    bool   `json:"archived"`
-	Fork        bool   `json:"fork"`
-	Disabled    bool   `json:"disabled"`
-	PushedAt    string `json:"pushed_at"`
-	Owner       struct {
+	FullName      string `json:"full_name"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	HTMLURL       string `json:"html_url"`
+	Private       bool   `json:"private"`
+	Archived      bool   `json:"archived"`
+	Fork          bool   `json:"fork"`
+	Disabled      bool   `json:"disabled"`
+	PushedAt      string `json:"pushed_at"`
+	DefaultBranch string `json:"default_branch"`
+	Owner         struct {
 		Login string `json:"login"`
 		Type  string `json:"type"`
 	} `json:"owner"`

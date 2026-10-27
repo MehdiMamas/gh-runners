@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -279,6 +280,17 @@ type Config struct {
 	FleetPort int `json:"fleet_port,omitempty"`
 	// CI is the local CI setting per "owner/repo" (see `gh-runners ci`).
 	CI map[string]CIRepo `json:"ci,omitempty"`
+	// CIEmulator lets this machine run the jobs that start the Firebase
+	// emulators; unset means yes on macOS and Linux, no on Windows.
+	CIEmulator *bool `json:"ci_emulator,omitempty"`
+}
+
+// CIEmulatorOK reports whether emulator jobs may run on this machine.
+func (c Config) CIEmulatorOK() bool {
+	if c.CIEmulator != nil {
+		return *c.CIEmulator
+	}
+	return runtime.GOOS != "windows"
 }
 
 // CIRepo says what `gh-runners ci` may do on a repo. Everything is off

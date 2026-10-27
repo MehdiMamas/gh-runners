@@ -19,6 +19,10 @@ func Supervise(cmd *exec.Cmd) { supervise(cmd) }
 // console window on Windows.
 func Detach(cmd *exec.Cmd) { detach(cmd) }
 
+// Kill kills cmd and every process it started at once. cmd must have been
+// prepared with Supervise.
+func Kill(cmd *exec.Cmd) { kill(cmd) }
+
 // Stop stops cmd and everything it started: it asks the process group to
 // exit (so GitHub sees the runner go offline), waits up to grace until the
 // whole tree is gone, then kills what is left. The leader (run.sh) can exit

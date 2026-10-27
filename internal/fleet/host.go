@@ -46,8 +46,13 @@ type Host struct {
 	Addrs func() []string
 	// Log, when set, gets one line per member event.
 	Log func(format string, args ...any)
+	// CIRepos lists the owner/repo names whose source members may download
+	// for CI jobs. Nil means none.
+	CIRepos func() []string
 
-	smu      sync.Mutex // host.json
+	tarMu    sync.Mutex           // the tarball cache
+	ciLogs   map[string]io.Writer // CI job id → where its log goes
+	smu      sync.Mutex           // host.json
 	mu       sync.Mutex
 	ln       net.Listener
 	port     int
@@ -418,6 +423,13 @@ func (h *Host) hello(c *conn, f frame, remote string) {
 				s.info = *f2.Info
 				h.mu.Unlock()
 			}
+		case tCILog:
+			h.mu.Lock()
+			w := h.ciLogs[f2.Path]
+			h.mu.Unlock()
+			if w != nil {
+				_, _ = w.Write(f2.Body)
+			}
 		case tLeave:
 			_ = h.forget(f.MemberID)
 			h.logf("main host: machine %s left", f.MemberID)
@@ -561,6 +573,11 @@ func (h *Host) Call(ctx context.Context, id, method, pathQuery string, body []by
 // broker makes a member's GitHub API call with the host's token. The
 // token goes only to GitHub; the member gets the status and body back.
 func (h *Host) broker(f frame) frame {
+	if f.Kind == kindGitHub && f.Method == http.MethodGet {
+		if m := tarballRe.FindStringSubmatch(f.Path); m != nil {
+			return h.serveTarball(f, m)
+		}
+	}
 	if f.Kind != kindGitHub || !GitHubAllowed(f.Method, f.Path) {
 		return githubError(http.StatusForbidden, "the main host does not make this GitHub call for other machines")
 	}

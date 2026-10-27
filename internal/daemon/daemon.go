@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"github.com/MehdiMamas/gh-runners/internal/control"
 	"github.com/MehdiMamas/gh-runners/internal/fleet"
 	"github.com/MehdiMamas/gh-runners/internal/github"
+	"github.com/MehdiMamas/gh-runners/internal/localci"
 	"github.com/MehdiMamas/gh-runners/internal/ops"
 	"github.com/MehdiMamas/gh-runners/internal/proc"
 	"github.com/MehdiMamas/gh-runners/internal/runner"
@@ -137,8 +139,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 			os.Remove(store.DaemonPath())
 		}
 	}()
-	d.host = &fleet.Host{Dir: store.FleetDir(), Token: d.hostToken, Log: d.Log.Printf}
-	d.member = &fleet.Member{Dir: store.FleetDir(), Info: d.fleetInfo, Log: d.Log.Printf}
+	d.host = &fleet.Host{Dir: store.FleetDir(), Token: d.hostToken, Log: d.Log.Printf, CIRepos: ciRepos}
+	d.member = &fleet.Member{
+		Dir: store.FleetDir(), Info: d.fleetInfo, Log: d.Log.Printf,
+		CIDir:        filepath.Join(store.Home(), "ci", "fleet"),
+		CITools:      localci.CachedTools,
+		CIEmulatorOK: func() bool { c, _ := store.LoadConfig(); return c.CIEmulatorOK() },
+	}
 	d.brokered = d.member.Client()
 	dash := web.New(web.Hooks{
 		Version:     d.Version,
@@ -301,6 +308,20 @@ func (d *Daemon) handler(secret string, shutdown context.CancelFunc) http.Handle
 		if err := d.Resume(); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
+	}))
+	mux.HandleFunc("GET /ci/machines", auth(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(d.host.CIMachines())
+	}))
+	mux.HandleFunc("POST /ci/run", auth(func(w http.ResponseWriter, r *http.Request) {
+		var req control.CIRunRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		res := fleet.RemoteExecutor{Host: d.host, MemberID: req.MemberID}.RunJob(r.Context(), req.Spec)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(res)
 	}))
 	mux.HandleFunc("POST /shutdown", auth(func(w http.ResponseWriter, r *http.Request) {
 		shutdown()
@@ -620,3 +641,16 @@ func (w logWriter) Write(p []byte) (int, error) {
 }
 
 var _ io.Writer = logWriter{}
+
+// ciRepos lists the repos whose source fleet members may fetch for CI jobs.
+func ciRepos() []string {
+	c, err := store.LoadConfig()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for r := range c.CI {
+		out = append(out, r)
+	}
+	return out
+}

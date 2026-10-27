@@ -38,7 +38,13 @@ type Member struct {
 	Log func(format string, args ...any)
 	// OnChange is called when the link changes (joined, left, removed).
 	OnChange func()
+	// CIDir, when set, turns on CI jobs from the main host and is where
+	// they work. CITools and CIEmulatorOK say what this machine can run.
+	CIDir        string
+	CITools      func() []string
+	CIEmulatorOK func() bool
 
+	jobs   map[string]context.CancelFunc // running CI jobs by id
 	mu     sync.Mutex
 	c      *conn
 	since  time.Time
@@ -175,6 +181,9 @@ func (m *Member) info() *Info {
 		return &Info{}
 	}
 	i := m.Info()
+	if i.CI == nil {
+		i.CI = m.ciInfo()
+	}
 	return &i
 }
 
@@ -225,7 +234,12 @@ func (m *Member) session(ctx context.Context, st memberState) bool {
 
 	stop := make(chan struct{})
 	go m.sendStatus(ctx, c, st, stop)
-	err = c.serve(m.handleAPI, func(f frame) error {
+	sctx, scancel := context.WithCancel(ctx)
+	defer scancel()
+	err = c.serve(m.ciHandler(sctx, c), func(f frame) error {
+		if f.Type == tCICancel {
+			m.cancelJob(f.Path)
+		}
 		if f.Type == tRemoved {
 			m.removed(st)
 			return ErrRevoked
