@@ -270,8 +270,8 @@ pre.log {
 .task pre.log { margin-top: 8px; max-height: 360px; }
 
 /* health */
-.check { display: flex; gap: 10px; padding: 9px 0; border-top: 1px solid var(--border); align-items: flex-start; }
-.check:first-child { border-top: 0; }
+div.check { display: flex; gap: 10px; padding: 9px 0; border-top: 1px solid var(--border); align-items: flex-start; }
+div.check:first-child { border-top: 0; }
 .check .mark { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
 .mark.ok { background: var(--ok-soft); color: var(--ok); }
 .mark.fix { background: var(--bad-soft); color: var(--bad); }
@@ -282,6 +282,7 @@ dialog {
   border: 1px solid var(--border); border-radius: 14px; padding: 0; background: var(--panel); color: var(--text);
   width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 48px); box-shadow: 0 20px 60px rgba(0,0,0,.35);
 }
+dialog:focus { outline: none; }
 dialog.wide { width: min(980px, calc(100vw - 32px)); }
 dialog::backdrop { background: rgba(10, 14, 20, .45); }
 .dlg-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
@@ -324,7 +325,16 @@ body.locked { display: grid; place-items: center; min-height: 100vh; padding: 16
 .locked-box pre { background: var(--panel-2); padding: 10px; border-radius: 8px; font-size: 14px; }
 
 /* Local CI dialog */
-.ci-h { margin-top: 18px; }
+.ci-h { margin-top: 20px; }
+.ci-settings, .ci-run { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; margin: 12px 0; }
+.ci-settings .switch { align-items: flex-start; }
+.ci-settings .switch .track { margin-top: 1px; }
+.ci-sw-text { display: flex; flex-direction: column; gap: 2px; }
+.ci-sw-text .hint { font-weight: 400; color: var(--muted); font-size: 12px; }
+.ci-settings label.field { align-self: stretch; max-width: 520px; }
+.ci-run { gap: 10px; }
+.ci-run input[type=number] { width: 140px; }
+.ci-run pre.log { align-self: stretch; }
 .ci-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .ci-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 4px 6px; border-bottom: 1px solid var(--border); }
 .ci-table td { padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
