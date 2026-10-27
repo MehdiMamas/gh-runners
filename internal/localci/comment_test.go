@@ -150,3 +150,36 @@ func TestCommentBodyCapped(t *testing.T) {
 		t.Fatalf("comment is %d chars", n)
 	}
 }
+
+func TestScrubPaths(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"/Users/bob/.gh-runners/ci/app/pr599-332b388-1793094601/src/a.ts:3 boom", "<workdir>/src/a.ts:3 boom"},
+		{`C:\Users\bob\.gh-runners\ci\app\pr7-abc-1\src\a.ts:3`, `<workdir>\src\a.ts:3`},
+		{"at /Users/bob/Library/x.js and /home/amy/y.js", "at ~/Library/x.js and ~/y.js"},
+		{`C:\Users\bob\AppData\z`, `~\AppData\z`},
+		{"nothing here /usr/lib/x", "nothing here /usr/lib/x"},
+	}
+	for _, c := range cases {
+		if got := ScrubPaths(c.in); got != c.want {
+			t.Errorf("ScrubPaths(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestCommentBodyHidesPaths(t *testing.T) {
+	dir := t.TempDir()
+	log := dir + "/job.log"
+	line := "--- FAIL: TestX\n    /Users/bob/.gh-runners/ci/app/pr1-abc-2/x_test.go:9: bad\n"
+	if err := os.WriteFile(log, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	body := CommentBody(CommentInput{PR: testPR(), Results: []Result{
+		{Job: "t", Status: Fail, Reason: "step in /Users/bob/.gh-runners/ci/app/pr1-abc-2", Log: log, Machine: "m"},
+	}})
+	if strings.Contains(body, "bob") || strings.Contains(body, "/Users/") {
+		t.Errorf("path leaked:\n%s", body)
+	}
+	if !strings.Contains(body, "<workdir>/x_test.go:9") {
+		t.Errorf("run folder not replaced:\n%s", body)
+	}
+}
