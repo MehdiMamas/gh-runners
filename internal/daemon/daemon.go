@@ -78,6 +78,8 @@ type Daemon struct {
 	updated  atomic.Bool // a new binary was installed; see stopResult
 
 	updateNow chan struct{}
+	// updateCfg wakes the update loop when settings may have changed.
+	updateCfg chan struct{}
 	upd       control.UpdateState
 	// ciBusy names the queued or running Local CI task, or "" when none.
 	ciBusy func() string
@@ -110,6 +112,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.reload = make(chan struct{}, 1)
 	d.syncNow = make(chan struct{}, 1)
 	d.updateNow = make(chan struct{}, 1)
+	d.updateCfg = make(chan struct{}, 1)
 	d.jit = newJITManager(d)
 	d.paused.Store(store.IsPaused())
 	d.startStopped()
@@ -152,7 +155,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	dash := web.New(web.Hooks{
 		Version:     d.Version,
 		Status:      d.status,
-		Reload:      func() { nudge(d.reload) },
+		Reload:      func() { nudge(d.reload); nudge(d.updateCfg) },
 		SyncNow:     func() { nudge(d.syncNow) },
 		WakeJIT:     d.jit.wake,
 		ResetClient: d.resetClient,
@@ -293,6 +296,7 @@ func (d *Daemon) handler(secret string, shutdown context.CancelFunc) http.Handle
 	}))
 	mux.HandleFunc("POST /reload", auth(func(w http.ResponseWriter, r *http.Request) {
 		nudge(d.reload)
+		nudge(d.updateCfg)
 	}))
 	mux.HandleFunc("POST /sync", auth(func(w http.ResponseWriter, r *http.Request) {
 		nudge(d.syncNow)

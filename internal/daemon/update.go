@@ -17,7 +17,6 @@ import (
 
 const (
 	updateFirst = 2 * time.Minute
-	updateEvery = 6 * time.Hour
 	// updateBusy is how often a pending update checks whether jobs finished.
 	updateBusy = 2 * time.Minute
 )
@@ -34,6 +33,14 @@ func (d *Daemon) updateLoop(ctx context.Context) {
 	}
 	timer := time.NewTimer(updateFirst)
 	defer timer.Stop()
+	every := updateEvery()
+	due := time.Now().Add(updateFirst)
+	d.setUpdate(func(u *control.UpdateState) { u.Every, u.Next = store.ShortDuration(every), due })
+	arm := func(wait time.Duration) {
+		due = time.Now().Add(wait)
+		d.setUpdate(func(u *control.UpdateState) { u.Every, u.Next = store.ShortDuration(updateEvery()), due })
+		timer.Reset(wait)
+	}
 	pending := false // asked from the dashboard; retry until it is done
 	for {
 		select {
@@ -42,16 +49,58 @@ func (d *Daemon) updateLoop(ctx context.Context) {
 		case <-timer.C:
 		case <-d.updateNow:
 			pending = true
+		case <-d.updateCfg:
+			// Settings were saved. Only a changed interval moves the next
+			// check: it is due the new interval after the last check.
+			if now := updateEvery(); now != every {
+				every = now
+				wait := rescheduled(d.updateChecked(), time.Now(), every, due)
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				arm(wait)
+			}
+			continue
 		}
 		if d.paused.Load() {
 			pending = false
-			timer.Reset(d.pausedWait())
+			arm(d.pausedWait())
 			continue
 		}
 		var next time.Duration
 		next, pending = d.checkUpdate(ctx, pending)
-		timer.Reset(next)
+		every = updateEvery()
+		arm(next)
 	}
+}
+
+// updateEvery is the interval from the settings, read each time so a change
+// applies without a restart.
+func updateEvery() time.Duration {
+	cfg, _ := store.LoadConfig()
+	return cfg.UpdateEvery()
+}
+
+// rescheduled says how long to wait for the next check after the interval
+// changed to every: it counts from the last check (due as before when there
+// was none), and a check that is already overdue runs in a few seconds.
+func rescheduled(checked, now time.Time, every time.Duration, due time.Time) time.Duration {
+	if checked.IsZero() {
+		if w := due.Sub(now); w < every {
+			return max(w, 0)
+		}
+		return every
+	}
+	return min(max(checked.Add(every).Sub(now), 5*time.Second), every)
+}
+
+func (d *Daemon) updateChecked() time.Time {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.upd.Checked
 }
 
 // checkUpdate does one round and says when to do the next one and whether
@@ -61,7 +110,7 @@ func (d *Daemon) checkUpdate(ctx context.Context, asked bool) (time.Duration, bo
 		d.setUpdate(func(u *control.UpdateState) {
 			u.Note = devNote(d.Version)
 		})
-		return updateEvery, false
+		return updateEvery(), false
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	latest, err := update.Latest(cctx)
@@ -77,12 +126,12 @@ func (d *Daemon) checkUpdate(ctx context.Context, asked bool) (time.Duration, bo
 	d.setUpdate(func(u *control.UpdateState) { u.Latest, u.Checked, u.Error = latest, time.Now(), "" })
 	if !update.Newer(latest, d.Version) {
 		d.setUpdate(func(u *control.UpdateState) { u.Note = "up to date" })
-		return updateEvery, false
+		return updateEvery(), false
 	}
 	cfg, _ := store.LoadConfig()
 	if !asked && !cfg.AutoUpdateOn() {
 		d.setUpdate(func(u *control.UpdateState) { u.Note = latest + " is available; auto-update is off" })
-		return updateEvery, false
+		return updateEvery(), false
 	}
 	waiting, err := d.applyUpdate(ctx, latest)
 	if err != nil {
@@ -93,7 +142,7 @@ func (d *Daemon) checkUpdate(ctx context.Context, asked bool) (time.Duration, bo
 	if waiting {
 		return updateBusy, asked
 	}
-	return updateEvery, false
+	return updateEvery(), false
 }
 
 // applyUpdate downloads the release, waits for idle runners, swaps the

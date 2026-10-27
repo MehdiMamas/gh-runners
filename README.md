@@ -414,6 +414,9 @@ runner on the machine is running a job (it asks GitHub whether your runners
 are busy), so jobs are never cut off; a pending update waits and retries.
 Runners themselves auto-update too, as GitHub's runner program always does.
 
+- The check interval is 6 hours by default; change it (5 minutes to 7 days)
+  with `gh-runners config update-interval 10m` or in **Settings > Updates**.
+  It applies without a restart.
 - Turn it off, or update right away, under **Settings > Updates** in the
   dashboard, or run `gh-runners update` (`--check` only looks).
 - Versions before v0.3.0 don't have the updater: run the install command

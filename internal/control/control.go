@@ -55,6 +55,8 @@ type UpdateState struct {
 	Checked time.Time `json:"checked,omitzero"` // last successful check
 	Note    string    `json:"note,omitempty"`   // what it is doing or waiting for
 	Error   string    `json:"error,omitempty"`
+	Every   string    `json:"every,omitempty"` // check interval in use
+	Next    time.Time `json:"next,omitzero"`   // when the next check is due
 }
 
 // ErrNotRunning means no daemon answered.

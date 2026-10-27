@@ -273,6 +273,9 @@ type Config struct {
 	// AutoUpdate installs new gh-runners releases when no job is running;
 	// unset means on.
 	AutoUpdate *bool `json:"auto_update,omitempty"`
+	// UpdateInterval is how often the daemon looks for a new release; unset
+	// means 6 hours (see UpdateEvery).
+	UpdateInterval Duration `json:"update_interval,omitzero"`
 	// MainHost makes this machine the main host: it listens on FleetPort so
 	// other machines can join and be managed from this dashboard.
 	MainHost bool `json:"main_host,omitempty"`
@@ -310,6 +313,50 @@ type CIRepo struct {
 
 // AutoUpdateOn reports whether the daemon installs new releases itself.
 func (c Config) AutoUpdateOn() bool { return c.AutoUpdate == nil || *c.AutoUpdate }
+
+// Update check interval: default, and the limits ParseUpdateInterval keeps.
+const (
+	DefaultUpdateEvery = 6 * time.Hour
+	MinUpdateEvery     = 5 * time.Minute
+	MaxUpdateEvery     = 7 * 24 * time.Hour
+)
+
+// UpdateEvery is how often this machine checks for a new release.
+func (c Config) UpdateEvery() time.Duration { return c.UpdateInterval.Or(DefaultUpdateEvery) }
+
+// ShortDuration writes 10m0s as 10m and 6h0m0s as 6h.
+func ShortDuration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
+}
+
+// CheckUpdateInterval refuses an interval outside 5 minutes to 7 days.
+func CheckUpdateInterval(d time.Duration) error {
+	if d < MinUpdateEvery || d > MaxUpdateEvery {
+		return fmt.Errorf("the update check interval must be between 5m and 7 days (168h), not %s", d)
+	}
+	return nil
+}
+
+// ParseUpdateInterval reads "10m", "2h" and so on; "default" or "" gives 0,
+// which means the default.
+func ParseUpdateInterval(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" || strings.EqualFold(s, "default") {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a duration like 10m or 2h (or \"default\")", s)
+	}
+	return d, CheckUpdateInterval(d)
+}
 
 // Sync decides which repositories `gh-runners sync` (and the daemon's
 // auto-sync) give a runner.
