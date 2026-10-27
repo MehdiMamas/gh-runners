@@ -30,6 +30,21 @@ func kill(cmd *exec.Cmd) {
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 }
 
+func terminate(cmd *exec.Cmd, grace time.Duration) {
+	pid := cmd.Process.Pid
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	// The group outlives its leader while any member runs, so this also
+	// reaches a child that ignored SIGTERM.
+	deadline := time.Now().Add(grace)
+	for time.Now().Before(deadline) {
+		if syscall.Kill(-pid, 0) == syscall.ESRCH {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+}
+
 // treeGone reports whether no process is left in cmd's process group. The
 // group outlives its leader for as long as one member runs, which is how an
 // orphaned Runner.Listener shows up.

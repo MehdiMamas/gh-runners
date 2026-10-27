@@ -23,6 +23,11 @@ func Detach(cmd *exec.Cmd) { detach(cmd) }
 // prepared with Supervise.
 func Kill(cmd *exec.Cmd) { kill(cmd) }
 
+// Terminate asks cmd's whole process group to exit (SIGTERM) and kills what
+// is left after grace. It returns once the group is gone or killed. On Windows it kills the tree.
+// cmd must have been prepared with Supervise.
+func Terminate(cmd *exec.Cmd, grace time.Duration) { terminate(cmd, grace) }
+
 // Stop stops cmd and everything it started: it asks the process group to
 // exit (so GitHub sees the runner go offline), waits up to grace until the
 // whole tree is gone, then kills what is left. The leader (run.sh) can exit

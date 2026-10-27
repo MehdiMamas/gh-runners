@@ -400,8 +400,8 @@ func runCmd(ctx context.Context, dir string, env []string, log io.Writer, name s
 	// child would keep the job log open (Windows cannot delete it) and keep
 	// ports such as the emulators' taken.
 	proc.Supervise(cmd)
-	cmd.Cancel = func() error { proc.Kill(cmd); return nil }
-	cmd.WaitDelay = 5 * time.Second
+	cmd.Cancel = func() error { proc.Terminate(cmd, 3*time.Second); return nil }
+	cmd.WaitDelay = 8 * time.Second
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}

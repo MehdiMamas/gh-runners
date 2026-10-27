@@ -246,6 +246,10 @@ func (s *Server) wakeCI() {
 // when the pull request passes the trust gate (the signed-in user or an
 // allowed author, never a fork).
 func (s *Server) CIWatch(ctx context.Context) {
+	// Anything left under ci/ belongs to a run the last daemon dropped.
+	if n := localci.SweepOrphans(s.h.Log.Printf); n > 0 {
+		s.h.Log.Printf("local ci: cleaned up %d leftover process(es)", n)
+	}
 	s.ciMu.Lock()
 	s.ciCtx = ctx
 	s.ciMu.Unlock()
@@ -305,3 +309,15 @@ func (s *Server) ciWatchOnce(ctx context.Context) {
 		_ = store.WriteJSON(ciSeenPath(), seen, 0o644)
 	}
 }
+
+// WaitCI waits up to d for the Local CI runs to end. The daemon calls it
+// after cancelling their context, so each run kills its job processes and
+// records itself in the history before the process exits.
+func (s *Server) WaitCI(d time.Duration) {
+	for end := time.Now().Add(d); s.ci.busy() > 0 && time.Now().Before(end); {
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// ciBusy reports whether a Local CI run is queued or running.
+func (s *Server) ciBusy() bool { return s.ci.busy() > 0 }

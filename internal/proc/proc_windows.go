@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -41,6 +42,8 @@ func kill(cmd *exec.Cmd) {
 		_ = cmd.Process.Kill()
 	}
 }
+
+func terminate(cmd *exec.Cmd, _ time.Duration) { kill(cmd) }
 
 func env() []string {
 	// The daemon's own environment is the one from when it started, and a

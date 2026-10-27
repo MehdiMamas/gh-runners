@@ -1,0 +1,105 @@
+package localci
+
+import (
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/MehdiMamas/gh-runners/internal/store"
+)
+
+// A Local CI job runs in ci/<owner>-<repo>/pr<N>-<sha7>-<unix>/<job>/src.
+// When the daemon stops in the middle of a run, the job's processes (an
+// emulator, npm, vite) can outlive it and keep their ports. SweepOrphans
+// finds them by their working folder and kills them.
+
+// procCwd is one process and the folder it runs in.
+type procCwd struct {
+	PID int
+	Cwd string
+}
+
+// runFolder returns the run folder (ci/<repo>/<run>) that cwd is inside, or
+// "" when cwd is not under root, or not inside a run.
+func runFolder(root, cwd string) string {
+	rel, ok := strings.CutPrefix(filepath.Clean(cwd), filepath.Clean(root)+string(filepath.Separator))
+	if !ok {
+		return ""
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	// Only a run's own folder counts: not ci/locks, not a repo folder.
+	if len(parts) < 2 || !strings.HasPrefix(parts[1], "pr") {
+		return ""
+	}
+	return filepath.Join(root, parts[0], parts[1])
+}
+
+// orphanRuns groups the processes under root by run folder.
+func orphanRuns(root string, procs []procCwd, self int) map[string][]int {
+	out := map[string][]int{}
+	for _, p := range procs {
+		if p.PID == self || p.PID <= 1 {
+			continue
+		}
+		if f := runFolder(root, p.Cwd); f != "" {
+			out[f] = append(out[f], p.PID)
+		}
+	}
+	return out
+}
+
+// orphanHistory is the history entry for a run folder whose run was lost.
+func orphanHistory(folder string, now time.Time) HistoryRun {
+	run := filepath.Base(folder)
+	repo := filepath.Base(filepath.Dir(folder))
+	r := HistoryRun{
+		ID: "orphan-" + repo + "-" + run, Repo: repo, Ended: now, Started: now,
+		Error: "cancelled: the daemon restarted",
+	}
+	// pr<N>-<sha7>-<unix>
+	if f := strings.Split(run, "-"); len(f) == 3 {
+		r.PR, _ = strconv.Atoi(strings.TrimPrefix(f[0], "pr"))
+		r.SHA = f[1]
+		if u, err := strconv.ParseInt(f[2], 10, 64); err == nil {
+			r.Started = time.Unix(u, 0)
+		}
+	}
+	// The folder is owner-repo; GitHub owners may hold dashes, so the
+	// first one is a best guess at the split.
+	if o, rest, ok := strings.Cut(repo, "-"); ok {
+		r.Repo = o + "/" + rest
+	}
+	return r
+}
+
+// SweepOrphans kills the processes left under <home>/ci/ by a run the
+// daemon no longer owns and records each lost run in the history as
+// cancelled. Call it when the daemon starts, before any run is queued.
+// It returns the number of processes killed.
+func SweepOrphans(logf func(string, ...any)) int {
+	root := filepath.Join(store.Home(), "ci")
+	// lsof and /proc report real paths; the home may sit behind a symlink.
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	n := 0
+	for folder, pids := range orphanRuns(root, listCwds(), selfPID()) {
+		killPIDs(pids)
+		n += len(pids)
+		if logf != nil {
+			logf("local ci: killed %d leftover process(es) of %s", len(pids), folder)
+		}
+		hr := orphanHistory(folder, time.Now())
+		known := false
+		for _, h := range History() {
+			known = known || h.ID == hr.ID
+		}
+		if !known {
+			if err := AddHistory(hr); err != nil && logf != nil {
+				logf("local ci: save history: %v", err)
+			}
+		}
+	}
+	return n
+}

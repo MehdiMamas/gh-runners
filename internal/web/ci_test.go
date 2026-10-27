@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -85,4 +86,20 @@ func TestCIHistoryCapped(t *testing.T) {
 	if len(runs) != localci.MaxHistory || runs[0].ID != fmt.Sprint(localci.MaxHistory+4) {
 		t.Fatalf("got %d runs, newest %q", len(runs), runs[0].ID)
 	}
+}
+
+func TestUpdateRefusedWhileCIRuns(t *testing.T) {
+	s, h := setup(t)
+	s.h.UpdateNow = func() { t.Error("update started during a Local CI run") }
+	release := make(chan struct{})
+	if _, err := s.ci.add("Local CI: o/r #1", []string{"o/r"}, func(io.Writer) error { <-release; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	var e struct {
+		Error string `json:"error"`
+	}
+	if code := api(t, h, "POST", "/api/update", "", &e); code != http.StatusConflict || e.Error != "A Local CI run is in progress; update when it finishes." {
+		t.Fatalf("update during a run: %d %+v", code, e)
+	}
+	close(release)
 }

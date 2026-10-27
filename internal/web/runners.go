@@ -748,6 +748,10 @@ func (s *Server) postUpdate(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusConflict, errors.New("this machine is paused: resume it before updating"))
 		return
 	}
+	if s.ciBusy() {
+		fail(w, http.StatusConflict, errors.New("A Local CI run is in progress; update when it finishes."))
+		return
+	}
 	s.h.UpdateNow()
 	writeJSON(w, http.StatusAccepted, map[string]string{"ok": "started"})
 }
