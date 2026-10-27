@@ -150,6 +150,33 @@ func (j *Job) NeedsEmulator() bool {
 	return false
 }
 
+// serverMarkers are the texts that show a job starts local servers on fixed
+// ports (matched case-insensitively against the job name and each step's run
+// and uses). One list, so a new tool is one more line.
+var serverMarkers = []string{"e2e", "playwright", "webserver", "wrangler", "vite", "start-server-and-test", "emulators:", "firebase emulators", "npm run dev", "npm start", "npm run serve", "npx serve"}
+
+// StartsServers reports whether the job starts local servers (or emulators)
+// whose ports another run on the same machine could hold. Such jobs take the
+// machine-wide lock; lint and unit-test jobs do not.
+func (j *Job) StartsServers() bool {
+	if j.NeedsEmulator() {
+		return true
+	}
+	hay := []string{j.Name}
+	for _, s := range j.Steps {
+		hay = append(hay, s.Name, s.Run, s.Uses)
+	}
+	for _, h := range hay {
+		h = strings.ToLower(h)
+		for _, m := range serverMarkers {
+			if strings.Contains(h, m) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // IsAggregate reports whether the job only summarizes its needs (it reads
 // needs.*.result); the local CI computes it instead of running its script.
 func (j *Job) IsAggregate() bool { return strings.Contains(j.Raw, "needs.*.result") }
