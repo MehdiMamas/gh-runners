@@ -76,7 +76,11 @@ func newCIRunCmd() *cobra.Command {
 			if jobs != "" {
 				o.Jobs = strings.Split(jobs, ",")
 			}
+			start := time.Now()
 			rep, err := localci.Run(ctx(cmd), o)
+			if herr := localci.AddHistory(localci.NewHistoryRun(o, false, start, rep, err)); herr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not save the run to the dashboard history: %v\n", herr)
+			}
 			if err != nil {
 				return err
 			}
@@ -133,11 +137,19 @@ func newCIWatchCmd() *cobra.Command {
 						}
 						if err := localci.CheckTrust(pr, localci.Allowlist(set, me.Login), false); err != nil {
 							fmt.Fprintln(out, err)
-						} else if _, err := localci.Run(sig, localci.Options{
-							Client: c, Owner: owner, Repo: repo, PR: pr.Number, DryRun: dry,
-							Settings: set, Login: me.Login, Out: out, Exec: disp,
-						}); err != nil {
-							fmt.Fprintf(out, "%s #%d: %v\n", full, pr.Number, err)
+						} else {
+							o := localci.Options{
+								Client: c, Owner: owner, Repo: repo, PR: pr.Number, DryRun: dry,
+								Settings: set, Login: me.Login, Out: out, Exec: disp,
+							}
+							start := time.Now()
+							rep, err := localci.Run(sig, o)
+							if err != nil {
+								fmt.Fprintf(out, "%s #%d: %v\n", full, pr.Number, err)
+							}
+							if sig.Err() == nil {
+								_ = localci.AddHistory(localci.NewHistoryRun(o, true, start, rep, err))
+							}
 						}
 						seen[key] = true
 						_ = store.WriteJSON(seenPath, seen, 0o644)

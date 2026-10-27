@@ -120,6 +120,7 @@ function sw(checked, onchange, label) {
 
 // ---------- dialog ----------
 const dlg = $('dialog');
+dlg.tabIndex = -1;
 // dlgDone is the onclose of the dialog last opened, not run yet. The close
 // event comes a task after dlg.close(): when a dialog closes and the next
 // opens right away (repo picker, then labels), the event arrives while the
@@ -136,6 +137,7 @@ function openDialog({ title, body, foot, wide, onclose }) {
     foot ? h('div', { class: 'dlg-foot' }, foot) : null);
   dlgDone = onclose || null;
   if (!dlg.open) dlg.showModal();
+  dlg.focus(); // not the close button, which would show a focus ring on open
 }
 function closeDialog() { if (dlg.open) dlg.close(); }
 
@@ -960,8 +962,8 @@ function ciDur(ns) { // time.Duration in nanoseconds -> short text
 }
 
 function ciStatusPill(st) {
-  const cls = { PASS: 'ok', FAIL: 'bad', UNSUPPORTED: 'warn' }[st] || '';
-  const text = { PASS: 'Passed', FAIL: 'Failed', SKIPPED: 'Skipped', UNSUPPORTED: 'Not supported' }[st] || st;
+  const cls = { PASS: 'ok', FAIL: 'bad', UNSUPPORTED: 'warn', BLOCKED: 'warn' }[st] || '';
+  const text = { PASS: 'Passed', FAIL: 'Failed', SKIPPED: 'Skipped', UNSUPPORTED: 'Not supported', BLOCKED: 'Blocked' }[st] || st;
   return h('span', { class: 'pill plain ' + cls }, text);
 }
 
@@ -983,15 +985,17 @@ function ciDialog(full) {
     toast('Local CI settings saved for ' + full);
     await loadCI();
   });
-  const settings = h('div', { class: 'fields' },
-    sw(set.watch, (v) => { set.watch = v; }, 'Run my pull requests automatically'),
-    sw(set.post, (v) => { set.post = v; }, 'Post results on the pull request'),
-    sw(set.merge, (v) => { set.merge = v; }, 'Merge approved pull requests when every job passed'),
+  const opt = (key, title, hint) => sw(set[key], (v) => { set[key] = v; },
+    h('span', { class: 'ci-sw-text' }, h('span', {}, title), h('span', { class: 'hint' }, hint)));
+  const settings = h('div', { class: 'ci-settings' },
+    opt('watch', 'Run pull requests automatically', 'Every new commit on an open pull request runs here, if its author is allowed below.'),
+    opt('post', 'Post results on the pull request', 'Adds a check with the result of each job. Off: results stay on this machine.'),
+    opt('merge', 'Merge when everything passes', 'Only pull requests that are approved and green on every job.'),
     h('label', { class: 'field' }, 'Authors whose pull requests run on their own', allow,
       h('span', { class: 'hint' }, 'Comma separated. Empty means only you. Pull requests from forks never run on their own.')),
-    h('div', { class: 'row' }, h('button', { class: 'btn primary small', onclick: save }, 'Save settings')));
+    h('div', {}, h('button', { class: 'btn primary small', onclick: save }, 'Save settings')));
 
-  const prInput = h('input', { type: 'number', min: 1, placeholder: '12', 'aria-label': 'Pull request number' });
+  const prInput = h('input', { type: 'number', min: 1, placeholder: 'PR number', 'aria-label': 'Pull request number' });
   const dry = h('input', { type: 'checkbox', checked: true });
   const approve = h('input', { type: 'checkbox' });
   const pre = h('pre', { class: 'log', hidden: true });
@@ -1020,11 +1024,11 @@ function ciDialog(full) {
     const r = await api('POST', '/api/ci/run', { repo: full, pr, dry_run: dry.checked, approve: approve.checked });
     follow(r.task);
   });
-  const runForm = h('div', { class: 'fields' },
-    h('label', { class: 'field' }, 'Pull request #', prInput),
-    h('label', { class: 'check' }, dry, ' Dry run: post and merge nothing'),
-    h('label', { class: 'check' }, approve, ' Run even if the author is not trusted (read the changes first)'),
-    h('div', { class: 'row' }, h('button', { class: 'btn primary small', onclick: run }, 'Run now')),
+  prInput.onkeydown = (e) => { if (e.key === 'Enter') run(); };
+  const runForm = h('div', { class: 'ci-run' },
+    h('div', { class: 'row' }, prInput, h('button', { class: 'btn primary small', onclick: run }, 'Run now')),
+    h('label', { class: 'check' }, dry, 'Dry run: post and merge nothing'),
+    h('label', { class: 'check' }, approve, 'Run even if the author is not trusted (read the changes first)'),
     pre);
 
   const recent = h('div', {}, ciRecent(full));

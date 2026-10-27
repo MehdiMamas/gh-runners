@@ -78,11 +78,11 @@ func TestCILogStaysInCIFolder(t *testing.T) {
 
 func TestCIHistoryCapped(t *testing.T) {
 	s, _ := setup(t)
-	for i := 0; i < maxCIRuns+5; i++ {
+	for i := 0; i < localci.MaxHistory+5; i++ {
 		s.addCIRun(ciRun{ID: fmt.Sprint(i)})
 	}
 	runs := s.ciRuns()
-	if len(runs) != maxCIRuns || runs[0].ID != fmt.Sprint(maxCIRuns+4) {
+	if len(runs) != localci.MaxHistory || runs[0].ID != fmt.Sprint(localci.MaxHistory+4) {
 		t.Fatalf("got %d runs, newest %q", len(runs), runs[0].ID)
 	}
 }

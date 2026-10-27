@@ -20,48 +20,15 @@ import (
 // repositories where no runner can be added, say without admin rights. Runs
 // have their own queue, so a long one never holds up adding runners.
 
-const maxCIRuns = 50
-
 // ciRun is one finished run, kept in ci/history.json.
-type ciRun struct {
-	ID      string           `json:"id"`
-	Task    int              `json:"task,omitempty"`
-	Repo    string           `json:"repo"`
-	PR      int              `json:"pr"`
-	Title   string           `json:"title,omitempty"`
-	SHA     string           `json:"sha,omitempty"`
-	Auto    bool             `json:"auto,omitempty"` // started by the watch
-	DryRun  bool             `json:"dry_run,omitempty"`
-	Started time.Time        `json:"started"`
-	Ended   time.Time        `json:"ended"`
-	Results []localci.Result `json:"results,omitempty"`
-	Passed  bool             `json:"passed"`
-	Merged  bool             `json:"merged,omitempty"`
-	Error   string           `json:"error,omitempty"`
-}
+type ciRun = localci.HistoryRun
 
-func ciHistoryPath() string { return filepath.Join(store.Home(), "ci", "history.json") }
-func ciSeenPath() string    { return filepath.Join(store.Home(), "ci", "seen.json") }
+func ciSeenPath() string { return filepath.Join(store.Home(), "ci", "seen.json") }
 
-func (s *Server) ciRuns() []ciRun {
-	s.ciMu.Lock()
-	defer s.ciMu.Unlock()
-	var runs []ciRun
-	_ = store.ReadJSON(ciHistoryPath(), &runs)
-	return runs
-}
+func (s *Server) ciRuns() []ciRun { return localci.History() }
 
 func (s *Server) addCIRun(r ciRun) {
-	s.ciMu.Lock()
-	defer s.ciMu.Unlock()
-	var runs []ciRun
-	_ = store.ReadJSON(ciHistoryPath(), &runs)
-	runs = append([]ciRun{r}, runs...)
-	if len(runs) > maxCIRuns {
-		runs = runs[:maxCIRuns]
-	}
-	_ = os.MkdirAll(filepath.Dir(ciHistoryPath()), 0o755)
-	if err := store.WriteJSON(ciHistoryPath(), runs, 0o644); err != nil {
+	if err := localci.AddHistory(r); err != nil {
 		s.h.Log.Printf("local ci: save history: %v", err)
 	}
 }
@@ -230,32 +197,25 @@ func (s *Server) queueCI(owner, repo string, pr int, dry, approve, auto bool) (*
 	}
 	return s.ci.add(title, []string{full}, func(w io.Writer) error {
 		ctx := s.ciContext()
-		run := ciRun{ID: strconv.FormatInt(time.Now().UnixNano(), 36), Repo: full, PR: pr, Auto: auto, DryRun: dry, Started: time.Now()}
-		if t, ok := w.(*task); ok {
-			run.Task = t.ID
-		}
+		start := time.Now()
+		o := localci.Options{Owner: owner, Repo: repo, PR: pr, DryRun: dry, Approve: approve, Out: w}
+		var rep localci.Report
 		err := func() error {
 			c, login, err := s.client(ctx)
 			if err != nil {
 				return err
 			}
 			cfg, _ := store.LoadConfig()
-			var exec localci.Executor
 			if s.ciDispatch != nil {
-				exec = s.ciDispatch()
+				o.Exec = s.ciDispatch()
 			}
-			rep, err := localci.Run(ctx, localci.Options{
-				Client: c, Owner: owner, Repo: repo, PR: pr, DryRun: dry, Approve: approve,
-				Settings: cfg.CI[full], Login: login, Out: w, Exec: exec,
-			})
-			run.Title, run.SHA = rep.PR.Title, rep.PR.Head.SHA
-			run.Results, run.Merged = rep.Results, rep.Merged
-			run.Passed = err == nil && len(rep.Results) > 0 && rep.AllPassed()
+			o.Client, o.Settings, o.Login = c, cfg.CI[full], login
+			rep, err = localci.Run(ctx, o)
 			return err
 		}()
-		run.Ended = time.Now()
-		if err != nil {
-			run.Error = err.Error()
+		run := localci.NewHistoryRun(o, auto, start, rep, err)
+		if t, ok := w.(*task); ok {
+			run.Task = t.ID
 		}
 		s.addCIRun(run)
 		if err == nil && !run.Passed {
