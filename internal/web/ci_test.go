@@ -229,19 +229,26 @@ func pendingCount(s *Server) int {
 	return len(s.ci.pending)
 }
 
-// ciBlockWorker keeps the queue worker busy so later runs stay queued.
-func ciBlockWorker(t *testing.T, s *Server) (release chan struct{}) {
+// ciBlockWorker keeps the queue worker busy so later runs stay queued. The
+// worker is released at cleanup, which then waits for the queue to drain so
+// no run writes into the temp dir while it is being removed.
+func ciBlockWorker(t *testing.T, s *Server) {
 	t.Helper()
 	release, started := make(chan struct{}), make(chan int, 1)
 	ciHold(t, s, release, started)
 	<-started
-	return release
+	t.Cleanup(func() {
+		close(release)
+		deadline := time.Now().Add(10 * time.Second)
+		for s.ci.busy() > 0 && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
 }
 
 func TestCIRunDuplicateManualRequest(t *testing.T) {
 	s, h := setup(t)
-	release := ciBlockWorker(t, s)
-	defer close(release)
+	ciBlockWorker(t, s)
 	var a, b struct {
 		Task     int  `json:"task"`
 		Existing bool `json:"existing"`
@@ -267,8 +274,7 @@ func TestCIRunDuplicateManualRequest(t *testing.T) {
 
 func TestCIRunDuplicatePushRequest(t *testing.T) {
 	s, h := setup(t)
-	release := ciBlockWorker(t, s)
-	defer close(release)
+	ciBlockWorker(t, s)
 	// The watch queues through queueCI with auto set.
 	a, existing, err := s.queueCI("o", "r", 9, false, false, true)
 	if err != nil || existing {
