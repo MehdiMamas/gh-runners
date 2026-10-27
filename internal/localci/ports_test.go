@@ -310,15 +310,15 @@ func TestHolderOf(t *testing.T) {
 		13: "/h/ci/fleet/jobs/dead (deleted)",
 	}
 	cwdOf := func(pid int) string { return cwds[pid] }
-	live := func(f string) bool { return f == "/h/ci/fleet/jobs/abcd" }
+	live := func(f string) bool { return f == filepath.FromSlash("/h/ci/fleet/jobs/abcd") }
 	for _, c := range []struct {
 		pid  string
 		want holder
 	}{
-		{"10", holder{Live: "/h/ci/fleet/jobs/abcd"}},
-		{"11", holder{Stale: "/h/ci/octo-repo/pr7-abc1234-1"}},
+		{"10", holder{Live: filepath.FromSlash("/h/ci/fleet/jobs/abcd")}},
+		{"11", holder{Stale: filepath.FromSlash("/h/ci/octo-repo/pr7-abc1234-1")}},
 		{"12", holder{}},
-		{"13", holder{Stale: "/h/ci/fleet/jobs/dead"}},
+		{"13", holder{Stale: filepath.FromSlash("/h/ci/fleet/jobs/dead")}},
 		{"", holder{}},
 		{"99", holder{}},
 	} {
