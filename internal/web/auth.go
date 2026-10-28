@@ -234,6 +234,15 @@ func (s *Server) postTokenLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) postLogout(w http.ResponseWriter, r *http.Request) {
+	// Leave the account's machine list while the token still works, unless
+	// another sign-in (gh, an environment variable) keeps this machine in.
+	if _, err := github.ResolveToken(""); err != nil && s.h.Peers != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		if err := s.h.Peers.Unpublish(ctx); err != nil && s.h.Log != nil {
+			s.h.Log.Printf("account machines: leaving the directory: %v", err)
+		}
+		cancel()
+	}
 	if err := os.Remove(store.TokenPath()); err != nil && !os.IsNotExist(err) {
 		fail(w, http.StatusInternalServerError, err)
 		return

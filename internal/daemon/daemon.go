@@ -91,6 +91,7 @@ type Daemon struct {
 
 	host     *fleet.Host
 	member   *fleet.Member
+	peers    *fleet.Peers
 	brokered *github.Client
 }
 
@@ -152,6 +153,18 @@ func (d *Daemon) Run(ctx context.Context) error {
 		CIEmulatorOK: func() bool { c, _ := store.LoadConfig(); return c.CIEmulatorOK() },
 	}
 	d.brokered = d.member.Client()
+	hostname, _ := os.Hostname()
+	d.peers = &fleet.Peers{
+		Dir: store.FleetDir(), Client: d.localClient, Name: hostname, Version: d.Version, Log: d.Log.Printf,
+		Port: func() int {
+			if c, _ := store.LoadConfig(); c.FleetPort > 0 {
+				return c.FleetPort
+			}
+			return fleet.DefaultPort
+		},
+		Info:         d.fleetInfo,
+		AllowControl: func() bool { c, _ := store.LoadConfig(); return c.AllowControlOn() },
+	}
 	dash := web.New(web.Hooks{
 		Version:     d.Version,
 		Status:      d.status,
@@ -165,8 +178,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 		Log:         d.Log,
 		Host:        d.host,
 		Member:      d.member,
+		Peers:       d.peers,
 	}, uiSecret)
 	d.member.API = dash.FleetAPI()
+	d.peers.API = dash.FleetAPI()
 	d.ciBusy = dash.CIBusy
 	d.member.OnChange = func() {
 		d.resetClient()
@@ -181,6 +196,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.Log.Printf("main host: %v", err)
 	}
 	defer d.host.Stop()
+	defer d.peers.Stop()
+	go d.peerLoop(ctx)
 	go d.member.Run(ctx)
 	go d.syncLoop(ctx)
 	go d.dockerLoop(ctx)
@@ -523,6 +540,42 @@ func (d *Daemon) client() (*github.Client, error) {
 	}
 	d.tok, d.tokAt = ts.Token, time.Now()
 	return d.ghClient, nil
+}
+
+// localClient is the GitHub client of this machine's own sign-in. A machine
+// that only borrows its main host's token has none.
+func (d *Daemon) localClient() (*github.Client, error) {
+	c, err := d.client()
+	if err != nil {
+		return nil, err
+	}
+	if c == d.brokered {
+		return nil, errors.New("not signed in to GitHub on this machine")
+	}
+	return c, nil
+}
+
+// peerLoop keeps the account machines (see fleet.Peers) running exactly
+// while this machine is signed in to GitHub itself.
+func (d *Daemon) peerLoop(ctx context.Context) {
+	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
+	last := ""
+	for {
+		if _, err := d.localClient(); err == nil {
+			if err := d.peers.Start(ctx); err != nil && err.Error() != last {
+				d.Log.Printf("account machines: %v", err)
+				last = err.Error()
+			}
+		} else {
+			d.peers.Stop()
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // hostToken is the token the main host makes members' GitHub calls with.

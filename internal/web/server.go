@@ -54,6 +54,9 @@ type Hooks struct {
 	// Either may be nil (no daemon, in tests).
 	Host   *fleet.Host
 	Member *fleet.Member
+	// Peers is this machine among the PCs signed in to the same GitHub
+	// account; nil in tests that do not need it.
+	Peers *fleet.Peers
 }
 
 // Server is the dashboard.
@@ -272,6 +275,7 @@ func (s *Server) api() http.Handler {
 	mux.HandleFunc("POST /api/machines/host", s.postMainHost)
 	mux.HandleFunc("POST /api/machines/invite", s.postInvite)
 	mux.HandleFunc("POST /api/machines/leave", s.postLeave)
+	mux.HandleFunc("POST /api/machines/allow-control", s.postAllowControl)
 	mux.HandleFunc("POST /api/machines/{id}/remove", s.postRemoveMachine)
 	mux.HandleFunc("POST /api/machines/{id}/manage", s.postManage)
 	mux.HandleFunc("/api/machines/{id}/api/{rest...}", s.proxyMachine)

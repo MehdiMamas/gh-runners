@@ -1327,7 +1327,7 @@ async function loadFleet() {
 
 // syncMachinesTab shows the Machines tab only on a main host.
 function syncMachinesTab() {
-  const on = !!(S.fleet && (S.fleet.main_host || S.fleet.can_manage));
+  const on = !!(S.fleet && (S.fleet.main_host || S.fleet.can_manage || S.fleet.account));
   document.querySelector('#tabs button[data-tab="machines"]').classList.toggle('hidden', !on);
   $('count-machines').textContent = on && S.fleet.machines.length ? String(S.fleet.machines.length) : '';
   if (!on && S.tab === 'machines') selectTab('machine');
@@ -1374,15 +1374,15 @@ function renderMachines() {
   const f = S.fleet;
   if (!st || !f) return;
   const members = f.machines || [];
-  if (!f.main_host) {
+  if (!f.main_host && !f.account) {
     // A member the main host lets manage the fleet: the host is in the list.
     mount(el, h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Machines')), members.map(machineCard));
     return;
   }
   const mine = h('div', { class: 'card' },
     h('div', { class: 'card-head' },
-      h('div', {}, h('div', { class: 'row' }, h('h2', {}, st.hostname), h('span', { class: 'pill plain info' }, 'Main host'), st.paused ? h('span', { class: 'pill warn' }, 'Paused') : null),
-        h('div', { class: 'muted small' }, 'gh-runners ' + st.version + ' · ' + osName(st.os) + ' · ' + st.arch + ' · this computer')),
+      h('div', {}, h('div', { class: 'row' }, h('h2', {}, st.hostname), f.main_host ? h('span', { class: 'pill plain info' }, 'Main host') : null, h('span', { class: 'pill plain' }, 'This computer'), st.paused ? h('span', { class: 'pill warn' }, 'Paused') : null),
+        h('div', { class: 'muted small' }, 'gh-runners ' + st.version + ' · ' + osName(st.os) + ' · ' + st.arch)),
       h('div', { class: 'row' },
         h('button', { class: 'btn small', onclick: () => setPaused(null, !st.paused) }, st.paused ? 'Resume machine' : 'Pause machine'),
         h('button', { class: 'btn', onclick: () => selectTab('machine') }, 'Manage runners'))),
@@ -1390,23 +1390,35 @@ function renderMachines() {
       h('div', { class: 'who' }, h('div', { class: 'name' }, r.kind === 'org' ? r.scope + ' (organization)' : who(r)), h('div', { class: 'muted small' }, r.name)),
       h('div', { class: 'row' }, S.remote[r.id] ? pill(S.remote[r.id]) : null, pill(r.state)))))
       : h('p', { class: 'muted' }, 'No runners on this computer.'),
+    f.account ? h('div', { class: 'manage-switch' },
+      sw(f.allow_control !== false, (on) => setAllowControl(on), 'Let my other PCs control this one'),
+      h('p', { class: 'muted small' }, 'PCs signed in to the same GitHub account can start, stop and change the runners here. They can do nothing else: no sign-in, settings or files. Off, and they only see this computer.')) : null,
     (st.ci_active || []).length ? [h('h3', {}, 'Local CI running now'), h('div', { class: 'mrunners' }, ciActiveRows(st.ci_active))] : null);
   mount(el,
     h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Machines'),
-      h('button', { class: 'btn primary', onclick: addMachine }, 'Add a machine')),
+      f.main_host ? h('button', { class: 'btn primary', onclick: addMachine }, 'Add a machine') : null),
+    f.account_error ? h('div', { class: 'notice bad' }, h('div', { class: 'grow' }, 'Cannot reach your other PCs: ' + f.account_error + '.')) : null,
     f.listening ? null : h('div', { class: 'notice bad' }, h('div', { class: 'grow' }, 'Not listening for machines' + (f.error ? ': ' + f.error : '') + '.'), h('button', { class: 'btn', onclick: () => selectTab('settings') }, 'Open settings')),
     mine,
     members.length ? members.map(machineCard) : h('div', { class: 'card empty' },
       h('h2', {}, 'No other machines yet'),
-      h('p', {}, 'Add a machine to see and manage its runners from here.'),
-      h('button', { class: 'btn primary', onclick: addMachine }, 'Add a machine')));
+      f.main_host ? h('p', {}, 'Add a machine to see and manage its runners from here.') : h('p', {}, 'Sign in to the same GitHub account on another PC and it shows up here by itself.'),
+      f.main_host ? h('button', { class: 'btn primary', onclick: addMachine }, 'Add a machine') : null));
+}
+
+async function setAllowControl(on) {
+  await guard(async () => {
+    S.fleet = await api('POST', '/api/machines/allow-control', { on });
+    toast(on ? 'Your other PCs can control this one' : 'Your other PCs can no longer control this one');
+    redraw('machines');
+  });
 }
 
 function machineCard(m) {
   const info = m.info || { runners: [] };
   const gh = S.mgh[m.id] || {};
   const off = !m.online;
-  const why = 'Offline: this PC is not connected to the main host';
+  const why = m.peer ? 'Signed in, can\'t reach it' : 'Offline: this PC is not connected to the main host';
   const btn = (text, fn, cls) => h('button', { class: 'btn small' + (cls ? ' ' + cls : ''), disabled: off, title: off ? why : null, onclick: fn }, text);
   const rows = (info.runners || []).map((r) => {
     const stopped = r.state === 'stopped';
@@ -1426,7 +1438,7 @@ function machineCard(m) {
   });
   return h('div', { class: 'card machine-card', 'data-machine': m.id },
     h('div', { class: 'card-head' },
-      h('div', {}, h('div', { class: 'row' }, h('h2', {}, machineName(m)), m.online ? h('span', { class: 'pill ok' }, 'Online') : h('span', { class: 'pill' }, 'Offline'), info.paused ? h('span', { class: 'pill warn' }, 'Paused') : null),
+      h('div', {}, h('div', { class: 'row' }, h('h2', {}, machineName(m)), m.online ? h('span', { class: 'pill ok' }, 'Online') : (m.peer ? h('span', { class: 'pill bad' }, 'Signed in, can\'t reach it') : h('span', { class: 'pill' }, 'Offline')), info.paused ? h('span', { class: 'pill warn' }, 'Paused') : null),
         h('div', { class: 'muted small' }, ['gh-runners ' + (info.version || '?'), osName(info.os) + (info.arch ? ' · ' + info.arch : ''),
           m.online ? 'live' : (m.last_seen ? 'last seen ' + ago(m.last_seen) : 'never connected')].join(' · '))),
       h('div', { class: 'row' },
@@ -1434,12 +1446,15 @@ function machineCard(m) {
         (info.paused || off) ? null : (info.runners || []).some((r) => r.state === 'stopped') ? [btn('Run what was on before it closed', () => startSet(m, 'last')), btn('Run all', () => startSet(m, 'all'))] : null,
         btn('Add runner', () => addToMachine(m)),
         btn('Update gh-runners', () => updateMachine(m)),
-        (S.fleet.can_manage || m.id === 'host') ? null : h('button', { class: 'btn small danger', onclick: () => removeMachine(m) }, 'Remove machine'))),
-    S.fleet.main_host && m.id !== 'host' ? h('div', { class: 'manage-switch' },
+        (S.fleet.can_manage || m.id === 'host') ? null : h('button', { class: 'btn small danger', onclick: () => removeMachine(m) }, m.peer ? 'Remove from my machines' : 'Remove machine'))),
+    S.fleet.main_host && m.id !== 'host' && !m.peer ? h('div', { class: 'manage-switch' },
       sw(!!m.manage, (on) => setManage(m, on), 'Can manage the fleet'),
       h('p', { class: 'muted small' }, 'Lets that computer start, stop and watch runners here and on the other machines.')) : null,
     info.paused ? h('p', { class: 'muted small' }, 'Paused: no runner, on-demand runner, sync or update runs on this machine until you resume it.') : null,
-    off ? h('p', { class: 'muted small' }, 'Offline: its runners keep running, but you can change them here only when it is back.') : null,
+    off && m.peer ? h('div', { class: 'peer-why' },
+      h('p', { class: 'err' }, (m.error || 'Not connected yet.')),
+      h('p', { class: 'muted small' }, 'Tried ' + ((m.addrs || []).map((a) => a + ':' + m.port).join(', ') || 'no address') + '. Tip: with Tailscale on both PCs they reach each other from anywhere. Otherwise both must be on the same network, and the firewall must allow TCP port ' + (m.port || '?') + '.')) : null,
+    off && !m.peer ? h('p', { class: 'muted small' }, 'Offline: its runners keep running, but you can change them here only when it is back.') : null,
     rows.length ? h('div', { class: 'mrunners' }, rows) : h('p', { class: 'muted' }, 'No runners on this machine yet.'),
     info.ci && (info.ci.active || []).length ? [h('h3', {}, 'Local CI running now'), h('div', { class: 'mrunners' }, ciActiveRows(info.ci.active))] : null);
 }
@@ -1479,7 +1494,8 @@ async function setManage(m, on) {
 }
 
 async function removeMachine(m) {
-  const ok = await confirmDialog('Remove ' + machineName(m) + '?', [
+  const ok = m.peer ? await confirmDialog('Remove ' + machineName(m) + ' from your machines?', [
+    h('p', {}, 'This deletes its entry from your private gh-runners-machines repository. Its runners are not touched. If gh-runners is still running there, it lists itself again within five minutes.')], 'Remove', true) : await confirmDialog('Remove ' + machineName(m) + '?', [
     h('p', {}, 'The runners on ', h('b', {}, machineName(m)), ' stay on that PC and keep running, but this main host can no longer manage them or make GitHub calls for it.'),
     h('p', { class: 'muted' }, 'To manage it again, add it as a machine again.')], 'Remove machine', true);
   if (!ok) return;

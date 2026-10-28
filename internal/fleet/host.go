@@ -109,6 +109,13 @@ type Machine struct {
 	Info     Info      `json:"info"`
 	// Manage means this machine may manage the fleet.
 	Manage bool `json:"manage,omitempty"`
+	// Peer is set for another PC signed in to the same GitHub account (not
+	// a member of a main host). Error then says why it is offline, and
+	// Addrs and Port are where this machine tried to reach it.
+	Peer  bool     `json:"peer,omitempty"`
+	Error string   `json:"error,omitempty"`
+	Addrs []string `json:"addrs,omitempty"`
+	Port  int      `json:"port,omitempty"`
 }
 
 func (h *Host) logf(format string, args ...any) {

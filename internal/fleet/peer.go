@@ -733,3 +733,22 @@ func plainErr(err error) string {
 	}
 	return msg
 }
+
+// Machine describes a peer for the dashboard's Machines list.
+func (pe Peer) Machine() Machine {
+	m := Machine{ID: pe.ID, Online: pe.Online, Since: pe.Since, LastSeen: pe.LastSeen, Info: pe.Info,
+		Peer: true, Error: pe.Error, Addrs: pe.Addrs, Port: pe.Port}
+	if !pe.HasInfo {
+		m.Info = Info{Hostname: pe.Name, OS: pe.OS, Arch: pe.Arch, Version: pe.Version, Runners: []RunnerInfo{}}
+	}
+	if m.Info.Hostname == "" {
+		m.Info.Hostname = pe.Name
+	}
+	if m.Info.Runners == nil {
+		m.Info.Runners = []RunnerInfo{}
+	}
+	if m.LastSeen.IsZero() {
+		m.LastSeen = pe.Updated
+	}
+	return m
+}
