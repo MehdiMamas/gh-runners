@@ -374,7 +374,7 @@ func (r *ciRunner) run(ctx context.Context, c *conn, f frame) frame {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return ciError(http.StatusInternalServerError, err.Error())
 	}
-	defer os.RemoveAll(dir)
+	defer removeJobDir(dir)
 	localci.WriteOwner(dir)
 	logPath := filepath.Join(dir, "job.log")
 	tarball := filepath.Join(dir, "source.tgz")
@@ -411,6 +411,14 @@ func (r *ciRunner) run(ctx context.Context, c *conn, f frame) frame {
 		res.Reason = "cancelled"
 	}
 	return finish(res)
+}
+
+// removeJobDir retries because Windows keeps the job log locked for a
+// moment after a cancelled job's processes are killed.
+func removeJobDir(dir string) {
+	for i := 0; i < 50 && os.RemoveAll(dir) != nil; i++ {
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // ciHandler wraps handleAPI: "ci" requests run a job, the rest are
