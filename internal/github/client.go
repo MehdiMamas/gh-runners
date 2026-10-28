@@ -79,7 +79,8 @@ type TokenSource struct {
 
 // ResolveToken finds a token: GH_RUNNERS_TOKEN, GH_TOKEN, GITHUB_TOKEN, then
 // the token saved by `gh-runners login` or the dashboard's sign-in
-// (savedPath), then `gh auth token`.
+// (savedPath), then `gh auth token` unless GH_RUNNERS_NO_GH_CLI is set (tests
+// set it so they never pick up the developer's real account).
 func ResolveToken(savedPath string) (TokenSource, error) {
 	for _, env := range []string{"GH_RUNNERS_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"} {
 		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
@@ -93,7 +94,7 @@ func ResolveToken(savedPath string) (TokenSource, error) {
 			}
 		}
 	}
-	if gh, err := exec.LookPath("gh"); err == nil {
+	if gh, err := exec.LookPath("gh"); err == nil && os.Getenv("GH_RUNNERS_NO_GH_CLI") == "" {
 		cmd := exec.Command(gh, "auth", "token", "--hostname", "github.com")
 		hideWindow(cmd)
 		out, err := cmd.Output()
@@ -542,4 +543,70 @@ func (c *Client) CreateIssue(ctx context.Context, owner, repo, title, body strin
 	_, err := c.do(ctx, http.MethodPost, "/repos/"+owner+"/"+repo+"/issues",
 		map[string]any{"title": title, "body": body, "labels": labels}, &out)
 	return out, err
+}
+
+// CreateRepo creates a private repository for the token's user, with a first
+// commit so the contents API works on it at once.
+func (c *Client) CreateRepo(ctx context.Context, name, description string) (Repo, error) {
+	var r Repo
+	_, err := c.do(ctx, http.MethodPost, "/user/repos",
+		map[string]any{"name": name, "description": description, "private": true, "auto_init": true}, &r)
+	return r, err
+}
+
+// Content is a file in a repository, or one entry of a folder listing
+// (then Content is empty).
+type Content struct {
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	SHA     string `json:"sha"`
+	Type    string `json:"type"`
+	Content string `json:"content"`
+}
+
+// Data decodes the file's content.
+func (c Content) Data() ([]byte, error) {
+	return base64.StdEncoding.DecodeString(strings.ReplaceAll(c.Content, "\n", ""))
+}
+
+func contentsPath(owner, repo, path string) string {
+	parts := strings.Split(path, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/contents/" + strings.Join(parts, "/")
+}
+
+// GetContents fetches one file.
+func (c *Client) GetContents(ctx context.Context, owner, repo, path string) (Content, error) {
+	var out Content
+	_, err := c.do(ctx, http.MethodGet, contentsPath(owner, repo, path), nil, &out)
+	return out, err
+}
+
+// ListContents lists a folder: names and blob SHAs, without the files.
+func (c *Client) ListContents(ctx context.Context, owner, repo, path string) ([]Content, error) {
+	var out []Content
+	_, err := c.do(ctx, http.MethodGet, contentsPath(owner, repo, path), nil, &out)
+	return out, err
+}
+
+// PutContents creates a file (sha empty) or replaces it (sha of the old
+// blob) and returns the new blob's SHA.
+func (c *Client) PutContents(ctx context.Context, owner, repo, path, message string, data []byte, sha string) (string, error) {
+	body := map[string]any{"message": message, "content": base64.StdEncoding.EncodeToString(data)}
+	if sha != "" {
+		body["sha"] = sha
+	}
+	var out struct {
+		Content Content `json:"content"`
+	}
+	_, err := c.do(ctx, http.MethodPut, contentsPath(owner, repo, path), body, &out)
+	return out.Content.SHA, err
+}
+
+// DeleteContents deletes a file; sha is the blob to delete.
+func (c *Client) DeleteContents(ctx context.Context, owner, repo, path, message, sha string) error {
+	_, err := c.do(ctx, http.MethodDelete, contentsPath(owner, repo, path), map[string]any{"message": message, "sha": sha}, nil)
+	return err
 }

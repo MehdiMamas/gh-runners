@@ -50,6 +50,12 @@ func TestMain(m *testing.M) {
 		time.Sleep(time.Minute)
 		os.Exit(0)
 	}
+	// Daemons started here must never reach the developer's real GitHub
+	// account (they would publish themselves to its machine directory).
+	for _, k := range []string{"GH_RUNNERS_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"} {
+		os.Unsetenv(k)
+	}
+	os.Setenv("GH_RUNNERS_NO_GH_CLI", "1")
 	os.Exit(m.Run())
 }
 

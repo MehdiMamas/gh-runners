@@ -23,6 +23,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -36,6 +37,11 @@ import (
 
 // DefaultPort is the main host's fleet port.
 const DefaultPort = 47322
+
+// PeerPort is where a signed-in machine listens for its account's other
+// machines. It differs from DefaultPort so a main host can be a peer too; when
+// it is taken any free port is used, since the directory carries the real one.
+const PeerPort = 47323
 
 const (
 	maxFrame     = 16 << 20
@@ -282,4 +288,18 @@ func randomHex(n int) string {
 func hashHex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// peerFP is the SHA-256 fingerprint of the certificate of the machine at
+// the other end of a TLS connection.
+func (c *conn) peerFP() (string, bool) {
+	tc, ok := c.nc.(*tls.Conn)
+	if !ok {
+		return "", false
+	}
+	cs := tc.ConnectionState()
+	if len(cs.PeerCertificates) == 0 {
+		return "", false
+	}
+	return fingerprint(cs.PeerCertificates[0].Raw), true
 }

@@ -42,6 +42,14 @@ type machinesView struct {
 	// CanManage is set on a member whose main host lets it manage the fleet:
 	// Machines is then the host's list, and calls go through the host.
 	CanManage bool `json:"can_manage,omitempty"`
+	// Account is set on a machine signed in to GitHub: Machines then also
+	// lists the account's other PCs (Peer machines). AccountError says why
+	// they cannot be listed, and AllowControl whether they may control this
+	// machine.
+	Account      bool   `json:"account,omitempty"`
+	AccountError string `json:"account_error,omitempty"`
+	AccountPort  int    `json:"account_port,omitempty"`
+	AllowControl bool   `json:"allow_control"`
 }
 
 // fleetManageAPI is what the main host serves to a member it lets manage
@@ -88,6 +96,9 @@ func (s *Server) postManage(w http.ResponseWriter, r *http.Request) {
 
 // callMachine runs a dashboard call on a machine: "host" is this machine.
 func (s *Server) callMachine(ctx context.Context, id, method, pq string, body []byte) (int, []byte, error) {
+	if s.isPeer(id) {
+		return s.h.Peers.Call(ctx, id, method, pq, body)
+	}
 	if id != fleet.HostID {
 		return s.h.Host.Call(ctx, id, method, pq, body)
 	}
@@ -106,9 +117,12 @@ func (s *Server) callMachine(ctx context.Context, id, method, pq string, body []
 	return rec.Code, rec.Body.Bytes(), nil
 }
 
+// isPeer reports whether id is another PC of this GitHub account.
+func (s *Server) isPeer(id string) bool { return s.h.Peers != nil && s.h.Peers.Has(id) }
+
 func (s *Server) getMachines(w http.ResponseWriter, r *http.Request) {
 	cfg, _ := store.LoadConfig()
-	v := machinesView{MainHost: cfg.MainHost, Machines: []fleet.Machine{}}
+	v := machinesView{MainHost: cfg.MainHost, Machines: []fleet.Machine{}, AllowControl: cfg.AllowControlOn()}
 	if h := s.h.Host; h != nil {
 		v.Listening, v.Port = h.Running()
 		if err := h.StartErr(); err != nil {
@@ -135,6 +149,16 @@ func (s *Server) getMachines(w http.ResponseWriter, r *http.Request) {
 			if err == nil && status == http.StatusOK && json.Unmarshal(out, &hv) == nil {
 				v.Machines, v.CanManage = hv.Machines, true
 			}
+		}
+	}
+	if p := s.h.Peers; p != nil {
+		if on, port := p.Running(); on {
+			v.Account, v.AccountPort = true, port
+			for _, pe := range p.Peers() {
+				v.Machines = append(v.Machines, pe.Machine())
+			}
+		} else if err := p.StartErr(); err != nil {
+			v.Account, v.AccountError = true, err.Error()
 		}
 	}
 	writeJSON(w, http.StatusOK, v)
@@ -193,6 +217,29 @@ func (s *Server) postMainHost(w http.ResponseWriter, r *http.Request) {
 	s.getMachines(w, r)
 }
 
+// postAllowControl is the switch for letting the account's other PCs
+// control this one.
+func (s *Server) postAllowControl(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		On bool `json:"on"`
+	}
+	if err := readBody(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, err)
+		return
+	}
+	cfg, err := store.LoadConfig()
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	cfg.AllowControl = &body.On
+	if err := store.SaveConfig(cfg); err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.getMachines(w, r)
+}
+
 func (s *Server) postInvite(w http.ResponseWriter, r *http.Request) {
 	if s.h.Host == nil {
 		fail(w, http.StatusServiceUnavailable, errors.New("the daemon is not running"))
@@ -211,6 +258,16 @@ func (s *Server) postInvite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) postRemoveMachine(w http.ResponseWriter, r *http.Request) {
+	if id := r.PathValue("id"); s.isPeer(id) {
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		if err := s.h.Peers.Remove(ctx, id); err != nil {
+			fail(w, http.StatusBadGateway, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"ok": "removed"})
+		return
+	}
 	if s.h.Host == nil {
 		fail(w, http.StatusServiceUnavailable, errors.New("the daemon is not running"))
 		return
@@ -247,15 +304,16 @@ var startSetPath = regexp.MustCompile(`^/api/runners/start-(last|all)$`)
 // update first ask GitHub whether a runner there is running a job; if one
 // is, the page gets a 409 to confirm, and sends confirm_busy=1 to go on.
 func (s *Server) proxyMachine(w http.ResponseWriter, r *http.Request) {
-	if s.viaHost() {
+	id := r.PathValue("id")
+	peer := s.isPeer(id)
+	if s.viaHost() && !peer {
 		s.proxyViaHost(w, r)
 		return
 	}
-	if s.h.Host == nil {
+	if s.h.Host == nil && !peer {
 		fail(w, http.StatusServiceUnavailable, errors.New("the daemon is not running"))
 		return
 	}
-	id := r.PathValue("id")
 	path := "/api/" + r.PathValue("rest")
 	q := r.URL.Query()
 	confirmed := q.Get("confirm_busy") == "1"
@@ -331,7 +389,7 @@ func (s *Server) machineBusy(ctx context.Context, id, runner string) ([]string, 
 	if err := json.Unmarshal(out, &states); err != nil {
 		return nil, err
 	}
-	names := runnerNames(s.h.Host, id)
+	names := s.runnerNames(id)
 	var busy []string
 	for rid, st := range states {
 		if st == "busy" && (runner == "" || rid == runner) {
@@ -345,10 +403,18 @@ func (s *Server) machineBusy(ctx context.Context, id, runner string) ([]string, 
 	return busy, nil
 }
 
-func runnerNames(h *fleet.Host, id string) map[string]string {
+func (s *Server) runnerNames(id string) map[string]string {
 	out := map[string]string{}
-	ms, _ := h.Machines()
-	ms = append(ms, h.Self())
+	var ms []fleet.Machine
+	if h := s.h.Host; h != nil {
+		ms, _ = h.Machines()
+		ms = append(ms, h.Self())
+	}
+	if s.h.Peers != nil {
+		for _, pe := range s.h.Peers.Peers() {
+			ms = append(ms, pe.Machine())
+		}
+	}
 	for _, m := range ms {
 		if m.ID == id {
 			for _, r := range m.Info.Runners {

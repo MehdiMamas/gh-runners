@@ -188,3 +188,15 @@ func TestClaimIsExclusive(t *testing.T) {
 		t.Fatalf("claim a free folder: %v %v", ok, err)
 	}
 }
+
+func TestAllowControlDefaultsOn(t *testing.T) {
+	var c Config
+	if !c.AllowControlOn() {
+		t.Fatal("allow_control should default to on")
+	}
+	off := false
+	c.AllowControl = &off
+	if c.AllowControlOn() {
+		t.Fatal("allow_control=false should be off")
+	}
+}

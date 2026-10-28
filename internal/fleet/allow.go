@@ -5,8 +5,9 @@ import (
 	"strings"
 )
 
-// The member side of the allowlist: the dashboard API calls a host may make
-// on a member. Runners, labels, logs, state, tasks and updates only; never
+// The allowlist of dashboard API calls one machine may make on another: a
+// main host on a member, and an account machine on another one. The
+// receiving side checks it on every request. Runners, labels, logs, state, tasks and updates only; never
 // sign-in or token routes, the service, the settings, the folder browser
 // (it lists any folder) or moving hand-made runners (it takes any path).
 var memberAPI = []rule{
@@ -89,6 +90,12 @@ func allowed(list []matcher, method, pathQuery string) bool {
 // member. Members check it on every request; the host checks it too, to
 // give a clear error.
 func MemberAllowed(method, pathQuery string) bool { return allowed(memberAPIRe, method, pathQuery) }
+
+// PeerAllowed reports whether a machine may call this dashboard API on
+// another machine of the same GitHub account (the same list as for a main
+// host). Both sides check it: the sender for a clear error, the receiver
+// because it cannot trust the sender.
+func PeerAllowed(method, pathQuery string) bool { return allowed(memberAPIRe, method, pathQuery) }
 
 // GitHubAllowed reports whether the host makes this GitHub API call for a
 // member.

@@ -281,6 +281,9 @@ type Config struct {
 	MainHost bool `json:"main_host,omitempty"`
 	// FleetPort is the main host's port for its machines (default 47322).
 	FleetPort int `json:"fleet_port,omitempty"`
+	// AllowControl lets the other PCs signed in to the same GitHub account
+	// start, stop and change runners here; unset means yes.
+	AllowControl *bool `json:"allow_control,omitempty"`
 	// CI is the local CI setting per "owner/repo" (see `gh-runners ci`).
 	CI map[string]CIRepo `json:"ci,omitempty"`
 	// CIEmulator lets this machine run the jobs that start the Firebase
@@ -310,6 +313,10 @@ type CIRepo struct {
 	// trust gate.
 	Watch bool `json:"watch,omitempty"`
 }
+
+// AllowControlOn reports whether this machine's other PCs on the same
+// GitHub account may control it.
+func (c Config) AllowControlOn() bool { return c.AllowControl == nil || *c.AllowControl }
 
 // AutoUpdateOn reports whether the daemon installs new releases itself.
 func (c Config) AutoUpdateOn() bool { return c.AutoUpdate == nil || *c.AutoUpdate }

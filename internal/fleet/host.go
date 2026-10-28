@@ -109,6 +109,13 @@ type Machine struct {
 	Info     Info      `json:"info"`
 	// Manage means this machine may manage the fleet.
 	Manage bool `json:"manage,omitempty"`
+	// Peer is set for another PC signed in to the same GitHub account (not
+	// a member of a main host). Error then says why it is offline, and
+	// Addrs and Port are where this machine tried to reach it.
+	Peer  bool     `json:"peer,omitempty"`
+	Error string   `json:"error,omitempty"`
+	Addrs []string `json:"addrs,omitempty"`
+	Port  int      `json:"port,omitempty"`
 }
 
 func (h *Host) logf(format string, args ...any) {
@@ -165,6 +172,10 @@ func (h *Host) certificate() (*tls.Certificate, string, error) {
 }
 
 func makeCert(certPath, keyPath string) error {
+	return makeCertFor(certPath, keyPath, "gh-runners main host", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
+}
+
+func makeCertFor(certPath, keyPath, cn string, eku []x509.ExtKeyUsage) error {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return err
@@ -175,11 +186,11 @@ func makeCert(certPath, keyPath string) error {
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "gh-runners main host"},
+		Subject:      pkix.Name{CommonName: cn},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().AddDate(30, 0, 0),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		ExtKeyUsage:  eku,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
