@@ -1466,7 +1466,7 @@ function machineCard(m) {
       h('p', { class: 'err' }, (m.error || 'Not connected yet.')),
       h('p', { class: 'muted small' }, 'Tried ' + ((m.addrs || []).map((a) => a + ':' + m.port).join(', ') || 'no address') + '. Tip: with Tailscale on both PCs they reach each other from anywhere. Otherwise both must be on the same network, and the firewall must allow TCP port ' + (m.port || '?') + '.')) : null,
     off && !m.peer ? h('p', { class: 'muted small' }, 'Offline: its runners keep running, but you can change them here only when it is back.') : null,
-    rows.length ? h('div', { class: 'mrunners' }, rows) : h('p', { class: 'muted' }, 'No runners on this machine yet.'),
+    rows.length ? h('div', { class: 'mrunners' }, rows) : h('p', { class: 'muted' }, m.via ? 'Its runners are listed when this PC connects to it directly.' : 'No runners on this machine yet.'),
     info.ci && (info.ci.active || []).length ? [h('h3', {}, 'Local CI running now'), h('div', { class: 'mrunners' }, ciActiveRows(info.ci.active))] : null);
 }
 
