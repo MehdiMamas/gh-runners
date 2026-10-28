@@ -213,12 +213,13 @@ update, pause) work on the other PC too.
   and uses no extra GitHub permissions. Signing out removes this PC's file.
   **Remove from my machines** deletes another PC's file (a PC that is still
   running publishes it again within five minutes).
-- **How they talk.** Directly, PC to PC, over mutual TLS on the fleet port
-  (47322 by default, `fleet_port` in the config). Each side only accepts the
+- **How they talk.** Directly, PC to PC, over mutual TLS on port 47323 (any
+  free port if that one is taken; the repo tells the others which), separate
+  from the main host's 47322 so a main host can be one of them too. Each side only accepts the
   certificate fingerprint listed in the repo, so an unknown PC is refused.
   Nothing goes through a server.
-- **Firewall and Tailscale.** Both PCs must reach each other's fleet port: the
-  same network with TCP port 47322 allowed in the firewall, or install
+- **Firewall and Tailscale.** Both PCs must reach each other's port: the
+  same network with TCP port 47323 allowed in the firewall, or install
   Tailscale on both and they reach each other from anywhere.
 - **Control switch.** **Let my other PCs control this one** (config
   `allow_control`, on by default) in the Machines tab. Off, other PCs still see

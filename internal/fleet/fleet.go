@@ -38,6 +38,11 @@ import (
 // DefaultPort is the main host's fleet port.
 const DefaultPort = 47322
 
+// PeerPort is where a signed-in machine listens for its account's other
+// machines. It differs from DefaultPort so a main host can be a peer too; when
+// it is taken any free port is used, since the directory carries the real one.
+const PeerPort = 47323
+
 const (
 	maxFrame     = 16 << 20
 	pingEvery    = 30 * time.Second

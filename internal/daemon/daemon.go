@@ -156,12 +156,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 	hostname, _ := os.Hostname()
 	d.peers = &fleet.Peers{
 		Dir: store.FleetDir(), Client: d.localClient, Name: hostname, Version: d.Version, Log: d.Log.Printf,
-		Port: func() int {
-			if c, _ := store.LoadConfig(); c.FleetPort > 0 {
-				return c.FleetPort
-			}
-			return fleet.DefaultPort
-		},
 		Info:         d.fleetInfo,
 		AllowControl: func() bool { c, _ := store.LoadConfig(); return c.AllowControlOn() },
 	}

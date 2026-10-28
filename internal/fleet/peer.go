@@ -42,7 +42,7 @@ type Peers struct {
 	// Name and Version describe this machine in the directory; an empty
 	// name means the hostname.
 	Name, Version string
-	// Port is the port to listen on; nil means DefaultPort. Addr, when set,
+	// Port is the port to listen on; nil means PeerPort. Addr, when set,
 	// is the listen address instead (tests use "127.0.0.1:0").
 	Port func() int
 	Addr string
@@ -188,13 +188,18 @@ func (p *Peers) start(parent context.Context) (*peerRun, error) {
 	}
 	addr := p.Addr
 	if addr == "" {
-		port := DefaultPort
+		port := PeerPort
 		if p.Port != nil {
 			port = p.Port()
 		}
 		addr = ":" + strconv.Itoa(port)
 	}
 	ln, err := net.Listen("tcp", addr)
+	if err != nil && p.Addr == "" {
+		// Taken (often by another program): any free port does, the
+		// directory tells the others which one.
+		ln, err = net.Listen("tcp", ":0")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("cannot listen on %s for the account's other PCs: %w", addr, err)
 	}
