@@ -1442,10 +1442,12 @@ function machineCard(m) {
         h('div', { class: 'muted small' }, ['gh-runners ' + (info.version || '?'), osName(info.os) + (info.arch ? ' · ' + info.arch : ''),
           m.online ? 'live' : (m.last_seen ? 'last seen ' + ago(m.last_seen) : 'never connected')].join(' · '))),
       h('div', { class: 'row' },
-        btn(info.paused ? 'Resume machine' : 'Pause machine', () => setPaused(m, !info.paused)),
+        // A machine that can't be reached can't take any of these, so only
+        // Remove stays.
+        off ? null : btn(info.paused ? 'Resume machine' : 'Pause machine', () => setPaused(m, !info.paused)),
         (info.paused || off) ? null : (info.runners || []).some((r) => r.state === 'stopped') ? [btn('Run what was on before it closed', () => startSet(m, 'last')), btn('Run all', () => startSet(m, 'all'))] : null,
-        btn('Add runner', () => addToMachine(m)),
-        btn('Update gh-runners', () => updateMachine(m)),
+        off ? null : btn('Add runner', () => addToMachine(m)),
+        off ? null : btn('Update gh-runners', () => updateMachine(m)),
         (S.fleet.can_manage || m.id === 'host') ? null : h('button', { class: 'btn small danger', onclick: () => removeMachine(m) }, m.peer ? 'Remove from my machines' : 'Remove machine'))),
     S.fleet.main_host && m.id !== 'host' && !m.peer ? h('div', { class: 'manage-switch' },
       sw(!!m.manage, (on) => setManage(m, on), 'Can manage the fleet'),

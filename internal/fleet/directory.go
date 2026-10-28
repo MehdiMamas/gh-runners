@@ -131,6 +131,10 @@ func (d *Directory) ready(ctx context.Context) (*github.Client, string, error) {
 	return c, u.Login, nil
 }
 
+// StaleAfter is how long a machine may go without updating its entry before
+// the others remove it.
+var StaleAfter = 14 * 24 * time.Hour
+
 func entryPath(id string) string { return "machines/" + id + ".json" }
 
 var idRe = regexp.MustCompile(`^[0-9a-f]{8,64}$`)
@@ -213,9 +217,20 @@ func (d *Directory) List(ctx context.Context) ([]Entry, error) {
 			}
 		}
 		next[id] = ce
-		if ce.ok {
-			out = append(out, ce.entry)
+		if !ce.ok {
+			continue
 		}
+		// A running machine rewrites its file every few minutes, so one
+		// untouched for StaleAfter is gone (reinstalled, wiped, retired):
+		// drop it rather than list a ghost forever.
+		if self, _ := d.ID(); id != self && !ce.entry.Updated.IsZero() && time.Since(ce.entry.Updated) > StaleAfter {
+			if err := c.DeleteContents(ctx, owner, DirectoryRepo, f.Path, "gh-runners: remove "+ce.entry.Name+" (not seen for two weeks)", f.SHA); err != nil {
+				d.logf("directory: removing stale %s: %v", f.Path, err)
+			}
+			delete(next, id)
+			continue
+		}
+		out = append(out, ce.entry)
 	}
 	d.mu.Lock()
 	d.cache = next

@@ -407,11 +407,39 @@ func TestPeerUnreachable(t *testing.T) {
 		return false
 	})
 	for _, p := range a.Peers.Peers() {
-		if !strings.Contains(p.Error, "connection refused") {
+		if !strings.Contains(p.Error, "Connection refused") {
 			t.Fatalf("error in plain words: %q", p.Error)
 		}
 	}
 	if _, _, err := a.Call(context.Background(), "ffffffffffffffff", "GET", "/api/state", nil); err != ErrOffline {
 		t.Fatalf("call to unreachable: %v", err)
+	}
+}
+
+// A machine that has not updated its entry for StaleAfter is removed from the
+// directory; a fresh one and this machine itself stay.
+func TestDirectoryDropsStale(t *testing.T) {
+	g := newFakeGH(t)
+	d := &Directory{Dir: t.TempDir(), Client: g.client}
+	d.Self = func() Entry {
+		return Entry{Name: "mac", Addrs: []string{"10.0.0.2"}, Port: 47323, Fingerprint: strings.Repeat("ab", 32)}
+	}
+	ctx := context.Background()
+	if err := d.Publish(ctx); err != nil {
+		t.Fatal(err)
+	}
+	entry := func(id string, at time.Time) string {
+		return `{"id":"` + id + `","name":"pc","addrs":["10.0.0.3"],"port":47323,"fingerprint":"` + strings.Repeat("cd", 32) + `","updated":"` + at.UTC().Format(time.RFC3339) + `"}`
+	}
+	g.mu.Lock()
+	g.files["machines/0000000000000001.json"] = entry("0000000000000001", time.Now().Add(-StaleAfter-time.Hour))
+	g.files["machines/0000000000000002.json"] = entry("0000000000000002", time.Now().Add(-time.Hour))
+	g.mu.Unlock()
+	es, err := d.List(ctx)
+	if err != nil || len(es) != 2 {
+		t.Fatalf("List: %v %+v", err, es)
+	}
+	if g.has("machines/0000000000000001.json") || !g.has("machines/0000000000000002.json") {
+		t.Fatal("stale entry kept or fresh one removed")
 	}
 }

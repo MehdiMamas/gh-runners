@@ -79,7 +79,8 @@ type TokenSource struct {
 
 // ResolveToken finds a token: GH_RUNNERS_TOKEN, GH_TOKEN, GITHUB_TOKEN, then
 // the token saved by `gh-runners login` or the dashboard's sign-in
-// (savedPath), then `gh auth token`.
+// (savedPath), then `gh auth token` unless GH_RUNNERS_NO_GH_CLI is set (tests
+// set it so they never pick up the developer's real account).
 func ResolveToken(savedPath string) (TokenSource, error) {
 	for _, env := range []string{"GH_RUNNERS_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"} {
 		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
@@ -93,7 +94,7 @@ func ResolveToken(savedPath string) (TokenSource, error) {
 			}
 		}
 	}
-	if gh, err := exec.LookPath("gh"); err == nil {
+	if gh, err := exec.LookPath("gh"); err == nil && os.Getenv("GH_RUNNERS_NO_GH_CLI") == "" {
 		cmd := exec.Command(gh, "auth", "token", "--hostname", "github.com")
 		hideWindow(cmd)
 		out, err := cmd.Output()
