@@ -199,6 +199,36 @@ How the PCs talk, in plain words:
   registration, runner lists and labels, workflow files for the label hints,
   queued jobs for on-demand runners).
 
+### PCs on the same GitHub account
+
+Sign in to gh-runners with the same GitHub account on two PCs and they find
+each other with no join code. Each one shows the others in its **Machines**
+tab: online with its runners and version, or "Signed in, can't reach it" with
+the reason. The controls you use on this PC (start, stop, add, remove runners,
+update, pause) work on the other PC too.
+
+- **How they find each other.** Each PC keeps a small file about itself (name,
+  OS, version, addresses, port, certificate fingerprint) in a private repo
+  `gh-runners-machines` on your account. gh-runners creates it the first time
+  and uses no extra GitHub permissions. Signing out removes this PC's file.
+  **Remove from my machines** deletes another PC's file (a PC that is still
+  running publishes it again within five minutes).
+- **How they talk.** Directly, PC to PC, over mutual TLS on the fleet port
+  (47322 by default, `fleet_port` in the config). Each side only accepts the
+  certificate fingerprint listed in the repo, so an unknown PC is refused.
+  Nothing goes through a server.
+- **Firewall and Tailscale.** Both PCs must reach each other's fleet port: the
+  same network with TCP port 47322 allowed in the firewall, or install
+  Tailscale on both and they reach each other from anywhere.
+- **Control switch.** **Let my other PCs control this one** (config
+  `allow_control`, on by default) in the Machines tab. Off, other PCs still see
+  this one but their calls are refused. They can only do what the main host
+  can: runners and updates, never sign-in, settings or files.
+- The port is shared with the main host mode above, so a PC that is a main host
+  can't also be signed in this way until the port is changed. The join-code
+  main host and member modes work as before.
+
+
 ## Local CI (no admin access)
 
 For a repo where you cannot add runners or branch protection, `gh-runners ci` runs the repo's `.github/workflows/ci.yml` on your own machine and reports back on the pull request.
