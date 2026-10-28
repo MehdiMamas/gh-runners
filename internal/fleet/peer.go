@@ -344,7 +344,8 @@ func (p *Peers) Call(ctx context.Context, id, method, pathQuery string, body []b
 	case l != nil:
 	case via != nil:
 		// No direct link: a machine that has one passes the call on.
-		l, req = via, frame{Kind: kindRelay, To: id, Inner: &req}
+		inner := req
+		l, req = via, frame{Kind: kindRelay, To: id, Inner: &inner}
 	default:
 		return 0, nil, ErrOffline
 	}

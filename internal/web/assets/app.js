@@ -1381,7 +1381,7 @@ function renderMachines() {
   }
   const mine = h('div', { class: 'card' },
     h('div', { class: 'card-head' },
-      h('div', {}, h('div', { class: 'row' }, h('h2', {}, st.hostname), f.main_host ? h('span', { class: 'pill plain info' }, 'Main host') : null, h('span', { class: 'pill plain' }, 'This computer'), st.paused ? h('span', { class: 'pill warn' }, 'Paused') : null),
+      h('div', {}, h('div', { class: 'row' }, h('h2', {}, st.hostname), f.main_host && (f.machines || []).some(otherAccountMember) ? h('span', { class: 'pill plain info' }, 'Main host') : null, h('span', { class: 'pill plain' }, 'This computer'), st.paused ? h('span', { class: 'pill warn' }, 'Paused') : null),
         h('div', { class: 'muted small' }, 'gh-runners ' + st.version + ' · ' + osName(st.os) + ' · ' + st.arch)),
       h('div', { class: 'row' },
         h('button', { class: 'btn small', onclick: () => setPaused(null, !st.paused) }, st.paused ? 'Resume machine' : 'Pause machine'),
@@ -1414,6 +1414,14 @@ async function setAllowControl(on) {
   });
 }
 
+// otherAccountMember is a member of this main host that is not on this
+// computer's GitHub account (or not signed in): the ones that still need the
+// main host. Members of the same account switch to account machines.
+function otherAccountMember(m) {
+  const f = S.fleet;
+  return !m.peer && m.id !== 'host' && !(f.login && m.info && m.info.login === f.login);
+}
+
 function machineCard(m) {
   const info = m.info || { runners: [] };
   const gh = S.mgh[m.id] || {};
@@ -1440,7 +1448,7 @@ function machineCard(m) {
     h('div', { class: 'card-head' },
       h('div', {}, h('div', { class: 'row' }, h('h2', {}, machineName(m)), m.online ? h('span', { class: 'pill ok' }, 'Online') : (m.peer ? h('span', { class: 'pill bad' }, 'Signed in, can\'t reach it') : h('span', { class: 'pill' }, 'Offline')), info.paused ? h('span', { class: 'pill warn' }, 'Paused') : null),
         h('div', { class: 'muted small' }, ['gh-runners ' + (info.version || '?'), osName(info.os) + (info.arch ? ' · ' + info.arch : ''),
-          m.online ? 'live' : (m.last_seen ? 'last seen ' + ago(m.last_seen) : 'never connected')].join(' · '))),
+          m.via ? 'reached through ' + (m.via_name || m.via) : m.online ? 'live' : (m.last_seen ? 'last seen ' + ago(m.last_seen) : 'never connected')].join(' · '))),
       h('div', { class: 'row' },
         // A machine that can't be reached can't take any of these, so only
         // Remove stays.
@@ -1449,7 +1457,8 @@ function machineCard(m) {
         off ? null : btn('Add runner', () => addToMachine(m)),
         off ? null : btn('Update gh-runners', () => updateMachine(m)),
         (S.fleet.can_manage || m.id === 'host') ? null : h('button', { class: 'btn small danger', onclick: () => removeMachine(m) }, m.peer ? 'Remove from my machines' : 'Remove machine'))),
-    S.fleet.main_host && m.id !== 'host' && !m.peer ? h('div', { class: 'manage-switch' },
+    m.online && m.via ? h('p', { class: 'muted small via-note' }, 'Reached through ' + (m.via_name || m.via) + '. This PC cannot connect to it directly, so ' + (m.via_name || m.via) + ' passes the calls on.') : null,
+    S.fleet.main_host && otherAccountMember(m) ? h('div', { class: 'manage-switch' },
       sw(!!m.manage, (on) => setManage(m, on), 'Can manage the fleet'),
       h('p', { class: 'muted small' }, 'Lets that computer start, stop and watch runners here and on the other machines.')) : null,
     info.paused ? h('p', { class: 'muted small' }, 'Paused: no runner, on-demand runner, sync or update runs on this machine until you resume it.') : null,
