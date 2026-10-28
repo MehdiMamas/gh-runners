@@ -56,9 +56,9 @@ type Host struct {
 
 	fleetHandler http.Handler // the dashboard routes a managing member may use, under mu
 
-	tarMu    sync.Mutex           // the tarball cache
-	ciLogs   map[string]io.Writer // CI job id → where its log goes
-	smu      sync.Mutex           // host.json
+	tarMu    sync.Mutex // the tarball cache
+	ciLogs   ciLogSet   // CI job id → where its log goes
+	smu      sync.Mutex // host.json
 	mu       sync.Mutex
 	ln       net.Listener
 	port     int
@@ -112,10 +112,14 @@ type Machine struct {
 	// Peer is set for another PC signed in to the same GitHub account (not
 	// a member of a main host). Error then says why it is offline, and
 	// Addrs and Port are where this machine tried to reach it.
-	Peer  bool     `json:"peer,omitempty"`
-	Error string   `json:"error,omitempty"`
-	Addrs []string `json:"addrs,omitempty"`
-	Port  int      `json:"port,omitempty"`
+	Peer bool `json:"peer,omitempty"`
+	// Via, for a peer, is the id (and ViaName the name) of the machine the
+	// calls go through when there is no direct link.
+	Via     string   `json:"via,omitempty"`
+	ViaName string   `json:"via_name,omitempty"`
+	Error   string   `json:"error,omitempty"`
+	Addrs   []string `json:"addrs,omitempty"`
+	Port    int      `json:"port,omitempty"`
 }
 
 func (h *Host) logf(format string, args ...any) {
@@ -434,7 +438,7 @@ func (h *Host) hello(c *conn, f frame, remote string) {
 	h.mu.Unlock()
 	h.logf("main host: machine %s connected from %s", f.MemberID, remote)
 
-	_ = c.send(frame{Type: tWelcome, HostName: h.name(), Addrs: h.addrs()})
+	_ = c.send(frame{Type: tWelcome, HostName: h.name(), Addrs: h.addrs(), Info: h.selfInfo()})
 	memberID := f.MemberID
 	_ = c.serve(func(r frame) frame {
 		if r.Kind == kindFleet {
@@ -451,12 +455,7 @@ func (h *Host) hello(c *conn, f frame, remote string) {
 				h.mu.Unlock()
 			}
 		case tCILog:
-			h.mu.Lock()
-			w := h.ciLogs[f2.Path]
-			h.mu.Unlock()
-			if w != nil {
-				_, _ = w.Write(f2.Body)
-			}
+			h.ciLogs.write(f2.Path, f2.Body)
 		case tLeave:
 			_ = h.forget(f.MemberID)
 			h.logf("main host: machine %s left", f.MemberID)
@@ -558,6 +557,15 @@ func (h *Host) SetFleetHandler(fh http.Handler) {
 	h.mu.Lock()
 	h.fleetHandler = fh
 	h.mu.Unlock()
+}
+
+// selfInfo is what the welcome frame tells a member about the main host.
+func (h *Host) selfInfo() *Info {
+	i := Info{Hostname: h.name(), Runners: []RunnerInfo{}}
+	if h.Info != nil {
+		i = h.Info()
+	}
+	return &i
 }
 
 // Self describes the main host as a machine.

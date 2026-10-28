@@ -1,13 +1,14 @@
 package fleet
 
-// Running CI jobs on fleet members.
+// Running CI jobs on fleet members and on the account's other PCs.
 //
-// The host sends a member a job (repo, sha, the parsed job) as a "ci"
-// request. The member downloads the source tarball through the host's
-// broker, so it needs no GitHub token, runs the job with the local executor
-// and its own emulator lock, streams the log back in one-way "cilog" frames
-// and answers the request with the result. The host stores the log under
-// the run directory.
+// The sender (the host, or a PC of the account) sends a job (repo, sha, the
+// parsed job) as a "ci" request. A member downloads the source tarball
+// through the host's broker, so it needs no GitHub token; a peer downloads
+// it with its own sign-in. Either runs the job with the local executor and
+// its own emulator lock, streams the log back in one-way "cilog" frames and
+// answers the request with the result. The sender stores the log under the
+// run directory.
 
 import (
 	"context"
@@ -21,6 +22,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/github"
@@ -28,9 +30,9 @@ import (
 )
 
 const (
-	kindCI    = "ci"       // host → member: run a CI job
-	tCILog    = "cilog"    // member → host: a chunk of a job's log (Path is the job id)
-	tCICancel = "cicancel" // host → member: stop a job (Path is the job id)
+	kindCI    = "ci"       // sender → runner: run a CI job
+	tCILog    = "cilog"    // runner → sender: a chunk of a job's log (Path is the job id)
+	tCICancel = "cicancel" // sender → runner: stop a job (Path is the job id)
 
 	tarballChunk = 4 << 20
 	logChunk     = 256 << 10
@@ -172,6 +174,36 @@ func (h *Host) cachedTarball(owner, repo, sha string) (string, error) {
 	return dest, os.Rename(tmp, dest)
 }
 
+// ciLogSet is where the logs of the jobs a machine sent out go, by job id.
+type ciLogSet struct {
+	mu sync.Mutex
+	m  map[string]io.Writer
+}
+
+func (s *ciLogSet) add(id string, w io.Writer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.m == nil {
+		s.m = map[string]io.Writer{}
+	}
+	s.m[id] = w
+}
+
+func (s *ciLogSet) remove(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.m, id)
+}
+
+func (s *ciLogSet) write(id string, b []byte) {
+	s.mu.Lock()
+	w := s.m[id]
+	s.mu.Unlock()
+	if w != nil {
+		_, _ = w.Write(b)
+	}
+}
+
 // RemoteExecutor runs jobs on one fleet member. It implements
 // localci.Executor.
 type RemoteExecutor struct {
@@ -183,17 +215,27 @@ type RemoteExecutor struct {
 // written to spec.Log as it arrives. A member that drops mid-job fails the
 // job with "machine went offline".
 func (r RemoteExecutor) RunJob(ctx context.Context, spec localci.JobSpec) localci.Result {
+	h := r.Host
+	h.mu.Lock()
+	s := h.sessions[r.MemberID]
+	h.mu.Unlock()
+	if s == nil {
+		return runRemote(ctx, spec, nil, &h.ciLogs)
+	}
+	return runRemote(ctx, spec, s.c, &h.ciLogs)
+}
+
+// runRemote sends the job down c and waits for the result; the log is
+// written to spec.Log as it arrives through logs. A nil c, or a link that
+// drops mid-job, fails the job with "machine went offline".
+func runRemote(ctx context.Context, spec localci.JobSpec, c *conn, logs *ciLogSet) localci.Result {
 	start := time.Now()
 	res := localci.Result{Job: spec.Name, Log: spec.Log}
 	fail := func(reason string) localci.Result {
 		res.Status, res.Reason, res.Duration = localci.Fail, reason, time.Since(start)
 		return res
 	}
-	h := r.Host
-	h.mu.Lock()
-	s := h.sessions[r.MemberID]
-	h.mu.Unlock()
-	if s == nil {
+	if c == nil {
 		return fail("machine went offline")
 	}
 	if err := os.MkdirAll(filepath.Dir(spec.Log), 0o755); err != nil {
@@ -205,27 +247,18 @@ func (r RemoteExecutor) RunJob(ctx context.Context, spec localci.JobSpec) localc
 	}
 	defer lf.Close()
 	id := randomHex(8)
-	h.mu.Lock()
-	if h.ciLogs == nil {
-		h.ciLogs = map[string]io.Writer{}
-	}
-	h.ciLogs[id] = lf
-	h.mu.Unlock()
-	defer func() {
-		h.mu.Lock()
-		delete(h.ciLogs, id)
-		h.mu.Unlock()
-	}()
+	logs.add(id, lf)
+	defer logs.remove(id)
 	body, err := json.Marshal(ciJob{
 		JobID: id, Name: spec.Name, Repo: spec.RunEnv.Repo, SHA: spec.RunEnv.SHA, Job: spec.Job, RunEnv: spec.RunEnv,
 	})
 	if err != nil {
 		return fail(err.Error())
 	}
-	resp, err := s.c.call(ctx, frame{Kind: kindCI, Body: body})
+	resp, err := c.call(ctx, frame{Kind: kindCI, Body: body})
 	switch {
 	case ctx.Err() != nil:
-		_ = s.c.send(frame{Type: tCICancel, Path: id})
+		_ = c.send(frame{Type: tCICancel, Path: id})
 		res.Status, res.Reason, res.Duration = localci.Skipped, "cancelled", time.Since(start)
 		return res
 	case err != nil:
@@ -244,30 +277,51 @@ func (r RemoteExecutor) RunJob(ctx context.Context, spec localci.JobSpec) localc
 	return res
 }
 
-// ---- member side ----
+// ---- runner side ----
 
-// ciHandler wraps handleAPI: "ci" requests run a job, the rest are
-// dashboard calls.
-func (m *Member) ciHandler(ctx context.Context, c *conn) func(frame) frame {
-	return func(f frame) frame {
-		if f.Kind == kindCI {
-			return m.runCI(ctx, c, f)
-		}
-		return m.handleAPI(f)
+// ciRunner is the side that runs jobs: a member for the main host, a peer
+// for the account's other PCs.
+type ciRunner struct {
+	// Dir turns CI jobs on when set and is where they work. Tools and
+	// EmulatorOK say what this machine can run.
+	Dir        string
+	Tools      func() []string
+	EmulatorOK func() bool
+	// Fetch downloads the source of repo at sha into dest.
+	Fetch func(ctx context.Context, c *conn, repo, sha, dest string) error
+	// For names who sent the job, on this machine's card ("the main host").
+	For string
+	// Reload, when set, runs when a job starts or ends.
+	Reload func()
+
+	mu   sync.Mutex
+	jobs map[string]context.CancelFunc // running jobs by id
+}
+
+func (r *ciRunner) reload() {
+	if r.Reload != nil {
+		r.Reload()
 	}
 }
 
-// CIInfo is what this member advertises: nil when CI is not turned on.
-func (m *Member) ciInfo() *CIInfo {
-	if m.CIDir == "" {
+// busy reports how many jobs run now.
+func (r *ciRunner) busy() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.jobs)
+}
+
+// info is what this machine advertises: nil when CI is not turned on.
+func (r *ciRunner) info() *CIInfo {
+	if r.Dir == "" {
 		return nil
 	}
 	i := CIInfo{}
-	if m.CITools != nil {
-		i.Tools = m.CITools()
+	if r.Tools != nil {
+		i.Tools = r.Tools()
 	}
-	if m.CIEmulatorOK != nil {
-		i.EmulatorOK = m.CIEmulatorOK()
+	if r.EmulatorOK != nil {
+		i.EmulatorOK = r.EmulatorOK()
 	}
 	return &i
 }
@@ -276,9 +330,9 @@ func ciError(status int, msg string) frame {
 	return frame{Status: status, Error: msg}
 }
 
-func (m *Member) runCI(ctx context.Context, c *conn, f frame) frame {
-	if m.CIDir == "" {
-		return ciError(http.StatusForbidden, "this machine does not run CI jobs")
+func (r *ciRunner) run(ctx context.Context, c *conn, f frame) frame {
+	if r.Dir == "" {
+		return ciError(http.StatusForbidden, "this PC does not run CI jobs")
 	}
 	var job ciJob
 	if err := json.Unmarshal(f.Body, &job); err != nil || job.Job == nil {
@@ -290,16 +344,16 @@ func (m *Member) runCI(ctx context.Context, c *conn, f frame) frame {
 	}
 	jctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	m.mu.Lock()
-	if m.jobs == nil {
-		m.jobs = map[string]context.CancelFunc{}
+	r.mu.Lock()
+	if r.jobs == nil {
+		r.jobs = map[string]context.CancelFunc{}
 	}
-	m.jobs[job.JobID] = cancel
-	m.mu.Unlock()
+	r.jobs[job.JobID] = cancel
+	r.mu.Unlock()
 	defer func() {
-		m.mu.Lock()
-		delete(m.jobs, job.JobID)
-		m.mu.Unlock()
+		r.mu.Lock()
+		delete(r.jobs, job.JobID)
+		r.mu.Unlock()
 	}()
 	go func() {
 		select {
@@ -309,14 +363,14 @@ func (m *Member) runCI(ctx context.Context, c *conn, f frame) frame {
 		}
 	}()
 
-	// The main host sees the job on this machine's card at once, not only
+	// The sender sees the job on this machine's card at once, not only
 	// with the next status.
 	host, _ := os.Hostname()
-	done := localci.StartActive(localci.ActiveJob{Repo: job.Repo, PR: localci.PRFromRef(job.RunEnv.Ref), Job: job.Name, Machine: host, For: "the main host"})
-	m.Reload()
-	defer func() { done(); m.Reload() }()
+	done := localci.StartActive(localci.ActiveJob{Repo: job.Repo, PR: localci.PRFromRef(job.RunEnv.Ref), Job: job.Name, Machine: host, For: r.For})
+	r.reload()
+	defer func() { done(); r.reload() }()
 
-	dir := filepath.Join(m.CIDir, "jobs", job.JobID)
+	dir := filepath.Join(r.Dir, "jobs", job.JobID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return ciError(http.StatusInternalServerError, err.Error())
 	}
@@ -327,22 +381,22 @@ func (m *Member) runCI(ctx context.Context, c *conn, f frame) frame {
 
 	tailDone := make(chan struct{})
 	stopTail := make(chan struct{})
-	go m.tailLog(c, job.JobID, logPath, stopTail, tailDone)
-	finish := func(r localci.Result) frame {
+	go r.tailLog(c, job.JobID, logPath, stopTail, tailDone)
+	finish := func(res localci.Result) frame {
 		close(stopTail)
 		<-tailDone
-		b, _ := json.Marshal(ciResult{Status: r.Status, Reason: r.Reason, DurationMS: r.Duration.Milliseconds()})
+		b, _ := json.Marshal(ciResult{Status: res.Status, Reason: res.Reason, DurationMS: res.Duration.Milliseconds()})
 		return frame{Status: http.StatusOK, Body: b}
 	}
 
-	if err := m.fetchTarball(jctx, c, job.Repo, job.SHA, tarball); err != nil {
+	if err := r.Fetch(jctx, c, job.Repo, job.SHA, tarball); err != nil {
 		_ = os.WriteFile(logPath, []byte("::error download source: "+err.Error()+"\n"), 0o644)
 		return finish(localci.Result{Status: localci.Fail, Reason: "download source: " + err.Error()})
 	}
-	// The member builds its own environment: the host's PATH and variables
-	// never reach it.
+	// This machine builds its own environment: the sender's PATH and
+	// variables never reach it.
 	env := localci.ScrubEnv(os.Environ(), job.RunEnv, nil)
-	locks := &localci.Locks{Dir: filepath.Join(m.CIDir, "locks")}
+	locks := &localci.Locks{Dir: filepath.Join(r.Dir, "locks")}
 	if _, emu := job.Job.Requires(); emu {
 		unlock, err := locks.Lock("emulator")
 		if err != nil {
@@ -350,17 +404,28 @@ func (m *Member) runCI(ctx context.Context, c *conn, f frame) frame {
 		}
 		defer unlock()
 	}
-	r := localci.LocalExecutor{}.RunJob(jctx, localci.JobSpec{
+	res := localci.LocalExecutor{}.RunJob(jctx, localci.JobSpec{
 		Name: job.Name, Job: job.Job, Tarball: tarball, RunDir: dir, Log: logPath, Env: env, RunEnv: job.RunEnv,
 	})
-	if jctx.Err() != nil && r.Status == localci.Fail {
-		r.Reason = "cancelled"
+	if jctx.Err() != nil && res.Status == localci.Fail {
+		res.Reason = "cancelled"
 	}
-	return finish(r)
+	return finish(res)
 }
 
-// fetchTarball downloads the source through the host in chunks.
-func (m *Member) fetchTarball(ctx context.Context, c *conn, repo, sha, dest string) error {
+// ciHandler wraps handleAPI: "ci" requests run a job, the rest are
+// dashboard calls.
+func (m *Member) ciHandler(ctx context.Context, c *conn) func(frame) frame {
+	return func(f frame) frame {
+		if f.Kind == kindCI {
+			return m.ciRun().run(ctx, c, f)
+		}
+		return m.handleAPI(f)
+	}
+}
+
+// fetchViaHost downloads the source through the main host in chunks.
+func fetchViaHost(ctx context.Context, c *conn, repo, sha, dest string) error {
 	out, err := os.Create(dest)
 	if err != nil {
 		return err
@@ -399,7 +464,7 @@ func (m *Member) fetchTarball(ctx context.Context, c *conn, repo, sha, dest stri
 
 // tailLog sends the growing log file to the host until stop closes, then
 // once more so nothing is lost.
-func (m *Member) tailLog(c *conn, id, path string, stop <-chan struct{}, done chan<- struct{}) {
+func (r *ciRunner) tailLog(c *conn, id, path string, stop <-chan struct{}, done chan<- struct{}) {
 	defer close(done)
 	var off int64
 	flush := func() {
@@ -435,11 +500,11 @@ func (m *Member) tailLog(c *conn, id, path string, stop <-chan struct{}, done ch
 	}
 }
 
-// cancelJob stops a running job; it reports nothing if the job is gone.
-func (m *Member) cancelJob(id string) {
-	m.mu.Lock()
-	cancel := m.jobs[id]
-	m.mu.Unlock()
+// cancel stops a running job; it reports nothing if the job is gone.
+func (r *ciRunner) cancel(id string) {
+	r.mu.Lock()
+	cancel := r.jobs[id]
+	r.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}

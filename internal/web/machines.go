@@ -50,6 +50,10 @@ type machinesView struct {
 	AccountError string `json:"account_error,omitempty"`
 	AccountPort  int    `json:"account_port,omitempty"`
 	AllowControl bool   `json:"allow_control"`
+	// Login is the GitHub login this machine is signed in with, so the page
+	// can tell members of the same account (which move to account machines)
+	// from the others.
+	Login string `json:"login,omitempty"`
 }
 
 // fleetManageAPI is what the main host serves to a member it lets manage
@@ -153,7 +157,7 @@ func (s *Server) getMachines(w http.ResponseWriter, r *http.Request) {
 	}
 	if p := s.h.Peers; p != nil {
 		if on, port := p.Running(); on {
-			v.Account, v.AccountPort = true, port
+			v.Account, v.AccountPort, v.Login = true, port, p.Login()
 			for _, pe := range p.Peers() {
 				v.Machines = append(v.Machines, pe.Machine())
 			}

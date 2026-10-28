@@ -99,6 +99,13 @@ func (d *Directory) ID() (string, error) {
 	return s, os.WriteFile(path, []byte(s+"\n"), 0o600)
 }
 
+// Login is the GitHub login of the account, once it is known.
+func (d *Directory) Login() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.owner
+}
+
 // ready returns a client and the owner login, creating the repository on
 // first use.
 func (d *Directory) ready(ctx context.Context) (*github.Client, string, error) {

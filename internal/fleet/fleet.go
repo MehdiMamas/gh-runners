@@ -73,6 +73,7 @@ const (
 	kindAPI    = "api"    // host → member: a dashboard API call
 	kindGitHub = "github" // member → host: a GitHub API call
 	kindFleet  = "fleet"  // member → host: a fleet dashboard call
+	kindRelay  = "relay"  // peer → peer: pass Inner on to the peer named in To
 )
 
 // frame is one message on the connection. Requests and responses carry an
@@ -95,6 +96,13 @@ type frame struct {
 	HostName   string   `json:"host_name,omitempty"`
 	Addrs      []string `json:"addrs,omitempty"`
 	Info       *Info    `json:"info,omitempty"`
+
+	// Relay: To is the machine id the call is for, From the one that made it
+	// (set by the machine that passes it on, never trusted from the sender
+	// of the first hop) and Inner the call itself.
+	To    string `json:"to,omitempty"`
+	From  string `json:"from,omitempty"`
+	Inner *frame `json:"inner,omitempty"`
 }
 
 // Info is what a member tells the host about itself.
@@ -108,6 +116,14 @@ type Info struct {
 	Paused bool `json:"paused,omitempty"`
 	// CI is set when this machine accepts CI jobs from the main host.
 	CI *CIInfo `json:"ci,omitempty"`
+	// Login is the GitHub login this machine is signed in with (empty when
+	// not signed in) and MachineID its id in the account directory. A member
+	// whose main host has the same login switches to account machines.
+	Login     string `json:"login,omitempty"`
+	MachineID string `json:"machine_id,omitempty"`
+	// Links lists the ids of the account machines this one has a direct link
+	// to, so a machine that cannot reach one of them can go through it.
+	Links []string `json:"links,omitempty"`
 }
 
 // RunnerInfo is one runner of a member.

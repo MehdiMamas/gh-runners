@@ -8,10 +8,13 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -21,6 +24,7 @@ import (
 	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/github"
+	"github.com/MehdiMamas/gh-runners/internal/localci"
 )
 
 // fakeGH is a GitHub with one user, "octo", and the contents API of one
@@ -224,6 +228,13 @@ type peerT struct {
 
 func newPeer(t *testing.T, g *fakeGH, name string) *peerT {
 	t.Helper()
+	return newPeerWith(t, g, name, nil)
+}
+
+// newPeerWith is newPeer with a chance to change the settings before it
+// starts.
+func newPeerWith(t *testing.T, g *fakeGH, name string, set func(*Peers)) *peerT {
+	t.Helper()
 	pt := &peerT{}
 	on := true
 	pt.allow = &on
@@ -240,6 +251,9 @@ func newPeer(t *testing.T, g *fakeGH, name string) *peerT {
 		}),
 		AllowControl: func() bool { mu.Lock(); defer mu.Unlock(); return *pt.allow },
 		PublishEvery: 150 * time.Millisecond, ListEvery: 100 * time.Millisecond, DialEvery: 50 * time.Millisecond,
+	}
+	if set != nil {
+		set(pt.Peers)
 	}
 	t.Cleanup(pt.Stop)
 	if err := pt.Start(context.Background()); err != nil {
@@ -261,6 +275,7 @@ func twoPeers(t *testing.T) (*fakeGH, *peerT, *peerT) {
 	g := newFakeGH(t)
 	a, b := newPeer(t, g, "alpha"), newPeer(t, g, "beta")
 	waitFor(t, func() bool { return onlineWith(a.Peers, b.ID()) && onlineWith(b.Peers, a.ID()) })
+	settled(t, a.Peers, b.Peers)
 	return g, a, b
 }
 
@@ -441,5 +456,279 @@ func TestDirectoryDropsStale(t *testing.T) {
 	}
 	if g.has("machines/0000000000000001.json") || !g.has("machines/0000000000000002.json") {
 		t.Fatal("stale entry kept or fresh one removed")
+	}
+}
+
+// withCI turns on CI jobs on a peer, with a fake source download; the job
+// directory is not removed while a job still runs.
+func withCI(t *testing.T) func(*Peers) {
+	return func(p *Peers) {
+		p.CIDir = t.TempDir()
+		p.CITools = func() []string { return []string{"bash"} }
+		p.CIEmulatorOK = func() bool { return false }
+		p.CIFetch = func(_ context.Context, _, _, dest string) error { return os.WriteFile(dest, tinyTarball(t), 0o644) }
+		t.Cleanup(func() {
+			waitFor(t, func() bool { return p.run == nil || p.run.ci.busy() == 0 })
+		})
+	}
+}
+
+// ciPair is two peers where the second takes CI jobs and the first knows it.
+func ciPair(t *testing.T) (a, b *peerT) {
+	g := newFakeGH(t)
+	a, b = newPeer(t, g, "alpha"), newPeerWith(t, g, "beta", withCI(t))
+	waitFor(t, func() bool { return len(a.CIMachines()) == 1 })
+	settled(t, a.Peers, b.Peers)
+	return a, b
+}
+
+// settled waits until both sides use the same, preferred connection. Two
+// machines that start together dial each other at once, and the one the
+// lower id dialed replaces the other: a call sent on the loser fails.
+func settled(t *testing.T, x, y *Peers) {
+	t.Helper()
+	waitFor(t, func() bool {
+		lx, ly := x.link(y.ID()), y.link(x.ID())
+		return lx != nil && ly != nil && lx.dialer == min(x.ID(), y.ID()) && ly.dialer == lx.dialer
+	})
+}
+
+func TestPeerCIRunsAndStreamsLog(t *testing.T) {
+	a, b := ciPair(t)
+	if ms := a.CIMachines(); ms[0].ID != b.ID() || ms[0].Name != "beta" || len(ms[0].Tools) != 1 {
+		t.Fatalf("CIMachines = %+v", ms)
+	}
+	s := spec(t, "cat data.txt && echo repo=$GITHUB_REPOSITORY")
+	r := PeerExecutor{Peers: a.Peers, ID: b.ID()}.RunJob(context.Background(), s)
+	if r.Status != localci.Pass {
+		t.Fatalf("status %v (%s)", r.Status, r.Reason)
+	}
+	if log, err := os.ReadFile(s.Log); err != nil || !strings.Contains(string(log), "hello from the repo") {
+		t.Fatalf("log = %q, %v", log, err)
+	}
+	bad := spec(t, "echo nope; exit 3")
+	bad.Log = filepath.Join(filepath.Dir(s.Log), "bad.log")
+	if r := (PeerExecutor{Peers: a.Peers, ID: b.ID()}).RunJob(context.Background(), bad); r.Status != localci.Fail {
+		t.Fatalf("failing job: status %v", r.Status)
+	}
+	if b, _ := os.ReadFile(bad.Log); !strings.Contains(string(b), "nope") {
+		t.Fatalf("failing log = %q", b)
+	}
+}
+
+func TestPeerCICancelStopsTheJob(t *testing.T) {
+	a, b := ciPair(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	res := make(chan localci.Result, 1)
+	go func() { res <- PeerExecutor{Peers: a.Peers, ID: b.ID()}.RunJob(ctx, spec(t, "echo started; sleep 30")) }()
+	waitFor(t, func() bool { return b.run.ci.busy() == 1 })
+	cancel()
+	select {
+	case r := <-res:
+		if r.Status != localci.Skipped || r.Reason != "cancelled" {
+			t.Fatalf("got %v %q", r.Status, r.Reason)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancel did not return")
+	}
+	waitFor(t, func() bool { return b.run.ci.busy() == 0 })
+}
+
+func TestPeerCILinkDropsMidJob(t *testing.T) {
+	a, b := ciPair(t)
+	res := make(chan localci.Result, 1)
+	go func() {
+		res <- PeerExecutor{Peers: a.Peers, ID: b.ID()}.RunJob(context.Background(), spec(t, "echo started; sleep 30"))
+	}()
+	waitFor(t, func() bool { return b.run.ci.busy() == 1 })
+	a.run.mu.Lock()
+	l := a.run.links[b.ID()]
+	a.run.mu.Unlock()
+	l.c.close(errors.New("cable pulled"))
+	select {
+	case r := <-res:
+		if r.Status != localci.Fail || !strings.Contains(r.Reason, "machine went offline") {
+			t.Fatalf("got %v %q", r.Status, r.Reason)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the sender waited for the dead link")
+	}
+	waitFor(t, func() bool { return b.run.ci.busy() == 0 })
+	if r := (PeerExecutor{Peers: a.Peers, ID: "nobody"}).RunJob(context.Background(), spec(t, "true")); r.Status != localci.Fail || !strings.Contains(r.Reason, "offline") {
+		t.Fatalf("unknown peer: %v %q", r.Status, r.Reason)
+	}
+}
+
+func TestPeerCIRefused(t *testing.T) {
+	a, b := ciPair(t)
+	*b.allow = false
+	r := PeerExecutor{Peers: a.Peers, ID: b.ID()}.RunJob(context.Background(), spec(t, "true"))
+	if r.Status != localci.Fail || !strings.Contains(r.Reason, "does not let your other PCs control it") {
+		t.Fatalf("control off: %v %q", r.Status, r.Reason)
+	}
+	*b.allow = true
+	// A PC that has CI off says so.
+	g := newFakeGH(t)
+	x, y := newPeer(t, g, "xray"), newPeer(t, g, "yankee")
+	waitFor(t, func() bool { return onlineWith(x.Peers, y.ID()) })
+	settled(t, x.Peers, y.Peers)
+	r = PeerExecutor{Peers: x.Peers, ID: y.ID()}.RunJob(context.Background(), spec(t, "true"))
+	if r.Status != localci.Fail || !strings.Contains(r.Reason, "this PC does not run CI jobs") {
+		t.Fatalf("CI off: %v %q", r.Status, r.Reason)
+	}
+}
+
+// threePeers has A and B each unable to dial the other (and C): the only
+// links are A–C and B–C.
+func threePeers(t *testing.T) (a, b, c *peerT) {
+	g := newFakeGH(t)
+	dead := func(p *Peers) { p.Addrs = func() []string { return []string{"192.0.2.1"} } }
+	a, b, c = newPeerWith(t, g, "alpha", dead), newPeerWith(t, g, "beta", func(p *Peers) { dead(p); withCI(t)(p) }), newPeer(t, g, "gamma")
+	waitFor(t, func() bool {
+		for _, pe := range a.Peers.Peers() {
+			if pe.ID == b.ID() && pe.Via == c.ID() {
+				return true
+			}
+		}
+		return false
+	})
+	return a, b, c
+}
+
+func TestPeerRelayThroughThirdMachine(t *testing.T) {
+	a, b, c := threePeers(t)
+	for _, pe := range a.Peers.Peers() {
+		if pe.ID == b.ID() && (!pe.Online || pe.ViaName != "gamma" || pe.Machine().ViaName != "gamma") {
+			t.Fatalf("B on A's list: %+v", pe)
+		}
+	}
+	if a.Linked(b.ID()) || !a.Linked(c.ID()) {
+		t.Fatal("A should be linked to C only")
+	}
+	// A pauses B through C.
+	status, body, err := a.Call(context.Background(), b.ID(), "POST", "/api/pause", nil)
+	if err != nil || status != 200 || !strings.Contains(string(body), `"machine":"beta"`) {
+		t.Fatalf("relayed call: %d %s %v", status, body, err)
+	}
+	// A relayed machine takes no CI jobs in this phase.
+	if ms := a.CIMachines(); len(ms) != 0 {
+		t.Fatalf("CIMachines through a relay: %+v", ms)
+	}
+
+	// B's allowlist and control switch decide, whatever C or A say.
+	a.run.mu.Lock()
+	l := a.run.links[c.ID()]
+	a.run.mu.Unlock()
+	relay := func(to string, in *frame) frame {
+		f, err := l.c.call(context.Background(), frame{Kind: kindRelay, To: to, From: "someone-else", Inner: in})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	for _, path := range []string{"/api/login", "/api/fs", "/api/settings"} {
+		f := relay(b.ID(), &frame{Kind: kindAPI, Method: "POST", Path: path})
+		if f.Status != 403 || !strings.Contains(string(f.Body), "not allowed") {
+			t.Fatalf("B let %s through the relay: %+v", path, f)
+		}
+	}
+	if f := relay(b.ID(), &frame{Kind: kindGitHub, Method: "GET", Path: "/user"}); f.Status != 403 {
+		t.Fatalf("a github frame through the relay: %+v", f)
+	}
+	*b.allow = false
+	if f := relay(b.ID(), &frame{Kind: kindAPI, Method: "GET", Path: "/api/state"}); f.Status != 403 || !strings.Contains(string(f.Body), "does not let your other PCs control it") {
+		t.Fatalf("control off through the relay: %+v", f)
+	}
+	*b.allow = true
+	// C has no direct link to this id.
+	if f := relay("0123456789abcdef", &frame{Kind: kindAPI, Method: "GET", Path: "/api/state"}); f.Status != 403 || !strings.Contains(string(f.Body), "no direct link") {
+		t.Fatalf("relay to a machine C does not know: %+v", f)
+	}
+}
+
+func TestPeerRelayNoChains(t *testing.T) {
+	a, b, c := threePeers(t)
+	a.run.mu.Lock()
+	l := a.run.links[c.ID()]
+	a.run.mu.Unlock()
+	inner := &frame{Kind: kindRelay, To: b.ID(), Inner: &frame{Kind: kindAPI, Method: "GET", Path: "/api/state"}}
+	f, err := l.c.call(context.Background(), frame{Kind: kindRelay, To: b.ID(), Inner: inner})
+	if err != nil || f.Status != 403 || strings.Contains(string(f.Body), "beta") {
+		t.Fatalf("a chained relay was passed on: %+v %v", f, err)
+	}
+	// Sent straight to the machine it is for, it still is not a call.
+	a.run.mu.Lock()
+	l = a.run.links[c.ID()]
+	a.run.mu.Unlock()
+	f, err = l.c.call(context.Background(), frame{Kind: kindRelay, To: c.ID(), Inner: inner})
+	if err != nil || f.Status != 403 {
+		t.Fatalf("a relay inside a relay for C itself: %+v %v", f, err)
+	}
+}
+
+// hostWithInfo is a main host that says who it is, for the migration tests.
+func hostWithInfo(t *testing.T, p *Peers) *Host {
+	h := newHost(t)
+	h.Info = func() Info {
+		return Info{Hostname: "main", Login: p.Login(), MachineID: p.ID(), Runners: []RunnerInfo{}}
+	}
+	return h
+}
+
+func joinedMember(t *testing.T, h *Host, p *Peers, login string, logf func(string, ...any)) *Member {
+	dir := t.TempDir()
+	if _, err := Join(context.Background(), dir, invite(t, h), Info{Hostname: "pc2"}); err != nil {
+		t.Fatal(err)
+	}
+	m := &Member{
+		Dir: dir, IsPeer: p.Linked, Log: logf,
+		Info: func() Info { return Info{Hostname: "pc2", Login: login, MachineID: p.ID(), Runners: []RunnerInfo{}} },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { m.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	return m
+}
+
+// A member whose main host is a PC of its own GitHub account leaves the
+// host and stays as a peer.
+func TestMigrationSameLogin(t *testing.T) {
+	g := newFakeGH(t)
+	hp, mp := newPeer(t, g, "main-pc"), newPeer(t, g, "member-pc")
+	waitFor(t, func() bool {
+		return onlineWith(hp.Peers, mp.ID()) && onlineWith(mp.Peers, hp.ID()) && hp.Login() == "octo"
+	})
+	h := hostWithInfo(t, hp.Peers)
+	var mu sync.Mutex
+	var logs []string
+	m := joinedMember(t, h, mp.Peers, "octo", func(f string, a ...any) { mu.Lock(); logs = append(logs, fmt.Sprintf(f, a...)); mu.Unlock() })
+	waitFor(t, func() bool { return !m.Joined() })
+	waitFor(t, func() bool { ms, _ := h.Machines(); return len(ms) == 0 })
+	if !onlineWith(mp.Peers, hp.ID()) || !onlineWith(hp.Peers, mp.ID()) {
+		t.Fatal("both should be listed as peers")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(strings.Join(logs, "\n"), "switched to account machines: main is on the same GitHub account") {
+		t.Fatalf("log = %q", logs)
+	}
+}
+
+// A member on another account, or not signed in, keeps its join.
+func TestMigrationOtherLoginStaysMember(t *testing.T) {
+	g := newFakeGH(t)
+	hp, mp := newPeer(t, g, "main-pc"), newPeer(t, g, "member-pc")
+	waitFor(t, func() bool {
+		return onlineWith(hp.Peers, mp.ID()) && onlineWith(mp.Peers, hp.ID()) && hp.Login() == "octo"
+	})
+	h := hostWithInfo(t, hp.Peers)
+	for _, login := range []string{"someone-else", ""} {
+		m := joinedMember(t, h, mp.Peers, login, nil)
+		waitFor(t, func() bool { return m.Status().Connected })
+		time.Sleep(300 * time.Millisecond)
+		if !m.Joined() || !m.Status().Connected {
+			t.Fatalf("login %q: the member left its host", login)
+		}
 	}
 }
