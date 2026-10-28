@@ -112,12 +112,6 @@ func LocalMachine(name string, emulatorOK bool) Machine {
 // does not hold one global lock across machines.
 func (d *Dispatcher) SelfLocking() bool { return true }
 
-func (d *Dispatcher) load(key string) int {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.busy[key]
-}
-
 // RunJob routes the job and runs it there.
 func (d *Dispatcher) RunJob(ctx context.Context, spec JobSpec) Result {
 	var m Machine
