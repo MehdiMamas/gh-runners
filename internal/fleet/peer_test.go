@@ -275,6 +275,7 @@ func twoPeers(t *testing.T) (*fakeGH, *peerT, *peerT) {
 	g := newFakeGH(t)
 	a, b := newPeer(t, g, "alpha"), newPeer(t, g, "beta")
 	waitFor(t, func() bool { return onlineWith(a.Peers, b.ID()) && onlineWith(b.Peers, a.ID()) })
+	settled(t, a.Peers, b.Peers)
 	return g, a, b
 }
 
@@ -477,7 +478,19 @@ func ciPair(t *testing.T) (a, b *peerT) {
 	g := newFakeGH(t)
 	a, b = newPeer(t, g, "alpha"), newPeerWith(t, g, "beta", withCI(t))
 	waitFor(t, func() bool { return len(a.CIMachines()) == 1 })
+	settled(t, a.Peers, b.Peers)
 	return a, b
+}
+
+// settled waits until both sides use the same, preferred connection. Two
+// machines that start together dial each other at once, and the one the
+// lower id dialed replaces the other: a call sent on the loser fails.
+func settled(t *testing.T, x, y *Peers) {
+	t.Helper()
+	waitFor(t, func() bool {
+		lx, ly := x.link(y.ID()), y.link(x.ID())
+		return lx != nil && ly != nil && lx.dialer == min(x.ID(), y.ID()) && ly.dialer == lx.dialer
+	})
 }
 
 func TestPeerCIRunsAndStreamsLog(t *testing.T) {
@@ -558,6 +571,7 @@ func TestPeerCIRefused(t *testing.T) {
 	g := newFakeGH(t)
 	x, y := newPeer(t, g, "xray"), newPeer(t, g, "yankee")
 	waitFor(t, func() bool { return onlineWith(x.Peers, y.ID()) })
+	settled(t, x.Peers, y.Peers)
 	r = PeerExecutor{Peers: x.Peers, ID: y.ID()}.RunJob(context.Background(), spec(t, "true"))
 	if r.Status != localci.Fail || !strings.Contains(r.Reason, "this PC does not run CI jobs") {
 		t.Fatalf("CI off: %v %q", r.Status, r.Reason)

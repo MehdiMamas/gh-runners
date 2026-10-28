@@ -374,15 +374,27 @@ func (r *peerRun) relayLocked(id string) string {
 
 // Linked reports whether this machine has a live direct link to id.
 func (p *Peers) Linked(id string) bool {
+	return p.link(id) != nil
+}
+
+// link is the live direct link to id, or nil.
+func (p *Peers) link(id string) *link {
 	p.mu.Lock()
 	r := p.run
 	p.mu.Unlock()
 	if r == nil {
-		return false
+		return nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.links[id] != nil
+	if l := r.links[id]; l != nil {
+		select {
+		case <-l.c.done:
+		default:
+			return l
+		}
+	}
+	return nil
 }
 
 // Login is the GitHub login of the account, once the directory knows it.
