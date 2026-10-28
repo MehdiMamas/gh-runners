@@ -23,6 +23,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -282,4 +283,18 @@ func randomHex(n int) string {
 func hashHex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// peerFP is the SHA-256 fingerprint of the certificate of the machine at
+// the other end of a TLS connection.
+func (c *conn) peerFP() (string, bool) {
+	tc, ok := c.nc.(*tls.Conn)
+	if !ok {
+		return "", false
+	}
+	cs := tc.ConnectionState()
+	if len(cs.PeerCertificates) == 0 {
+		return "", false
+	}
+	return fingerprint(cs.PeerCertificates[0].Raw), true
 }

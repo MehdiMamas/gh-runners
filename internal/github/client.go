@@ -543,3 +543,69 @@ func (c *Client) CreateIssue(ctx context.Context, owner, repo, title, body strin
 		map[string]any{"title": title, "body": body, "labels": labels}, &out)
 	return out, err
 }
+
+// CreateRepo creates a private repository for the token's user, with a first
+// commit so the contents API works on it at once.
+func (c *Client) CreateRepo(ctx context.Context, name, description string) (Repo, error) {
+	var r Repo
+	_, err := c.do(ctx, http.MethodPost, "/user/repos",
+		map[string]any{"name": name, "description": description, "private": true, "auto_init": true}, &r)
+	return r, err
+}
+
+// Content is a file in a repository, or one entry of a folder listing
+// (then Content is empty).
+type Content struct {
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	SHA     string `json:"sha"`
+	Type    string `json:"type"`
+	Content string `json:"content"`
+}
+
+// Data decodes the file's content.
+func (c Content) Data() ([]byte, error) {
+	return base64.StdEncoding.DecodeString(strings.ReplaceAll(c.Content, "\n", ""))
+}
+
+func contentsPath(owner, repo, path string) string {
+	parts := strings.Split(path, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/contents/" + strings.Join(parts, "/")
+}
+
+// GetContents fetches one file.
+func (c *Client) GetContents(ctx context.Context, owner, repo, path string) (Content, error) {
+	var out Content
+	_, err := c.do(ctx, http.MethodGet, contentsPath(owner, repo, path), nil, &out)
+	return out, err
+}
+
+// ListContents lists a folder: names and blob SHAs, without the files.
+func (c *Client) ListContents(ctx context.Context, owner, repo, path string) ([]Content, error) {
+	var out []Content
+	_, err := c.do(ctx, http.MethodGet, contentsPath(owner, repo, path), nil, &out)
+	return out, err
+}
+
+// PutContents creates a file (sha empty) or replaces it (sha of the old
+// blob) and returns the new blob's SHA.
+func (c *Client) PutContents(ctx context.Context, owner, repo, path, message string, data []byte, sha string) (string, error) {
+	body := map[string]any{"message": message, "content": base64.StdEncoding.EncodeToString(data)}
+	if sha != "" {
+		body["sha"] = sha
+	}
+	var out struct {
+		Content Content `json:"content"`
+	}
+	_, err := c.do(ctx, http.MethodPut, contentsPath(owner, repo, path), body, &out)
+	return out.Content.SHA, err
+}
+
+// DeleteContents deletes a file; sha is the blob to delete.
+func (c *Client) DeleteContents(ctx context.Context, owner, repo, path, message, sha string) error {
+	_, err := c.do(ctx, http.MethodDelete, contentsPath(owner, repo, path), map[string]any{"message": message, "sha": sha}, nil)
+	return err
+}

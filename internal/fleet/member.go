@@ -314,18 +314,23 @@ func (m *Member) handleAPI(f frame) frame {
 		b, _ := json.Marshal(map[string]string{"error": "not allowed from the main host"})
 		return frame{Status: http.StatusForbidden, Body: b}
 	}
+	return serveAPI(m.API, f, "main-host")
+}
+
+// serveAPI runs a request frame through a dashboard handler in memory.
+func serveAPI(api http.Handler, f frame, remote string) frame {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, f.Method, "http://fleet"+f.Path, bytes.NewReader(f.Body))
 	if err != nil {
 		return frame{Error: err.Error()}
 	}
-	req.RemoteAddr = "main-host"
+	req.RemoteAddr = remote
 	if len(f.Body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	rec := &recorder{header: http.Header{}}
-	m.API.ServeHTTP(rec, req)
+	api.ServeHTTP(rec, req)
 	if rec.status == 0 {
 		rec.status = http.StatusOK
 	}
@@ -429,6 +434,11 @@ func (b brokered) RoundTrip(req *http.Request) (*http.Response, error) {
 // dial tries every address at once and keeps the first that answers with
 // the pinned certificate.
 func dial(ctx context.Context, addrs []string, port int, fp string) (*conn, string, error) {
+	return dialWith(ctx, addrs, port, pinned(fp))
+}
+
+// dialWith is dial with the TLS settings given.
+func dialWith(ctx context.Context, addrs []string, port int, cfg *tls.Config) (*conn, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	type result struct {
@@ -442,7 +452,7 @@ func dial(ctx context.Context, addrs []string, port int, fp string) (*conn, stri
 			addr := net.JoinHostPort(a, strconv.Itoa(port))
 			d := tls.Dialer{
 				NetDialer: &net.Dialer{Timeout: 8 * time.Second},
-				Config:    pinned(fp),
+				Config:    cfg,
 			}
 			nc, err := d.DialContext(ctx, "tcp", addr)
 			ch <- result{nc, addr, err}

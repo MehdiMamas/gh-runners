@@ -1,0 +1,735 @@
+package fleet
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/MehdiMamas/gh-runners/internal/github"
+)
+
+// Account machines: the PCs signed in to the same GitHub account find each
+// other through the Directory (a private repository of that account) and
+// connect to each other directly. Every machine listens on the fleet port
+// with its own self-signed certificate and uses mutual TLS: each side only
+// accepts a certificate whose SHA-256 fingerprint the directory lists, so
+// there is no CA and no broker. One connection serves a pair: the machine
+// with the lower id dials, the other one dials too after two quiet rounds.
+// Both sides send dashboard API calls down it ("api"), and each checks the
+// allowlist (PeerAllowed) and its allow_control setting on receiving.
+
+// Peers is one machine's side of the account fleet.
+type Peers struct {
+	// Dir holds the machine id and the peer certificate.
+	Dir string
+	// Client returns the GitHub client of the signed-in user (never a
+	// brokered one).
+	Client func() (*github.Client, error)
+	// Name and Version describe this machine in the directory; an empty
+	// name means the hostname.
+	Name, Version string
+	// Port is the port to listen on; nil means DefaultPort. Addr, when set,
+	// is the listen address instead (tests use "127.0.0.1:0").
+	Port func() int
+	Addr string
+	// Addrs lists the addresses put in the directory; nil means LocalAddrs.
+	Addrs func() []string
+	// Info describes this machine's runners for the others.
+	Info func() Info
+	// API is the dashboard other machines call into.
+	API http.Handler
+	// AllowControl says whether other machines may call the API here; nil
+	// means yes.
+	AllowControl func() bool
+	Log          func(format string, args ...any)
+
+	// Timings; zero means the defaults.
+	PublishEvery, ListEvery, DialEvery time.Duration
+
+	mu       sync.Mutex
+	run      *peerRun
+	startErr error
+}
+
+// peerRun is one started Peers: its listener, directory and connections.
+type peerRun struct {
+	p      *Peers
+	cancel context.CancelFunc
+	dir    *Directory
+	ln     net.Listener
+	port   int
+	cert   tls.Certificate
+	fp     string
+	selfID string
+	wg     sync.WaitGroup
+	wake   chan struct{}
+
+	mu      sync.Mutex
+	entries map[string]Entry
+	byFP    map[string]string
+	links   map[string]*link
+	state   map[string]*peerState
+	lastRef time.Time
+}
+
+type link struct {
+	id     string
+	c      *conn
+	dialer string
+	since  time.Time
+}
+
+type peerState struct {
+	err      string
+	lastSeen time.Time
+	info     Info
+	hasInfo  bool
+	misses   int
+	dialing  bool
+}
+
+// Peer is another machine of the account, as this one sees it.
+type Peer struct {
+	Entry
+	Online   bool
+	Since    time.Time
+	LastSeen time.Time
+	Info     Info
+	HasInfo  bool
+	// Error says in plain words why it is not connected.
+	Error string
+}
+
+// ErrPeerNotAllowed answers a call the allowlist does not cover.
+var errNotAllowed = "not allowed from another PC"
+
+func (p *Peers) logf(format string, args ...any) {
+	if p.Log != nil {
+		p.Log(format, args...)
+	}
+}
+
+func (p *Peers) allowControl() bool { return p.AllowControl == nil || p.AllowControl() }
+
+// Running reports whether the peers are started, and the port.
+func (p *Peers) Running() (bool, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.run == nil {
+		return false, 0
+	}
+	return true, p.run.port
+}
+
+// StartErr is why the last Start failed, if it did.
+func (p *Peers) StartErr() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.startErr
+}
+
+// ID is this machine's id in the directory.
+func (p *Peers) ID() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.run == nil {
+		return ""
+	}
+	return p.run.selfID
+}
+
+// Start listens, publishes this machine and connects to the others. It does
+// nothing when already started.
+func (p *Peers) Start(parent context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.run != nil {
+		return nil
+	}
+	r, err := p.start(parent)
+	p.startErr = err
+	if err != nil {
+		return err
+	}
+	p.run = r
+	return nil
+}
+
+func (p *Peers) start(parent context.Context) (*peerRun, error) {
+	certPath, keyPath := filepath.Join(p.Dir, "peer-cert.pem"), filepath.Join(p.Dir, "peer-key.pem")
+	c, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if errors.Is(err, os.ErrNotExist) {
+		eku := []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
+		if err = makeCertFor(certPath, keyPath, "gh-runners account machine", eku); err == nil {
+			c, err = tls.LoadX509KeyPair(certPath, keyPath)
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("peer certificate: %w", err)
+	}
+	dir := &Directory{Dir: p.Dir, Client: p.Client, Log: p.Log, PublishEvery: p.PublishEvery, ListEvery: p.ListEvery}
+	selfID, err := dir.ID()
+	if err != nil {
+		return nil, err
+	}
+	addr := p.Addr
+	if addr == "" {
+		port := DefaultPort
+		if p.Port != nil {
+			port = p.Port()
+		}
+		addr = ":" + strconv.Itoa(port)
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("cannot listen on %s for the account's other PCs: %w", addr, err)
+	}
+	ctx, cancel := context.WithCancel(parent)
+	r := &peerRun{p: p, cancel: cancel, dir: dir, ln: ln, port: ln.Addr().(*net.TCPAddr).Port, cert: c,
+		fp: fingerprint(c.Certificate[0]), selfID: selfID, wake: make(chan struct{}, 1),
+		entries: map[string]Entry{}, byFP: map[string]string{}, links: map[string]*link{}, state: map[string]*peerState{}}
+	dir.Self = r.selfEntry
+	dir.OnList = r.onList
+	r.wg.Add(4)
+	go func() { defer r.wg.Done(); dir.Run(ctx) }()
+	go func() { defer r.wg.Done(); r.acceptLoop(ctx) }()
+	go func() { defer r.wg.Done(); r.dialLoop(ctx) }()
+	go func() { defer r.wg.Done(); r.statusLoop(ctx) }()
+	p.logf("account machines: listening on port %d as %s", r.port, selfID)
+	return r, nil
+}
+
+// Stop closes the listener and every connection. The directory entry stays
+// (use Unpublish on sign-out).
+func (p *Peers) Stop() {
+	p.mu.Lock()
+	r := p.run
+	p.run = nil
+	p.mu.Unlock()
+	if r == nil {
+		return
+	}
+	r.cancel()
+	_ = r.ln.Close()
+	r.mu.Lock()
+	for _, l := range r.links {
+		l.c.close(errors.New("stopped"))
+	}
+	r.mu.Unlock()
+	r.wg.Wait()
+}
+
+// Unpublish removes this machine from the directory (sign-out).
+func (p *Peers) Unpublish(ctx context.Context) error {
+	p.mu.Lock()
+	r := p.run
+	p.mu.Unlock()
+	if r == nil {
+		return nil
+	}
+	return r.dir.Unpublish(ctx)
+}
+
+// Remove deletes another machine from the directory and drops its link.
+func (p *Peers) Remove(ctx context.Context, id string) error {
+	p.mu.Lock()
+	r := p.run
+	p.mu.Unlock()
+	if r == nil {
+		return errors.New("account machines are not running")
+	}
+	if id == r.selfID {
+		return errors.New("this is the machine itself")
+	}
+	if err := r.dir.Remove(ctx, id); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	delete(r.entries, id)
+	r.rebuildLocked()
+	r.mu.Unlock()
+	return nil
+}
+
+// Peers lists the other machines of the account, each online or not.
+func (p *Peers) Peers() []Peer {
+	p.mu.Lock()
+	r := p.run
+	p.mu.Unlock()
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]Peer, 0, len(r.entries))
+	for id, e := range r.entries {
+		pe := Peer{Entry: e}
+		if st := r.state[id]; st != nil {
+			pe.LastSeen, pe.Info, pe.HasInfo, pe.Error = st.lastSeen, st.info, st.hasInfo, st.err
+		}
+		if l := r.links[id]; l != nil {
+			pe.Online, pe.Since, pe.Error = true, l.since, ""
+		}
+		out = append(out, pe)
+	}
+	slices.SortFunc(out, func(a, b Peer) int {
+		return strings.Compare(strings.ToLower(a.Name)+a.ID, strings.ToLower(b.Name)+b.ID)
+	})
+	return out
+}
+
+// Call runs one dashboard API call on another machine. Only calls on the
+// allowlist are sent, and the other machine checks them again.
+func (p *Peers) Call(ctx context.Context, id, method, pathQuery string, body []byte) (int, []byte, error) {
+	if !PeerAllowed(method, pathQuery) {
+		return 0, nil, fmt.Errorf("%s %s is not allowed on another machine", method, pathQuery)
+	}
+	p.mu.Lock()
+	r := p.run
+	p.mu.Unlock()
+	if r == nil {
+		return 0, nil, ErrOffline
+	}
+	r.mu.Lock()
+	l := r.links[id]
+	r.mu.Unlock()
+	if l == nil {
+		return 0, nil, ErrOffline
+	}
+	f, err := l.c.call(ctx, frame{Kind: kindAPI, Method: method, Path: pathQuery, Body: body})
+	if err != nil {
+		return 0, nil, err
+	}
+	if f.Error != "" {
+		return 0, nil, errors.New(f.Error)
+	}
+	return f.Status, f.Body, nil
+}
+
+// Has reports whether id is a machine of the account directory.
+func (p *Peers) Has(id string) bool {
+	p.mu.Lock()
+	r := p.run
+	p.mu.Unlock()
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.entries[id]
+	return ok
+}
+
+func (r *peerRun) selfEntry() Entry {
+	p := r.p
+	name := p.Name
+	if name == "" {
+		name, _ = os.Hostname()
+	}
+	addrs := LocalAddrs
+	if p.Addrs != nil {
+		addrs = p.Addrs
+	}
+	return Entry{Name: name, OS: runtime.GOOS, Arch: runtime.GOARCH, Version: p.Version, Addrs: addrs(), Port: r.port, Fingerprint: r.fp}
+}
+
+func (r *peerRun) info() *Info {
+	var i Info
+	if r.p.Info != nil {
+		i = r.p.Info()
+	} else {
+		i = Info{Hostname: r.p.Name, OS: runtime.GOOS, Arch: runtime.GOARCH, Version: r.p.Version}
+	}
+	if i.Runners == nil {
+		i.Runners = []RunnerInfo{}
+	}
+	return &i
+}
+
+// onList takes a fresh directory: it is what the certificates are pinned
+// against, so a machine that left it is dropped at once.
+func (r *peerRun) onList(es []Entry) {
+	r.mu.Lock()
+	r.entries = map[string]Entry{}
+	for _, e := range es {
+		if e.ID != r.selfID {
+			r.entries[e.ID] = e
+		}
+	}
+	r.rebuildLocked()
+	r.mu.Unlock()
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+}
+
+// rebuildLocked rebuilds the fingerprint index and drops links and state of
+// machines that are gone or whose certificate changed.
+func (r *peerRun) rebuildLocked() {
+	r.byFP = map[string]string{}
+	for id, e := range r.entries {
+		r.byFP[e.Fingerprint] = id
+	}
+	for id, l := range r.links {
+		if e, ok := r.entries[id]; !ok {
+			l.c.close(errors.New("no longer in the account's directory"))
+		} else if lfp, _ := l.c.peerFP(); lfp != e.Fingerprint {
+			l.c.close(errors.New("its certificate changed in the directory"))
+		}
+	}
+	for id := range r.state {
+		if _, ok := r.entries[id]; !ok {
+			delete(r.state, id)
+		}
+	}
+}
+
+func (r *peerRun) serverConfig() *tls.Config {
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{r.cert},
+		ClientAuth:   tls.RequireAnyClientCert,
+		// Self-signed on both sides: the pin is the directory.
+		VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error {
+			if len(raw) == 0 {
+				return errors.New("no certificate")
+			}
+			fp := fingerprint(raw[0])
+			r.mu.Lock()
+			_, ok := r.byFP[fp]
+			stale := time.Since(r.lastRef) > 10*time.Second
+			if !ok && stale {
+				r.lastRef = time.Now()
+			}
+			r.mu.Unlock()
+			if !ok {
+				// Maybe a machine that signed in a moment ago.
+				if stale {
+					r.dir.Refresh()
+				}
+				return errors.New("certificate not in the account's directory")
+			}
+			return nil
+		},
+	}
+}
+
+func (r *peerRun) clientConfig(fp string) *tls.Config {
+	cfg := pinned(fp)
+	cfg.Certificates = []tls.Certificate{r.cert}
+	return cfg
+}
+
+func (r *peerRun) acceptLoop(ctx context.Context) {
+	cfg := r.serverConfig()
+	for {
+		nc, err := r.ln.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			r.incoming(ctx, tls.Server(nc, cfg))
+		}()
+	}
+}
+
+// incoming handles a connection from another machine: the TLS handshake has
+// already pinned its certificate to a directory entry once Handshake is done.
+func (r *peerRun) incoming(ctx context.Context, tc *tls.Conn) {
+	_ = tc.SetDeadline(time.Now().Add(handshakeTimeout))
+	if err := tc.Handshake(); err != nil {
+		_ = tc.Close()
+		return
+	}
+	c := newConn(tc)
+	fp := fingerprint(tc.ConnectionState().PeerCertificates[0].Raw)
+	f, err := c.recv(handshakeTimeout)
+	if err != nil || f.Type != tHello {
+		c.close(errors.New("no hello"))
+		return
+	}
+	r.mu.Lock()
+	id := r.byFP[fp]
+	r.mu.Unlock()
+	if id == "" || id != f.MemberID {
+		_ = c.send(frame{Type: tDenied, Error: "this certificate does not belong to that machine id"})
+		c.close(errors.New("id mismatch"))
+		return
+	}
+	l := &link{id: id, c: c, dialer: id}
+	if !r.register(l, f.Info) {
+		_ = c.send(frame{Type: tDenied, Error: "already connected"})
+		c.close(errors.New("duplicate"))
+		return
+	}
+	if err := c.send(frame{Type: tWelcome, MemberID: r.selfID, Info: r.info()}); err != nil {
+		return
+	}
+	_ = tc.SetDeadline(time.Time{})
+	r.serveLink(ctx, l)
+}
+
+// register adds a link, keeping the one the lower id dialed when two exist.
+// It reports whether l was kept.
+func (r *peerRun) register(l *link, info *Info) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.entries[l.id]; !ok {
+		return false
+	}
+	preferred := func(x *link) bool { return x.dialer == min(r.selfID, x.id) }
+	if old := r.links[l.id]; old != nil {
+		select {
+		case <-old.c.done:
+		default:
+			if preferred(old) && !preferred(l) {
+				return false
+			}
+			old.c.close(errors.New("replaced by another connection"))
+		}
+	}
+	l.since = time.Now()
+	r.links[l.id] = l
+	st := r.stateLocked(l.id)
+	st.err, st.misses, st.lastSeen = "", 0, time.Now()
+	if info != nil {
+		st.info, st.hasInfo = *info, true
+	}
+	return true
+}
+
+func (r *peerRun) stateLocked(id string) *peerState {
+	st := r.state[id]
+	if st == nil {
+		st = &peerState{}
+		r.state[id] = st
+	}
+	return st
+}
+
+// serveLink runs a registered link until it fails.
+func (r *peerRun) serveLink(ctx context.Context, l *link) {
+	stop := context.AfterFunc(ctx, func() { l.c.close(ctx.Err()) })
+	defer stop()
+	r.p.logf("account machines: connected to %s", r.name(l.id))
+	err := l.c.serve(r.handle, func(f frame) error {
+		if f.Type == tStatus && f.Info != nil {
+			r.mu.Lock()
+			if r.links[l.id] == l {
+				st := r.stateLocked(l.id)
+				st.info, st.hasInfo, st.lastSeen = *f.Info, true, time.Now()
+			}
+			r.mu.Unlock()
+		}
+		return nil
+	})
+	r.mu.Lock()
+	if r.links[l.id] == l {
+		delete(r.links, l.id)
+		if _, ok := r.entries[l.id]; ok {
+			st := r.stateLocked(l.id)
+			st.lastSeen = time.Now()
+			st.err = "the connection was lost: " + plainErr(err)
+		}
+	}
+	r.mu.Unlock()
+	r.p.logf("account machines: disconnected from %s: %v", r.name(l.id), err)
+}
+
+func (r *peerRun) name(id string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e, ok := r.entries[id]; ok && e.Name != "" {
+		return e.Name
+	}
+	return id
+}
+
+// handle answers a request from another machine. Both checks happen here,
+// on the receiving side: the sender's own checks prove nothing.
+func (r *peerRun) handle(f frame) frame {
+	refuse := func(msg string) frame {
+		b, _ := json.Marshal(map[string]string{"error": msg})
+		return frame{Status: http.StatusForbidden, Body: b}
+	}
+	if f.Kind != kindAPI || r.p.API == nil || !PeerAllowed(f.Method, f.Path) {
+		return refuse(errNotAllowed)
+	}
+	if !r.p.allowControl() {
+		return refuse("this PC does not let your other PCs control it (turn it on in Machines)")
+	}
+	return serveAPI(r.p.API, f, "peer")
+}
+
+func (r *peerRun) dialLoop(ctx context.Context) {
+	every := r.p.DialEvery
+	if every <= 0 {
+		every = 10 * time.Second
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		r.dialRound(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		case <-r.wake:
+		}
+	}
+}
+
+// dialRound dials every machine without a live link: the lower id at once,
+// the higher one after two rounds in which the other side did not come.
+func (r *peerRun) dialRound(ctx context.Context) {
+	r.mu.Lock()
+	var todo []Entry
+	for id, e := range r.entries {
+		if l := r.links[id]; l != nil {
+			continue
+		}
+		st := r.stateLocked(id)
+		if st.dialing {
+			continue
+		}
+		if r.selfID > id {
+			st.misses++
+			if st.misses <= 2 {
+				continue
+			}
+		}
+		st.dialing = true
+		todo = append(todo, e)
+	}
+	r.mu.Unlock()
+	for _, e := range todo {
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			err := r.dialPeer(ctx, e)
+			r.mu.Lock()
+			st := r.stateLocked(e.ID)
+			st.dialing = false
+			if err != nil && ctx.Err() == nil {
+				st.err = plainErr(err)
+			}
+			r.mu.Unlock()
+			if err != nil && ctx.Err() == nil {
+				r.p.logf("account machines: %s: %s", e.Name, plainErr(err))
+			}
+		}()
+	}
+}
+
+func (r *peerRun) dialPeer(ctx context.Context, e Entry) error {
+	if len(e.Addrs) == 0 {
+		return errors.New("it published no address")
+	}
+	c, _, err := dialWith(ctx, e.Addrs, e.Port, r.clientConfig(e.Fingerprint))
+	if err != nil {
+		return err
+	}
+	if err := c.send(frame{Type: tHello, MemberID: r.selfID, Info: r.info()}); err != nil {
+		return err
+	}
+	f, err := c.recv(handshakeTimeout)
+	if err == nil && f.Type == tDenied {
+		err = errors.New(f.Error)
+	} else if err == nil && f.Type != tWelcome {
+		err = fmt.Errorf("unexpected %q", f.Type)
+	}
+	if err != nil {
+		c.close(err)
+		return err
+	}
+	l := &link{id: e.ID, c: c, dialer: r.selfID}
+	if !r.register(l, f.Info) {
+		c.close(errors.New("duplicate"))
+		return nil
+	}
+	r.serveLink(ctx, l)
+	return nil
+}
+
+func (r *peerRun) statusLoop(ctx context.Context) {
+	every := r.p.DialEvery
+	if every <= 0 {
+		every = 15 * time.Second
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		r.mu.Lock()
+		ls := make([]*link, 0, len(r.links))
+		for _, l := range r.links {
+			ls = append(ls, l)
+		}
+		r.mu.Unlock()
+		if len(ls) == 0 {
+			continue
+		}
+		info := r.info()
+		for _, l := range ls {
+			_ = l.c.send(frame{Type: tStatus, Info: info})
+		}
+	}
+}
+
+// plainErr says why a connection failed in words a user can act on.
+func plainErr(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrFingerprint):
+		return "something else answered at its address (its certificate does not match the directory)"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "connection refused: gh-runners is not running there, or a firewall blocks the port"
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded):
+		return "no answer: the PC is off, on another network, or a firewall blocks the port"
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return "no answer: the PC is off, on another network, or a firewall blocks the port"
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "bad certificate"), strings.Contains(msg, "certificate required"):
+		return "it did not accept this PC's certificate (it may not have seen this PC in the directory yet)"
+	case strings.Contains(msg, "i/o timeout"), strings.Contains(msg, "timed out"):
+		return "no answer: the PC is off, on another network, or a firewall blocks the port"
+	case strings.Contains(msg, "refused"):
+		return "connection refused: gh-runners is not running there, or a firewall blocks the port"
+	case strings.Contains(msg, "no route"), strings.Contains(msg, "unreachable"):
+		return "no route to it: it is on another network"
+	}
+	if i := strings.LastIndex(msg, "\n"); i >= 0 {
+		msg = msg[i+1:]
+	}
+	return msg
+}
