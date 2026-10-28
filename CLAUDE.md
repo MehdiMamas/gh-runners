@@ -1,3 +1,5 @@
+@AGENTS.md
+
 # gh-runners
 
 ## Dashboard UI (internal/web/assets)
