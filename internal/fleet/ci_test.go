@@ -155,9 +155,7 @@ func TestRemoteExecutorMemberDropsMidJob(t *testing.T) {
 	// temp dir while it still holds the log open.
 	t.Cleanup(func() {
 		waitFor(t, func() bool {
-			m.mu.Lock()
-			defer m.mu.Unlock()
-			return len(m.jobs) == 0
+			return m.ciRun().busy() == 0
 		})
 	})
 

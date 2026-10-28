@@ -45,7 +45,13 @@ type Member struct {
 	CITools      func() []string
 	CIEmulatorOK func() bool
 
-	jobs   map[string]context.CancelFunc // running CI jobs by id
+	// IsPeer, when set, says whether id is a PC of this machine's GitHub
+	// account that is linked to it directly (see Peers.Linked). With it a
+	// member whose main host is such a PC leaves the host.
+	IsPeer func(id string) bool
+
+	ciOnce sync.Once
+	ciR    *ciRunner
 	mu     sync.Mutex
 	c      *conn
 	since  time.Time
@@ -85,6 +91,18 @@ func loadMember(dir string) (memberState, bool, error) {
 		return s, false, nil
 	}
 	return s, err == nil, err
+}
+
+// ciRun is the runner of the main host's CI jobs.
+func (m *Member) ciRun() *ciRunner {
+	m.ciOnce.Do(func() {
+		m.ciR = &ciRunner{Dir: m.CIDir, Tools: m.CITools, EmulatorOK: m.CIEmulatorOK,
+			Fetch: func(ctx context.Context, c *conn, repo, sha, dest string) error {
+				return fetchViaHost(ctx, c, repo, sha, dest)
+			},
+			For: "the main host", Reload: m.Reload}
+	})
+	return m.ciR
 }
 
 func (m *Member) logf(format string, args ...any) {
@@ -183,7 +201,7 @@ func (m *Member) info() *Info {
 	}
 	i := m.Info()
 	if i.CI == nil {
-		i.CI = m.ciInfo()
+		i.CI = m.ciRun().info()
 	}
 	if i.CI != nil {
 		i.CI.Active = localci.ActiveJobs()
@@ -237,12 +255,12 @@ func (m *Member) session(ctx context.Context, st memberState) bool {
 	}
 
 	stop := make(chan struct{})
-	go m.sendStatus(ctx, c, st, stop)
+	go m.sendStatus(ctx, c, st, f.Info, stop)
 	sctx, scancel := context.WithCancel(ctx)
 	defer scancel()
 	err = c.serve(m.ciHandler(sctx, c), func(f frame) error {
 		if f.Type == tCICancel {
-			m.cancelJob(f.Path)
+			m.ciRun().cancel(f.Path)
 		}
 		if f.Type == tRemoved {
 			m.removed(st)
@@ -270,10 +288,15 @@ func (m *Member) session(ctx context.Context, st memberState) bool {
 // sendStatus tells the host about this machine's runners every
 // StatusEvery and on Reload, and drops the connection if member.json
 // changed (left or joined elsewhere).
-func (m *Member) sendStatus(ctx context.Context, c *conn, st memberState, stop chan struct{}) {
+func (m *Member) sendStatus(ctx context.Context, c *conn, st memberState, host *Info, stop chan struct{}) {
 	t := time.NewTicker(StatusEvery)
 	defer t.Stop()
 	for {
+		// A main host on the same GitHub account is a peer: switch to
+		// account machines as soon as the link to it is up.
+		if m.switchToAccount(ctx, st, host) {
+			return
+		}
 		select {
 		case <-stop:
 			return
@@ -290,6 +313,27 @@ func (m *Member) sendStatus(ctx context.Context, c *conn, st memberState, stop c
 		}
 		_ = c.send(frame{Type: tStatus, Info: m.info()})
 	}
+}
+
+// switchToAccount leaves the main host when it is a PC of the same GitHub
+// account that is already linked as a peer: the account machines then do
+// what the join did. It reports whether it left.
+func (m *Member) switchToAccount(ctx context.Context, st memberState, host *Info) bool {
+	if host == nil || host.Login == "" || host.MachineID == "" || m.IsPeer == nil || !m.IsPeer(host.MachineID) {
+		return false
+	}
+	if me := m.info(); me.Login != host.Login {
+		return false
+	}
+	if _, err := m.Leave(ctx); err != nil {
+		return false
+	}
+	name := host.Hostname
+	if name == "" {
+		name = st.HostName
+	}
+	m.logf("switched to account machines: %s is on the same GitHub account", name)
+	return true
 }
 
 // removed forgets the host after it removed this machine.

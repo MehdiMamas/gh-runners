@@ -158,7 +158,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 		Dir: store.FleetDir(), Client: d.localClient, Name: hostname, Version: d.Version, Log: d.Log.Printf,
 		Info:         d.fleetInfo,
 		AllowControl: func() bool { c, _ := store.LoadConfig(); return c.AllowControlOn() },
+		CIDir:        d.member.CIDir,
+		CITools:      d.member.CITools,
+		CIEmulatorOK: d.member.CIEmulatorOK,
 	}
+	d.member.IsPeer = d.peers.Linked
 	dash := web.New(web.Hooks{
 		Version:     d.Version,
 		Status:      d.status,
@@ -331,7 +335,7 @@ func (d *Daemon) handler(secret string, shutdown context.CancelFunc) http.Handle
 	}))
 	mux.HandleFunc("GET /ci/machines", auth(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(d.host.CIMachines())
+		_ = json.NewEncoder(w).Encode(d.ciMachines())
 	}))
 	mux.HandleFunc("POST /ci/run", auth(func(w http.ResponseWriter, r *http.Request) {
 		var req control.CIRunRequest
@@ -339,7 +343,11 @@ func (d *Daemon) handler(secret string, shutdown context.CancelFunc) http.Handle
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		res := fleet.RemoteExecutor{Host: d.host, MemberID: req.MemberID}.RunJob(r.Context(), req.Spec)
+		var ex localci.Executor = fleet.RemoteExecutor{Host: d.host, MemberID: req.MemberID}
+		if !d.isHostMember(req.MemberID) {
+			ex = fleet.PeerExecutor{Peers: d.peers, ID: req.MemberID}
+		}
+		res := ex.RunJob(r.Context(), req.Spec)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(res)
 	}))
@@ -582,10 +590,32 @@ func (d *Daemon) hostToken(context.Context) (string, error) {
 	return c.Token, nil
 }
 
+// ciMachines lists the machines that take CI jobs: the host's members and
+// the account's other PCs, each once.
+func (d *Daemon) ciMachines() []localci.Machine {
+	out := d.host.CIMachines()
+	for _, m := range d.peers.CIMachines() {
+		if !slices.ContainsFunc(out, func(o localci.Machine) bool { return o.ID == m.ID }) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// isHostMember reports whether id is a member of this main host (otherwise
+// a job for it goes to the account's other PCs).
+func (d *Daemon) isHostMember(id string) bool {
+	ms, _ := d.host.Machines()
+	return slices.ContainsFunc(ms, func(m fleet.Machine) bool { return m.ID == id })
+}
+
 // fleetInfo is what this machine tells its main host.
 func (d *Daemon) fleetInfo() fleet.Info {
 	host, _ := os.Hostname()
 	info := fleet.Info{Hostname: host, OS: runtime.GOOS, Arch: runtime.GOARCH, Version: d.Version, Runners: []fleet.RunnerInfo{}, Paused: d.paused.Load()}
+	if d.peers != nil {
+		info.Login, info.MachineID = d.peers.Login(), d.peers.ID()
+	}
 	st := d.status()
 	runners, _ := store.List()
 	for _, r := range runners {
