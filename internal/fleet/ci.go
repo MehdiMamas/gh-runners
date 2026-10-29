@@ -285,7 +285,10 @@ func runRemote(ctx context.Context, spec localci.JobSpec, c *conn, logs *ciLogSe
 type ciRunner struct {
 	// Dir turns CI jobs on when set and is where they work. Tools and
 	// EmulatorOK say what this machine can run.
-	Dir        string
+	Dir string
+	// LockDir holds the machine-wide lock files; empty means the shared
+	// <home>/ci/locks that local CI jobs use too.
+	LockDir    string
 	Tools      func() []string
 	EmulatorOK func() bool
 	// Fetch downloads the source of repo at sha into dest.
@@ -397,8 +400,8 @@ func (r *ciRunner) run(ctx context.Context, c *conn, f frame) frame {
 	// This machine builds its own environment: the sender's PATH and
 	// variables never reach it.
 	env := localci.ScrubEnv(os.Environ(), job.RunEnv, nil)
-	locks := &localci.Locks{Dir: filepath.Join(r.Dir, "locks")}
-	if _, emu := job.Job.Requires(); emu {
+	locks := &localci.Locks{Dir: r.lockDir()}
+	if job.Job.StartsServers() {
 		unlock, err := locks.Lock("emulator")
 		if err != nil {
 			return finish(localci.Result{Status: localci.Fail, Reason: "lock: " + err.Error()})
@@ -414,6 +417,15 @@ func (r *ciRunner) run(ctx context.Context, c *conn, f frame) frame {
 	}
 	keepRemoteLog(job, r.For, logPath, res, started)
 	return finish(res)
+}
+
+// lockDir is where the machine-wide locks live: the same folder local CI
+// jobs lock in, so a job sent here and a local one exclude each other.
+func (r *ciRunner) lockDir() string {
+	if r.LockDir != "" {
+		return r.LockDir
+	}
+	return filepath.Join(store.Home(), "ci", "locks")
 }
 
 // keepRemoteLog keeps the log of a job this machine ran for another one
