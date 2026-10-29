@@ -169,20 +169,6 @@ func (p *Peers) StartErr() error {
 	return p.startErr
 }
 
-// CIBusy says why a CI job sent here by another PC is running, or "".
-func (p *Peers) CIBusy() string {
-	if p == nil {
-		return ""
-	}
-	p.mu.Lock()
-	run := p.run
-	p.mu.Unlock()
-	if run == nil || run.ci == nil || run.ci.busy() == 0 {
-		return ""
-	}
-	return "a remote CI job is running"
-}
-
 // ID is this machine's id in the directory.
 func (p *Peers) ID() string {
 	p.mu.Lock()
