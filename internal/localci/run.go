@@ -29,6 +29,7 @@ type Options struct {
 	DryRun   bool     // never post, never merge
 	Approve  bool     // run despite the trust gate
 	Jobs     []string // only these jobs (and what they need); empty means all
+	Workflow string   // workflow file to read at the PR head; empty means WorkflowPath
 	Settings store.CIRepo
 	Login    string // signed-in user, the default allowlist
 	Conc     int    // parallel jobs; default NumCPU/2
@@ -112,9 +113,16 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		return rep, err
 	}
 	sha := pr.Head.SHA
-	data, err := c.FileAt(ctx, o.Owner, o.Repo, WorkflowPath, sha)
+	wfPath := o.Workflow
+	if wfPath == "" {
+		wfPath = WorkflowPath
+	}
+	if err := ValidateWorkflowPath(wfPath); err != nil {
+		return rep, err
+	}
+	data, err := c.FileAt(ctx, o.Owner, o.Repo, wfPath, sha)
 	if err != nil {
-		return rep, fmt.Errorf("read %s at %s: %w", WorkflowPath, sha[:7], err)
+		return rep, fmt.Errorf("read %s at %s: %w", wfPath, sha[:7], err)
 	}
 	wf, err := ParseWorkflow(data)
 	if err != nil {
