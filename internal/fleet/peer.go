@@ -83,19 +83,20 @@ type Peers struct {
 
 // peerRun is one started Peers: its listener, directory and connections.
 type peerRun struct {
-	p      *Peers
-	cancel context.CancelFunc
-	dir    *Directory
-	ln     net.Listener
-	port   int
-	cert   tls.Certificate
-	fp     string
-	selfID string
-	wg     sync.WaitGroup
-	wake   chan struct{}
-	rl     *relayState // nil without a relay
-	ci     *ciRunner   // jobs other machines send here
-	ciLogs ciLogSet    // logs of the jobs this machine sent out
+	p         *Peers
+	cancel    context.CancelFunc
+	dir       *Directory
+	ln        net.Listener
+	port      int
+	cert      tls.Certificate
+	fp        string
+	selfID    string
+	wg        sync.WaitGroup
+	wake      chan struct{}
+	statusNow chan struct{} // asks statusLoop to send the status now
+	rl        *relayState   // nil without a relay
+	ci        *ciRunner     // jobs other machines send here
+	ciLogs    ciLogSet      // logs of the jobs this machine sent out
 
 	mu      sync.Mutex
 	entries map[string]Entry
@@ -231,7 +232,7 @@ func (p *Peers) start(parent context.Context) (*peerRun, error) {
 	}
 	ctx, cancel := context.WithCancel(parent)
 	r := &peerRun{p: p, cancel: cancel, dir: dir, ln: ln, port: ln.Addr().(*net.TCPAddr).Port, cert: c,
-		fp: fingerprint(c.Certificate[0]), selfID: selfID, wake: make(chan struct{}, 1),
+		fp: fingerprint(c.Certificate[0]), selfID: selfID, wake: make(chan struct{}, 1), statusNow: make(chan struct{}, 1),
 		entries: map[string]Entry{}, byFP: map[string]string{}, links: map[string]*link{}, state: map[string]*peerState{}}
 	dir.Self = r.selfEntry
 	dir.OnList = r.onList
@@ -921,6 +922,7 @@ func (r *peerRun) statusLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		case <-r.statusNow:
 		}
 		r.mu.Lock()
 		ls := make([]*link, 0, len(r.links))

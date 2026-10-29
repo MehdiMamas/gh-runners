@@ -71,11 +71,14 @@ func (d *Daemon) Resume() error {
 	return nil
 }
 
-// tellHost sends the main host the new state now instead of at its next
-// status, so its Machines tab shows the pause at once.
+// tellHost sends the main host and the account PCs the new state now instead
+// of at their next status, so their Machines tabs show the pause at once.
 func (d *Daemon) tellHost() {
 	if d.member != nil {
 		d.member.Reload()
+	}
+	if d.peers != nil {
+		d.peers.SendStatus()
 	}
 }
 
