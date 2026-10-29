@@ -25,6 +25,7 @@ gh-runners: one static Go binary that sets up and supervises self-hosted GitHub 
 
 ## Local CI `ci run` flags
 - `--machine <name or id>`: all jobs go to that machine (this PC or a linked account PC), unknown name is an error before anything runs (`control.SelectCIMachine`). `--json`: one JSON summary on stdout, table on stderr, exit 0 only if every job passed (`internal/cli/cirunjson.go`). `--workflow <path>`: read jobs from another file under `.github/workflows/` (`localci.ValidateWorkflowPath`). Example: `gh-runners ci run owner/repo 42 --machine DESKTOP-MEHDI --jobs mobile --approve --json`.
+- `ci queue` takes `--machine` and `--jobs` too; the daemon runs them (`Server.pinnedDispatcher`, `internal/web/ci.go`, #128).
 - Commit statuses: a blocked or unsupported job (and the aggregate/`ci-passed`) ends in `error` with "Blocked: <reason>", a filter-skipped job in `success` "Skipped: ...", and each status links (`target_url`) to the dashboard of the machine that hosts the run (`Options.LogURL`, set in `internal/web/ci.go`; opens only on that machine) (#126).
 - A machine that runs a remote CI job keeps its log under `~/.gh-runners/ci/<owner-repo>/pr<N>-<sha>-<time>-remote/logs/` and in its `ci/history.json` (`keepRemoteLog` in `internal/fleet/ci.go`).
 - The daemon's auto-update waits for remote CI jobs (`Member.CIBusy`, `Peers.CIBusy`), `ci run` runs (`localci.RunningRuns`) and active CI jobs (`localci.ActiveJobs`), as well as runner jobs (#120).
