@@ -46,7 +46,7 @@ func CleanRunners(root string, busy func(dir string) bool) int64 {
 		freed += removeCounted(filepath.Join(dir, "_work", "_update"))
 		freed += removeTrash(filepath.Join(dir, "_work"))
 		if !busy(dir) {
-			freed += cleanWork(filepath.Join(dir, "_work"))
+			freed += cleanWork(filepath.Join(dir, "_work"), func() bool { return busy(dir) })
 		}
 	}
 	return freed
@@ -84,7 +84,7 @@ func removeTrash(work string) int64 {
 // or untouched for 3 days. Each entry moves into _work/.trash-<unix> with one
 // rename, so a job that starts right after checks out fresh. Trash left by
 // an earlier pass is deleted by removeTrash.
-func cleanWork(work string) int64 {
+func cleanWork(work string, busy func() bool) int64 {
 	ents, err := os.ReadDir(work)
 	if err != nil {
 		return 0
@@ -105,6 +105,10 @@ func cleanWork(work string) int64 {
 		}
 	}
 	if len(move) == 0 || (size <= workCap && time.Since(newest) < workIdleAge) {
+		return freed
+	}
+	// Measuring a big folder takes a while; a job may have started since.
+	if busy() {
 		return freed
 	}
 	trash := filepath.Join(work, ".trash-"+strconv.FormatInt(time.Now().Unix(), 10))
