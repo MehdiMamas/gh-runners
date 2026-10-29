@@ -240,7 +240,12 @@ gh-runners ci queue owner/repo 12           # same, but queued in the running da
 gh-runners ci config owner/repo --post on   # turn posting on (off by default)
 gh-runners ci config owner/repo --merge on  # squash-merge when all jobs passed and the PR is approved (off by default)
 gh-runners ci watch owner/repo              # poll every minute and run each new head
+gh-runners ci run AugustanaComputerScienceProjects/Aces-FreshStart 42 --machine DESKTOP-MEHDI --jobs mobile --approve --json
 ```
+
+- `ci run --machine <name or id>` sends every selected job to that machine. It must be this PC or a linked account PC; otherwise the command fails with a plain error before anything runs. A job that machine cannot run is marked unsupported with the reason.
+- `ci run --json` prints one JSON object on stdout (the table goes to stderr): `{"repo","pr","sha","jobs":[{"name","machine","status","reason","duration_ms","log"}]}`, where `log` is the local log file path. Exit code 0 only if every job passed.
+- `ci run --workflow <path>` reads the jobs from another file at the PR head (default `.github/workflows/ci.yml`). The path must be relative, under `.github/workflows/`, and end in `.yml` or `.yaml`. The `on:` triggers are ignored, so a file that only has `on: workflow_dispatch` works, and GitHub never starts it itself. `--approve` covers the chosen file like it covers ci.yml.
 
 - `ci run` runs outside the daemon's queue and warns when the daemon is up; `ci queue` hands the run to the daemon so it cannot clash with queued auto-runs (it needs the daemon running, and prints the task id).
 - Only the jobs the changed files select run, by the workflow's own path filters. Jobs that need secrets, another OS, or an action it does not know are skipped or marked unsupported, never guessed.

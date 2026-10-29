@@ -46,13 +46,14 @@ func ciSettings(repo string) store.CIRepo {
 }
 
 func newCIRunCmd() *cobra.Command {
-	var dry, approve bool
-	var jobs string
+	var dry, approve, asJSON bool
+	var jobs, machine, workflow string
 	cmd := &cobra.Command{
 		Use:   "run <owner/repo> <pr>",
 		Short: "Run the jobs of one pull request here and print the results",
 		Example: `  gh-runners ci run owner/repo 12 --dry-run     # run and print, post nothing
-  gh-runners ci run owner/repo 12 --jobs backend`,
+  gh-runners ci run owner/repo 12 --jobs backend
+  gh-runners ci run owner/repo 12 --machine DESKTOP-MEHDI --json`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			owner, repo, err := splitRepo(args[0])
@@ -66,15 +67,29 @@ func newCIRunCmd() *cobra.Command {
 			if hasDashboard() {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: the gh-runners daemon is running. `ci run` bypasses its queue and may clash with runs it has queued.\n  To join the queue instead: gh-runners ci queue %s %d\n", args[0], n)
 			}
+			if workflow != "" {
+				if err := localci.ValidateWorkflowPath(workflow); err != nil {
+					return err
+				}
+			}
+			if machine != "" {
+				if err := control.CheckCIMachine(machine); err != nil {
+					return err
+				}
+			}
 			c, err := client()
 			if err != nil {
 				return err
 			}
 			me, _, _ := c.Me(ctx(cmd))
+			out := cmd.OutOrStdout()
+			if asJSON {
+				out = cmd.ErrOrStderr() // stdout carries only the JSON object
+			}
 			o := localci.Options{
 				Client: c, Owner: owner, Repo: repo, PR: n, DryRun: dry, Approve: approve,
-				Settings: ciSettings(args[0]), Login: me.Login, Out: cmd.OutOrStdout(),
-				Exec: control.CIDispatcher(),
+				Settings: ciSettings(args[0]), Login: me.Login, Out: out, Workflow: workflow,
+				Exec: control.CIDispatcherOn(machine),
 			}
 			if jobs != "" {
 				o.Jobs = strings.Split(jobs, ",")
@@ -87,18 +102,20 @@ func newCIRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if rep.HasBlocked() {
-				return fmt.Errorf("blocked by an infrastructure error (not a test failure); nothing was posted or merged")
+			if asJSON {
+				if jerr := writeCIJSON(cmd.OutOrStdout(), args[0], rep); jerr != nil {
+					return jerr
+				}
 			}
-			if !rep.AllPassed() {
-				return fmt.Errorf("some jobs did not pass")
-			}
-			return nil
+			return ciVerdict(rep)
 		},
 	}
 	cmd.Flags().BoolVar(&dry, "dry-run", false, "run the jobs but post and merge nothing")
 	cmd.Flags().BoolVar(&approve, "approve", false, "run even if the author is not on the allowlist or the PR is from a fork (read the changes first)")
 	cmd.Flags().StringVar(&jobs, "jobs", "", "only these jobs (comma separated), plus what they need")
+	cmd.Flags().StringVar(&workflow, "workflow", "", "workflow file to read at the PR head, under .github/workflows/ (default .github/workflows/ci.yml); its on: triggers are ignored")
+	cmd.Flags().StringVar(&machine, "machine", "", "run every job on this machine (name or id): this PC or a linked account PC")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print one JSON summary on stdout (the table goes to stderr); exit 0 only if every job passed")
 	return cmd
 }
 
