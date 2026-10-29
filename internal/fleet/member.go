@@ -105,6 +105,14 @@ func (m *Member) ciRun() *ciRunner {
 	return m.ciR
 }
 
+// CIBusy says why a remote CI job running here should not be cut off, or "".
+func (m *Member) CIBusy() string {
+	if m == nil || m.ciRun().busy() == 0 {
+		return ""
+	}
+	return "a remote CI job is running"
+}
+
 func (m *Member) logf(format string, args ...any) {
 	if m.Log != nil {
 		m.Log(format, args...)
