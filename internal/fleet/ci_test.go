@@ -242,3 +242,32 @@ func TestPruneJobDirs(t *testing.T) {
 		t.Fatalf("missing dir removed %d, want 0", got)
 	}
 }
+
+func TestCIBusy(t *testing.T) {
+	var nilM *Member
+	var nilP *Peers
+	if nilM.CIBusy() != "" || nilP.CIBusy() != "" {
+		t.Fatal("nil receivers must not be busy")
+	}
+	m := &Member{}
+	if m.CIBusy() != "" {
+		t.Fatal("idle member busy")
+	}
+	m.ciRun().jobs = map[string]context.CancelFunc{"j1": func() {}}
+	if m.CIBusy() == "" {
+		t.Fatal("member with a job not busy")
+	}
+	p := &Peers{}
+	if p.CIBusy() != "" {
+		t.Fatal("unstarted peers busy")
+	}
+	r := &peerRun{ci: &ciRunner{}}
+	p.run = r
+	if p.CIBusy() != "" {
+		t.Fatal("idle peers busy")
+	}
+	r.ci.jobs = map[string]context.CancelFunc{"j2": func() {}}
+	if p.CIBusy() == "" {
+		t.Fatal("peers with a job not busy")
+	}
+}

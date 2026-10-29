@@ -10,6 +10,7 @@ import (
 
 	"github.com/MehdiMamas/gh-runners/internal/control"
 	"github.com/MehdiMamas/gh-runners/internal/github"
+	"github.com/MehdiMamas/gh-runners/internal/localci"
 	"github.com/MehdiMamas/gh-runners/internal/service"
 	"github.com/MehdiMamas/gh-runners/internal/store"
 	"github.com/MehdiMamas/gh-runners/internal/update"
@@ -198,6 +199,18 @@ func (d *Daemon) busy(ctx context.Context) string {
 		if why := f(); why != "" {
 			return why
 		}
+	}
+	if why := d.member.CIBusy(); why != "" {
+		return why
+	}
+	if why := d.peers.CIBusy(); why != "" {
+		return why
+	}
+	if len(localci.RunningRuns()) > 0 {
+		return "a local CI run is in progress"
+	}
+	if len(localci.ActiveJobs()) > 0 {
+		return "a CI job is running"
 	}
 	if n := len(d.jit.states()); n > 0 {
 		return fmt.Sprintf("%d on-demand runner(s) to finish their job", n)
