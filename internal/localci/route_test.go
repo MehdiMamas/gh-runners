@@ -92,6 +92,8 @@ func TestRouteNoFitIsUnsupported(t *testing.T) {
 }
 
 func TestScrubEnvKeepsToolchainVars(t *testing.T) {
+	freshEnvFn = func(b []string) []string { return b }
+	t.Cleanup(func() { freshEnvFn = freshEnv })
 	out := ScrubEnv([]string{"JAVA_HOME=/jdk", "GITHUB_TOKEN=x", "RANDOM=1"}, RunEnv{}, nil)
 	joined := strings.Join(out, "\n")
 	if !strings.Contains(joined, "JAVA_HOME=/jdk") || strings.Contains(joined, "GITHUB_TOKEN") || strings.Contains(joined, "RANDOM") {

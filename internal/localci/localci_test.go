@@ -141,6 +141,8 @@ func TestScheduleOrderAndLock(t *testing.T) {
 }
 
 func TestScrubEnv(t *testing.T) {
+	freshEnvFn = func(b []string) []string { return b }
+	t.Cleanup(func() { freshEnvFn = freshEnv })
 	parent := []string{"PATH=/bin", "HOME=/h", "GH_TOKEN=x", "GITHUB_TOKEN=y", "NPM_TOKEN=z", "AWS_SECRET_ACCESS_KEY=q", "RANDOM=1"}
 	env := ScrubEnv(parent, RunEnv{Repo: "o/r", SHA: "abc"}, map[string]string{"MY_API_KEY": "k", "FOO": "bar", "BAD": "${{ secrets.X }}"})
 	joined := strings.Join(env, "\n")
