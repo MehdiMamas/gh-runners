@@ -1952,5 +1952,5 @@ document.addEventListener('DOMContentLoaded', async () => {
   setInterval(() => { if (!document.hidden || S.tasks.some((t) => t.state === 'running')) loadTasks(); }, 1500);
   setInterval(() => { if (!document.hidden && S.tab === 'machine') loadRemote(); }, 15000);
   setInterval(() => { if (!document.hidden && (S.tab === 'machines' || S.tab === 'settings')) loadFleet(); }, 10000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshState(); loadTasks(); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshState(); loadTasks(); if (S.tab === 'machines' || S.tab === 'settings') loadFleet(); } });
 });
