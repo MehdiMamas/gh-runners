@@ -17,9 +17,9 @@ type Locks struct {
 	in map[string]*sync.Mutex
 }
 
-// Lock waits for the named lock and returns the function that releases it.
-func (l *Locks) Lock(name string) (func(), error) {
+func (l *Locks) mutex(name string) *sync.Mutex {
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.in == nil {
 		l.in = map[string]*sync.Mutex{}
 	}
@@ -28,27 +28,50 @@ func (l *Locks) Lock(name string) (func(), error) {
 		m = &sync.Mutex{}
 		l.in[name] = m
 	}
-	l.mu.Unlock()
+	return m
+}
+
+// Lock waits for the named lock and returns the function that releases it.
+func (l *Locks) Lock(name string) (func(), error) {
+	m := l.mutex(name)
 	m.Lock()
+	rel, _, err := l.take(m, name, false)
+	return rel, err
+}
+
+// TryLock takes the named lock only if it is free right now. ok is false
+// when someone else holds it.
+func (l *Locks) TryLock(name string) (release func(), ok bool, err error) {
+	m := l.mutex(name)
+	if !m.TryLock() {
+		return nil, false, nil
+	}
+	return l.take(m, name, true)
+}
+
+// take opens the lock file and locks it; m is already held and is released
+// on failure.
+func (l *Locks) take(m *sync.Mutex, name string, try bool) (func(), bool, error) {
 	if err := os.MkdirAll(l.Dir, 0o755); err != nil {
 		m.Unlock()
-		return nil, err
+		return nil, false, err
 	}
 	f, err := os.OpenFile(filepath.Join(l.Dir, name+".lock"), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		m.Unlock()
-		return nil, err
+		return nil, false, err
 	}
-	if err := flock(f); err != nil {
+	got, err := flock(f, try)
+	if err != nil || !got {
 		f.Close()
 		m.Unlock()
-		return nil, err
+		return nil, false, err
 	}
 	return func() {
 		funlock(f)
 		f.Close()
 		m.Unlock()
-	}, nil
+	}, true, nil
 }
 
 // Task is one schedulable unit.
