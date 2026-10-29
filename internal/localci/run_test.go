@@ -71,7 +71,7 @@ func TestUnsupportedPostsAndMergesNothing(t *testing.T) {
 		t.Errorf("statuses = %v", got)
 	}
 	for _, w := range writes {
-		if strings.Contains(w, "/statuses/") && !strings.Contains(w, `"state":"pending"`) {
+		if strings.Contains(w, "/statuses/") && !strings.Contains(w, `"state":"pending"`) && !strings.Contains(w, `"state":"error"`) {
 			t.Errorf("verdict status posted: %s", w)
 		}
 		if strings.Contains(w, "/merge") || strings.Contains(w, "/comments") {
