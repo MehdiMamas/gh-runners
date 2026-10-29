@@ -80,6 +80,7 @@ func TestExtractCopiesRefusedLinks(t *testing.T) {
 		{name: "sub/up.txt", link: "../a.txt"},
 		{name: "escape", link: "../../etc"},
 		{name: "dangling", link: "nope.txt"},
+		{name: "sub/loop", link: ".."},
 	})
 	dest := filepath.Join(t.TempDir(), "ws")
 	skipped, err := Extract(tb, dest)
@@ -101,11 +102,12 @@ func TestExtractCopiesRefusedLinks(t *testing.T) {
 	want := []string{
 		"skipped symlink escape -> ../../etc (this PC can't create symlinks)",
 		"skipped symlink dangling -> nope.txt (this PC can't create symlinks)",
+		"skipped symlink sub/loop -> .. (this PC can't create symlinks)",
 	}
-	if len(skipped) != 2 || skipped[0] != want[0] || skipped[1] != want[1] {
+	if len(skipped) != len(want) || skipped[0] != want[0] || skipped[1] != want[1] || skipped[2] != want[2] {
 		t.Errorf("skipped = %q, want %q", skipped, want)
 	}
-	for _, n := range []string{"escape", "dangling"} {
+	for _, n := range []string{"escape", "dangling", "sub/loop"} {
 		if _, err := os.Lstat(filepath.Join(dest, n)); err == nil {
 			t.Errorf("%s should not exist", n)
 		}

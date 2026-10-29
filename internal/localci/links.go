@@ -17,14 +17,15 @@ type pendingLink struct{ target, linkname string }
 
 // resolveLinks stands in for symlinks the OS refused: it copies what each
 // link points at, when that is inside dest. It goes in passes so a link to a
-// link works. Links it can't resolve come back as log lines.
+// link works. A link to a folder holding itself is never copied (it would
+// copy into itself). Links it can't resolve come back as log lines.
 func resolveLinks(dest string, links []pendingLink) []string {
 	for progress := true; progress && len(links) > 0; {
 		progress = false
 		var left []pendingLink
 		for _, l := range links {
 			src := filepath.Join(filepath.Dir(l.target), filepath.FromSlash(l.linkname))
-			if filepath.IsAbs(l.linkname) || (src != dest && !strings.HasPrefix(src, dest+string(filepath.Separator))) || copyLinkTarget(src, l.target) != nil {
+			if filepath.IsAbs(l.linkname) || (src != dest && !strings.HasPrefix(src, dest+string(filepath.Separator))) || strings.HasPrefix(l.target, src+string(filepath.Separator)) || copyLinkTarget(src, l.target) != nil {
 				left = append(left, l)
 				continue
 			}
