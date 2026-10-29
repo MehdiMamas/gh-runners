@@ -35,7 +35,7 @@ func newCILockCmd() *cobra.Command {
 				return err
 			}
 			locks := &localci.Locks{Dir: filepath.Join(store.Home(), "ci", "locks")}
-			code, err := runLocked(cmd.Context(), locks, name, d, args, os.Stdin, os.Stdout, os.Stderr, time.Second)
+			code, err := runLocked(cmd.Context(), locks, name, d, args, os.Stdin, os.Stdout, os.Stderr)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 			}
@@ -50,37 +50,23 @@ func newCILockCmd() *cobra.Command {
 	return cmd
 }
 
-// runLocked waits up to timeout for the named lock (polling every poll),
+// runLocked waits up to timeout for the named lock in arrival order,
 // runs args with the given stdio and returns its exit code. A timeout gives
 // lockTimeoutExit.
-func runLocked(ctx context.Context, locks *localci.Locks, name string, timeout time.Duration, args []string, in io.Reader, out, errw io.Writer, poll time.Duration) (int, error) {
+func runLocked(ctx context.Context, locks *localci.Locks, name string, timeout time.Duration, args []string, in io.Reader, out, errw io.Writer) (int, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	deadline := time.Now().Add(timeout)
-	var release func()
-	warned := false
-	for {
-		rel, ok, err := locks.TryLock(name)
-		if err != nil {
-			return 1, err
-		}
-		if ok {
-			release = rel
-			break
-		}
-		if !warned {
-			fmt.Fprintf(errw, "waiting for the %s lock (held by a local CI job)\n", name)
-			warned = true
-		}
-		if time.Now().After(deadline) {
-			return lockTimeoutExit, fmt.Errorf("%s lock still held after %s", name, timeout)
-		}
-		select {
-		case <-ctx.Done():
-			return 1, ctx.Err()
-		case <-time.After(poll):
-		}
+	wctx, cancel := context.WithTimeout(ctx, timeout)
+	release, err := locks.Acquire(wctx, name, func() {
+		fmt.Fprintf(errw, "waiting for the %s lock (held by a local CI job)\n", name)
+	})
+	cancel()
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		return lockTimeoutExit, fmt.Errorf("%s lock still held after %s", name, timeout)
+	}
+	if err != nil {
+		return 1, err
 	}
 	defer release()
 	c := exec.CommandContext(ctx, args[0], args[1:]...)

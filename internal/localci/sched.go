@@ -5,13 +5,15 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // Locks hands out named machine-wide locks: a mutex for jobs in this
 // process and a file lock for other gh-runners processes on the same
 // machine.
 type Locks struct {
-	Dir string // where the lock files live
+	Dir  string        // where the lock files live
+	Poll time.Duration // how often a waiter checks its turn; zero means 250 ms
 
 	mu sync.Mutex
 	in map[string]*sync.Mutex
@@ -31,12 +33,10 @@ func (l *Locks) mutex(name string) *sync.Mutex {
 	return m
 }
 
-// Lock waits for the named lock and returns the function that releases it.
+// Lock waits for the named lock, in arrival order, and returns the function
+// that releases it.
 func (l *Locks) Lock(name string) (func(), error) {
-	m := l.mutex(name)
-	m.Lock()
-	rel, _, err := l.take(m, name, false)
-	return rel, err
+	return l.Acquire(context.Background(), name, nil)
 }
 
 // TryLock takes the named lock only if it is free right now. ok is false
