@@ -30,6 +30,7 @@ gh-runners: one static Go binary that sets up and supervises self-hosted GitHub 
 
 ## Disk use (#109)
 - `internal/runner/janitor.go` (old runner versions, idle `_work`) and `localci.PruneRuns` (CI runs older than 14 days) run from `internal/daemon/disk.go` at start and hourly. A runner counts as busy while a `Runner.Worker` process runs under its folder. Local CI removes each job's `src` and the run's tarball when it ends. Leftover remote job folders under `ci/fleet/jobs` (untouched for 6 h) are pruned in the same pass (`fleet.PruneJobDirs`, #117).
+- Every local CI job's processes join one Windows job object with kill-on-close (`proc.Group`, `localci.RunJob`, #122), so nothing a step started outlives the job, its cancel or the daemon.
 
 ## Account machines through the relay (#94)
 - PCs on one GitHub account link directly first. When the direct dial fails and a link is wanted, `internal/fleet/relay.go` links through a WebSocket relay (`GH_RUNNERS_RELAY_URL`, default `fleet.DefaultRelayURL`; empty turns it off). The same mutual TLS runs inside the pipe, so the relay sees no plaintext. Close codes 4408/4409 are normal failed attempts, retried on the next round without a log line.
