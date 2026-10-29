@@ -192,7 +192,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	defer srv.Close()
 
 	d.Log.Printf("gh-runners daemon %s started (pid %d, home %s, dashboard http://%s)", d.Version, info.PID, store.Home(), info.Addr)
-	if err := web.StartHost(d.host); err != nil {
+	if err := web.StartHost(d.host, ""); err != nil {
 		d.Log.Printf("main host: %v", err)
 	}
 	defer d.host.Stop()

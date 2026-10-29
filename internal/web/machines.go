@@ -177,12 +177,13 @@ func fleetPort(cfg store.Config) int {
 }
 
 // StartHost starts listening for machines when this is the main host.
-func StartHost(h *fleet.Host) error {
+// addr is the interface to listen on; "" means all of them.
+func StartHost(h *fleet.Host, addr string) error {
 	cfg, err := store.LoadConfig()
 	if err != nil || !cfg.MainHost {
 		return err
 	}
-	return h.Start(":" + strconv.Itoa(fleetPort(cfg)))
+	return h.Start(addr + ":" + strconv.Itoa(fleetPort(cfg)))
 }
 
 func (s *Server) postMainHost(w http.ResponseWriter, r *http.Request) {
@@ -212,7 +213,7 @@ func (s *Server) postMainHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.On {
-		if err := StartHost(s.h.Host); err != nil {
+		if err := StartHost(s.h.Host, s.HostAddr); err != nil {
 			fail(w, http.StatusInternalServerError, err)
 			return
 		}
