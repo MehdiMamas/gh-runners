@@ -235,6 +235,11 @@ func (LocalExecutor) RunJob(ctx context.Context, spec JobSpec) Result {
 	// detached itself) goes with the job, whether it passed, failed or was
 	// cancelled.
 	defer KillUnder(spec.RunDir)
+	// Every process the steps start joins one job object, so closing it
+	// (declared last, so it runs first) kills what a dead parent left behind.
+	g := proc.NewGroup()
+	defer g.Close()
+	ctx = withGroup(ctx, g)
 	ws := filepath.Join(spec.RunDir, "src")
 	skipped, err := Extract(spec.Tarball, ws)
 	if err != nil {
@@ -422,7 +427,11 @@ func runCmd(ctx context.Context, dir string, env []string, log io.Writer, name s
 	proc.Supervise(cmd)
 	cmd.Cancel = func() error { proc.Terminate(cmd, 3*time.Second); return nil }
 	cmd.WaitDelay = 8 * time.Second
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	groupFrom(ctx).Add(cmd)
+	if err := cmd.Wait(); err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
 	return nil
