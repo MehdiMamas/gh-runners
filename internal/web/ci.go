@@ -382,7 +382,7 @@ func (s *Server) queueCI(owner, repo string, pr int, dry, approve, auto bool) (*
 			o.Client, o.Settings, o.Login = c, cfg.CI[full], login
 			if info, err := store.LoadDaemonInfo(); err == nil && info.Addr != "" {
 				o.LogURL = func(runID, job string) string {
-					return "http://" + info.Addr + "/api/ci/runs/" + url.PathEscape(runID) + "/logs/" + url.PathEscape(job)
+					return "http://" + info.Addr + "/?ci=" + url.QueryEscape(runID) + "&job=" + url.QueryEscape(job)
 				}
 			}
 			rep, err = localci.Run(ctx, o)
