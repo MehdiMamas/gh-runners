@@ -1,6 +1,10 @@
 package localci
 
-import "golang.org/x/sys/windows/registry"
+import (
+	"strings"
+
+	"golang.org/x/sys/windows/registry"
+)
 
 func readRegistryEnv(root registry.Key, path string) (map[string]string, error) {
 	k, err := registry.OpenKey(root, path, registry.QUERY_VALUE)
@@ -34,6 +38,12 @@ func freshEnv(base []string) []string {
 	machine, err := readRegistryEnv(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\Session Manager\Environment`)
 	if err != nil {
 		return base
+	}
+	// The machine key holds USERNAME=SYSTEM; logon sets the real one.
+	for k := range machine {
+		if strings.EqualFold(k, "USERNAME") {
+			delete(machine, k)
+		}
 	}
 	user, err := readRegistryEnv(registry.CURRENT_USER, `Environment`)
 	if err != nil {
