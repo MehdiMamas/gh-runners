@@ -213,15 +213,15 @@ func TestBlockedPostsAndMergesNothing(t *testing.T) {
 	}
 }
 
-func TestPortFreeSeesWildcardHolder(t *testing.T) {
-	l, err := net.Listen("tcp", "0.0.0.0:0")
+func TestPortFreeSeesLoopbackHolder(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Skip(err)
 	}
 	defer l.Close()
 	port := l.Addr().(*net.TCPAddr).Port
 	if portFree(port) {
-		t.Fatalf("port %d held on 0.0.0.0 reported free", port)
+		t.Fatalf("port %d held on loopback reported free", port)
 	}
 	l.Close()
 	if !portFree(port) {
@@ -267,7 +267,7 @@ func TestEmulatorJobsSerializedAndBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l, err := net.Listen("tcp", "0.0.0.0:0")
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Skip(err)
 	}
