@@ -22,7 +22,9 @@ type task struct {
 	Error   string    `json:"error,omitempty"`
 	Created time.Time `json:"created"`
 	Ended   time.Time `json:"ended,omitzero"`
-	Scopes  []string  `json:"scopes,omitempty"` // repos it adds to or changes
+	Scopes  []string  `json:"scopes,omitempty"`  // repos it adds to or changes
+	Machine string    `json:"machine,omitempty"` // Local CI: run all jobs here
+	Jobs    []string  `json:"jobs,omitempty"`    // Local CI: run only these
 	key     string    // dedupe key: at most one queued task per key
 	out     []byte
 	// cancel stops a running task; cancelled is set when someone asked for
@@ -52,6 +54,8 @@ type taskView struct {
 	Created string   `json:"created"`
 	Ended   string   `json:"ended,omitempty"`
 	Scopes  []string `json:"scopes,omitempty"`
+	Machine string   `json:"machine,omitempty"`
+	Jobs    []string `json:"jobs,omitempty"`
 	Log     string   `json:"log"`
 }
 
@@ -62,7 +66,7 @@ func (t *task) view(full bool) taskView {
 	if !full && len(out) > 4096 {
 		out = out[len(out)-4096:]
 	}
-	return taskView{t.ID, t.Title, t.State, t.Error, since(t.Created), since(t.Ended), t.Scopes, string(out)}
+	return taskView{t.ID, t.Title, t.State, t.Error, since(t.Created), since(t.Ended), t.Scopes, t.Machine, t.Jobs, string(out)}
 }
 
 type taskQueue struct {

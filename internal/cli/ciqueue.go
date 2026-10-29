@@ -8,10 +8,12 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/MehdiMamas/gh-runners/internal/control"
 	"github.com/MehdiMamas/gh-runners/internal/store"
 )
 
@@ -22,8 +24,15 @@ func (e errNoDaemon) Error() string { return "the gh-runners daemon is not runni
 
 // queueCI asks the daemon at addr (host:port) to queue a Local CI run. The
 // secret is only sent as the dashboard cookie, never printed.
-func queueCI(ctx context.Context, addr, secret, repo string, pr int, dry, approve bool) (int, bool, error) {
-	body, _ := json.Marshal(map[string]any{"repo": repo, "pr": pr, "dry_run": dry, "approve": approve})
+func queueCI(ctx context.Context, addr, secret, repo string, pr int, dry, approve bool, machine string, jobs []string) (int, bool, error) {
+	req0 := map[string]any{"repo": repo, "pr": pr, "dry_run": dry, "approve": approve}
+	if machine != "" {
+		req0["machine"] = machine
+	}
+	if len(jobs) > 0 {
+		req0["jobs"] = jobs
+	}
+	body, _ := json.Marshal(req0)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/api/ci/run", bytes.NewReader(body))
 	if err != nil {
 		return 0, false, err
@@ -122,7 +131,7 @@ func newCICancelCmd() *cobra.Command {
 
 func newCIQueueCmd() *cobra.Command {
 	var dry, approve bool
-	var next string
+	var next, machine, jobs string
 	cmd := &cobra.Command{
 		Use:   "queue <owner/repo> <pr> | --next <task>",
 		Short: "Queue a Local CI run in the running daemon (one at a time, with the auto-runs)",
@@ -150,6 +159,15 @@ It needs the daemon to be running (gh-runners ui starts it).`,
 			if err != nil || n <= 0 {
 				return fmt.Errorf("%q is not a pull request number", args[1])
 			}
+			if machine != "" {
+				if err := control.CheckCIMachine(machine); err != nil {
+					return err
+				}
+			}
+			var jobList []string
+			if jobs != "" {
+				jobList = strings.Split(jobs, ",")
+			}
 			info, err := store.LoadDaemonInfo()
 			if err != nil || info.Addr == "" {
 				return fmt.Errorf("the gh-runners daemon is not running; start it with `gh-runners ui`, or run the PR here without the queue with `gh-runners ci run %s %d`", args[0], n)
@@ -158,7 +176,7 @@ It needs the daemon to be running (gh-runners ui starts it).`,
 			if err != nil {
 				return err
 			}
-			id, existing, err := queueCI(ctx(cmd), info.Addr, secret, args[0], n, dry, approve)
+			id, existing, err := queueCI(ctx(cmd), info.Addr, secret, args[0], n, dry, approve, machine, jobList)
 			if _, down := err.(errNoDaemon); down {
 				return fmt.Errorf("the gh-runners daemon is not reachable at %s; start it with `gh-runners ui`, or run the PR here without the queue with `gh-runners ci run %s %d`", info.Addr, args[0], n)
 			}
@@ -176,6 +194,8 @@ It needs the daemon to be running (gh-runners ui starts it).`,
 		},
 	}
 	cmd.Flags().StringVar(&next, "next", "", "move the queued task with this number to the front of the queue")
+	cmd.Flags().StringVar(&machine, "machine", "", "run all jobs on this machine (this PC or a linked account PC, by name or id)")
+	cmd.Flags().StringVar(&jobs, "jobs", "", "run only these jobs (comma-separated)")
 	cmd.Flags().BoolVar(&dry, "dry-run", false, "run the jobs but post and merge nothing")
 	cmd.Flags().BoolVar(&approve, "approve", false, "run even if the author is not on the allowlist or the PR is from a fork (read the changes first)")
 	return cmd

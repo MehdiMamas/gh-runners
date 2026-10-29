@@ -276,11 +276,11 @@ func TestCIRunDuplicatePushRequest(t *testing.T) {
 	s, h := setup(t)
 	ciBlockWorker(t, s)
 	// The watch queues through queueCI with auto set.
-	a, existing, err := s.queueCI("o", "r", 9, false, false, true)
+	a, existing, err := s.queueCI("o", "r", 9, false, false, true, "", nil)
 	if err != nil || existing {
 		t.Fatalf("first push: %v existing=%v", err, existing)
 	}
-	b, existing, err := s.queueCI("o", "r", 9, false, false, true)
+	b, existing, err := s.queueCI("o", "r", 9, false, false, true, "", nil)
 	if err != nil || !existing || b.ID != a.ID {
 		t.Fatalf("second push: %v existing=%v id=%d want %d", err, existing, b.ID, a.ID)
 	}
@@ -388,5 +388,46 @@ func TestCILiveRunAndLog(t *testing.T) {
 	api(t, h, "GET", "/api/ci/live", "", &live)
 	if len(live.Runs) != 0 {
 		t.Errorf("ended run still live: %+v", live.Runs)
+	}
+}
+
+func ciTwoMachines() func() *localci.Dispatcher {
+	return func() *localci.Dispatcher {
+		return &localci.Dispatcher{Machines: func() []localci.Machine {
+			return []localci.Machine{{Name: "PC1", ID: "id1"}, {Name: "PC2", ID: "id2"}}
+		}}
+	}
+}
+
+func TestCIRunQueuedJobsAndMachine(t *testing.T) {
+	s, h := setup(t)
+	ciBlockWorker(t, s)
+	s.ciDispatch = ciTwoMachines()
+	var a struct{ Task int }
+	if code := api(t, h, "POST", "/api/ci/run", `{"repo":"o/r","pr":3,"machine":"pc2","jobs":["x","y"]}`, &a); code != http.StatusAccepted || a.Task == 0 {
+		t.Fatalf("post: %d %+v", code, a)
+	}
+	v := s.ci.get(a.Task).view(false)
+	if v.Machine != "pc2" || len(v.Jobs) != 2 || v.Jobs[0] != "x" || v.Jobs[1] != "y" {
+		t.Fatalf("task view %+v", v)
+	}
+	ms := s.pinnedDispatcher("pc2").Machines()
+	if len(ms) != 1 || ms[0].Name != "PC2" {
+		t.Fatalf("pinned machines %+v", ms)
+	}
+	if ms := s.pinnedDispatcher("").Machines(); len(ms) != 2 {
+		t.Fatalf("unpinned machines %+v", ms)
+	}
+}
+
+func TestCIRunUnknownMachine(t *testing.T) {
+	s, h := setup(t)
+	ciBlockWorker(t, s)
+	s.ciDispatch = ciTwoMachines()
+	if code := api(t, h, "POST", "/api/ci/run", `{"repo":"o/r","pr":3,"machine":"nope"}`, nil); code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", code)
+	}
+	if n := pendingCount(s); n != 0 {
+		t.Fatalf("%d queued, want 0", n)
 	}
 }

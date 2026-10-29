@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MehdiMamas/gh-runners/internal/control"
 	"github.com/MehdiMamas/gh-runners/internal/localci"
 	"github.com/MehdiMamas/gh-runners/internal/store"
 )
@@ -114,10 +115,12 @@ func (s *Server) putCI(w http.ResponseWriter, r *http.Request) {
 }
 
 type ciRunReq struct {
-	Repo    string `json:"repo"`
-	PR      int    `json:"pr"`
-	DryRun  bool   `json:"dry_run"`
-	Approve bool   `json:"approve"`
+	Repo    string   `json:"repo"`
+	PR      int      `json:"pr"`
+	DryRun  bool     `json:"dry_run"`
+	Approve bool     `json:"approve"`
+	Machine string   `json:"machine"`
+	Jobs    []string `json:"jobs"`
 }
 
 func (s *Server) postCIRun(w http.ResponseWriter, r *http.Request) {
@@ -131,7 +134,13 @@ func (s *Server) postCIRun(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, errors.New("give a repository as owner/repo and a pull request number"))
 		return
 	}
-	t, existing, err := s.queueCI(owner, repo, req.PR, req.DryRun, req.Approve, false)
+	if req.Machine != "" {
+		if _, err := control.SelectCIMachine(s.ciMachines(), req.Machine); err != nil {
+			fail(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	t, existing, err := s.queueCI(owner, repo, req.PR, req.DryRun, req.Approve, false, req.Machine, req.Jobs)
 	if err != nil {
 		fail(w, http.StatusServiceUnavailable, err)
 		return
@@ -348,7 +357,7 @@ func ciKey(full string, pr int, dry, approve bool) string {
 // queueCI queues one run of a pull request. auto marks runs the watch
 // started. At most one run per pull request (and dry/approve kind) waits in
 // the queue: a repeat request returns that task with existing true.
-func (s *Server) queueCI(owner, repo string, pr int, dry, approve, auto bool) (*task, bool, error) {
+func (s *Server) queueCI(owner, repo string, pr int, dry, approve, auto bool, machine string, jobs []string) (*task, bool, error) {
 	full := owner + "/" + repo
 	title := fmt.Sprintf("Local CI: %s #%d", full, pr)
 	if dry {
@@ -360,7 +369,7 @@ func (s *Server) queueCI(owner, repo string, pr int, dry, approve, auto bool) (*
 		before = append(before, localci.Event{Time: queuedAt, Kind: "head", Text: fmt.Sprintf("The watcher saw a new commit on PR #%d.", pr)})
 	}
 	before = append(before, localci.Event{Time: queuedAt, Kind: "queued", Text: fmt.Sprintf("Queued Local CI for PR #%d.", pr)})
-	return s.ci.addKeyed(ciKey(full, pr, dry, approve), title, []string{full}, func(w io.Writer) error {
+	t, existing, err := s.ci.addKeyed(ciKey(full, pr, dry, approve), title, []string{full}, func(w io.Writer) error {
 		ctx, cancel := context.WithCancel(s.ciContext())
 		defer cancel()
 		t, _ := w.(*task)
@@ -368,7 +377,7 @@ func (s *Server) queueCI(owner, repo string, pr int, dry, approve, auto bool) (*
 			return nil
 		}
 		start := time.Now()
-		o := localci.Options{Owner: owner, Repo: repo, PR: pr, DryRun: dry, Approve: approve, Out: w, Before: before}
+		o := localci.Options{Owner: owner, Repo: repo, PR: pr, DryRun: dry, Approve: approve, Out: w, Before: before, Jobs: jobs}
 		var rep localci.Report
 		err := func() error {
 			c, login, err := s.client(ctx)
@@ -377,7 +386,7 @@ func (s *Server) queueCI(owner, repo string, pr int, dry, approve, auto bool) (*
 			}
 			cfg, _ := store.LoadConfig()
 			if s.ciDispatch != nil {
-				o.Exec = s.ciDispatch()
+				o.Exec = s.pinnedDispatcher(machine)
 			}
 			o.Client, o.Settings, o.Login = c, cfg.CI[full], login
 			if info, err := store.LoadDaemonInfo(); err == nil && info.Addr != "" {
@@ -404,6 +413,31 @@ func (s *Server) queueCI(owner, repo string, pr int, dry, approve, auto bool) (*
 		}
 		return err
 	})
+	if err == nil && !existing {
+		t.mu.Lock()
+		t.Machine, t.Jobs = machine, jobs
+		t.mu.Unlock()
+	}
+	return t, existing, err
+}
+
+// pinnedDispatcher is the daemon's dispatcher limited to one machine; empty
+// means all (the same as control.CIDispatcherOn on the CLI side).
+func (s *Server) pinnedDispatcher(machine string) *localci.Dispatcher {
+	d := s.ciDispatch()
+	if machine == "" {
+		return d
+	}
+	return &localci.Dispatcher{
+		Machines: func() []localci.Machine {
+			ms, err := control.SelectCIMachine(d.Machines(), machine)
+			if err != nil {
+				return nil // jobs then end as unsupported with the reason
+			}
+			return ms
+		},
+		Remote: d.Remote, Local: d.Local, Locks: d.Locks,
+	}
 }
 
 func (s *Server) ciContext() context.Context {
@@ -478,7 +512,7 @@ func (s *Server) ciWatchOnce(ctx context.Context) {
 			if seen[key] || localci.CheckTrust(pr, localci.Allowlist(cfg.CI[full], login), false) != nil {
 				continue
 			}
-			if _, _, err := s.queueCI(owner, repo, pr.Number, false, false, true); err != nil {
+			if _, _, err := s.queueCI(owner, repo, pr.Number, false, false, true, "", nil); err != nil {
 				s.h.Log.Printf("local ci: %s #%d: %v", full, pr.Number, err)
 				continue
 			}
