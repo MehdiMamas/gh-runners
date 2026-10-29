@@ -143,12 +143,16 @@ func (c *Client) DownloadTarball(ctx context.Context, owner, repo, sha, dest str
 }
 
 // SetStatus sets a commit status (state: pending, success, failure, error).
-func (c *Client) SetStatus(ctx context.Context, owner, repo, sha, state, name, desc string) error {
+// targetURL, when not empty, is the link GitHub shows beside it.
+func (c *Client) SetStatus(ctx context.Context, owner, repo, sha, state, name, desc, targetURL string) error {
 	if len(desc) > 140 {
 		desc = desc[:140]
 	}
-	return c.Do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/statuses/%s", owner, repo, sha),
-		map[string]string{"state": state, "context": name, "description": desc}, nil)
+	body := map[string]string{"state": state, "context": name, "description": desc}
+	if targetURL != "" {
+		body["target_url"] = targetURL
+	}
+	return c.Do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/statuses/%s", owner, repo, sha), body, nil)
 }
 
 // UpsertComment edits the pull request comment containing marker, or adds

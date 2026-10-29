@@ -36,6 +36,9 @@ type Options struct {
 	Exec     Executor
 	Out      io.Writer
 	Before   []Event // events from before the run started (head seen, queued), put first in its feed
+	// LogURL gives the link to one job's log on this machine's dashboard,
+	// from the run id and the job name. Nil means statuses carry no link.
+	LogURL func(runID, job string) string
 }
 
 // Report is the outcome of a run, in workflow order.
@@ -187,11 +190,11 @@ func Run(ctx context.Context, o Options) (Report, error) {
 
 	var statusMu sync.Mutex
 	statusErr := ""
-	status := func(state, name, desc string) {
+	status := func(state, name, desc, link string) {
 		if !post {
 			return
 		}
-		if err := c.SetStatus(ctx, o.Owner, o.Repo, sha, state, name, desc); err != nil {
+		if err := c.SetStatus(ctx, o.Owner, o.Repo, sha, state, name, desc, link); err != nil {
 			fmt.Fprintf(o.Out, "could not set status %s: %v\n", name, err)
 			ev.AddEvent(Event{Kind: "error", Text: fmt.Sprintf("Could not set the %s status on GitHub: %v", name, err)})
 			statusMu.Lock()
@@ -207,10 +210,16 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	}
 	for _, n := range wf.Order {
 		if selected[n] && wf.Jobs[n].IsAggregate() {
-			status("pending", n, "Waiting for the other jobs")
+			status("pending", n, "Waiting for the other jobs", "")
 		}
 	}
 
+	logLink := func(job string) string {
+		if o.LogURL == nil || job == "" {
+			return ""
+		}
+		return o.LogURL(filepath.Base(runDir), job)
+	}
 	renv := RunEnv{Repo: o.Owner + "/" + o.Repo, SHA: sha, Ref: fmt.Sprintf("refs/pull/%d/merge", o.PR)}
 	jobEnv := ScrubEnv(os.Environ(), renv, nil)
 	jobSecrets := envValues(jobEnv)
@@ -220,7 +229,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		if res.Status == "" {
 			ctxName := "local-ci/" + t.Name
 			ev.AddEvent(Event{Kind: "job_started", Job: t.Name, Text: "Job " + t.Name + " started."})
-			status("pending", ctxName, "Running")
+			status("pending", ctxName, "Running", logLink(t.Name))
 			jobDir := filepath.Join(runDir, t.Name)
 			res = o.Exec.RunJob(ctx, JobSpec{
 				Name: t.Name, Job: j, Tarball: tarball, RunDir: jobDir,
@@ -233,21 +242,25 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			if res.Status == Fail {
 				state, desc = "failure", "Failed: "+res.Reason
 			}
-			if res.Status != Blocked && res.Status != Unsupported {
-				status(state, ctxName, desc)
+			if res.Status == Blocked || res.Status == Unsupported {
+				state, desc = "error", "Blocked: "+res.Reason
 			}
+			status(state, ctxName, desc, logLink(t.Name))
 		} else if j.IsAggregate() {
 			state, desc := "success", "Every job passed or was skipped"
 			if res.Status != Pass {
 				state, desc = "failure", res.Reason
 			}
-			upstream := false
+			blocked := res.Status == Blocked || res.Status == Unsupported
 			for _, nr := range needs {
-				upstream = upstream || nr.Status == Blocked || nr.Status == Unsupported
+				blocked = blocked || nr.Status == Blocked || nr.Status == Unsupported
 			}
-			if res.Status != Blocked && res.Status != Unsupported && !upstream {
-				status(state, t.Name, desc)
+			if blocked {
+				state, desc = "error", "Blocked: "+res.Reason
 			}
+			status(state, t.Name, desc, logLink(firstBad(needs)))
+		} else if res.Status == Skipped && res.Reason == filterSkipReason {
+			status("success", "local-ci/"+t.Name, "Skipped: "+res.Reason, "")
 		}
 		res.Job = t.Name
 		ev.AddEvent(Event{Kind: "job_finished", Job: t.Name, Machine: res.Machine, Status: string(res.Status), Text: jobEventText(t.Name, res)})
@@ -300,9 +313,9 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	}
 	if !hasAgg {
 		if rep.AllPassed() {
-			status("success", "ci-passed", "Every job passed or was skipped")
+			status("success", "ci-passed", "Every job passed or was skipped", "")
 		} else {
-			status("failure", "ci-passed", "A job failed")
+			status("failure", "ci-passed", "A job failed", logLink(firstBad(resultMap(rep.Results))))
 		}
 	}
 	if err := c.UpsertComment(ctx, o.Owner, o.Repo, o.PR, Marker, CommentBody(CommentInput{
@@ -398,7 +411,7 @@ func Decide(wf *Workflow, j *Job, needs map[string]Result, outputs map[string]ma
 	}
 	switch cond {
 	case CondFalse:
-		return Result{Status: Skipped, Reason: "no changed files match its filter"}
+		return Result{Status: Skipped, Reason: filterSkipReason}
 	case CondUnsupported:
 		return Result{Status: Unsupported, Reason: "unsupported expression: " + j.If}
 	}
