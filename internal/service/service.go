@@ -176,6 +176,43 @@ func waitRunning(timeout time.Duration) error {
 	return fmt.Errorf("the daemon did not start within %s; see `gh-runners logs --daemon`", timeout)
 }
 
+// waitNew waits until status answers with a PID other than oldPID, so the old
+// daemon answering before it dies does not count as started.
+func waitNew(status func() (int, error), oldPID int, timeout, poll time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if pid, err := status(); err == nil && pid != 0 && pid != oldPID {
+			return true
+		}
+		time.Sleep(poll)
+	}
+	return false
+}
+
+// restartLoop kicks the job, then waits for a daemon with a new PID. When
+// none shows up within step it kicks again, until timeout: launchd's first
+// spawn of a replaced binary can fail and stay failed.
+func restartLoop(kick func(first bool) error, status func() (int, error), timeout, step time.Duration) error {
+	oldPID, _ := status()
+	deadline := time.Now().Add(timeout)
+	for first := true; ; first = false {
+		if err := kick(first); err != nil && first {
+			return err
+		}
+		wait := step
+		if left := time.Until(deadline); left < wait {
+			wait = left
+		}
+		if waitNew(status, oldPID, wait, step/10+time.Millisecond) {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("the daemon did not start within %s; see `gh-runners logs --daemon`", timeout)
+		}
+		fmt.Println("the new daemon has not started yet; asking launchd again")
+	}
+}
+
 func waitStopped(timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {

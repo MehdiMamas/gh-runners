@@ -12,6 +12,12 @@ import (
 	"github.com/MehdiMamas/gh-runners/internal/store"
 )
 
+// Package vars so tests can fake launchctl and the daemon status.
+var (
+	runFn    = run
+	statusFn = control.GetStatus
+)
+
 func plistPath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, "Library", "LaunchAgents", label()+".plist")
@@ -104,12 +110,21 @@ func restart() error {
 	if _, err := os.Stat(plistPath()); err != nil {
 		return stopStart()
 	}
-	if err := run("launchctl", "kickstart", "-k", domain()+"/"+label()); err != nil {
-		if err := run("launchctl", "bootstrap", domain(), plistPath()); err != nil {
-			return err
+	kick := func(first bool) error {
+		args := []string{"kickstart", "-k", domain() + "/" + label()}
+		if !first {
+			args = []string{"kickstart", domain() + "/" + label()}
 		}
+		if err := runFn("launchctl", args...); err != nil {
+			return runFn("launchctl", "bootstrap", domain(), plistPath())
+		}
+		return nil
 	}
-	return waitRunning(90 * time.Second)
+	status := func() (int, error) {
+		s, err := statusFn()
+		return s.PID, err
+	}
+	return restartLoop(kick, status, 90*time.Second, 10*time.Second)
 }
 
 func stop() error {
