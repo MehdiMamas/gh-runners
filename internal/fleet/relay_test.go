@@ -244,6 +244,20 @@ func TestRelayLinkClosesWhenIdle(t *testing.T) {
 	waitFor(t, func() bool { return a.Peers.link(b.ID()) == nil && b.Peers.link(a.ID()) == nil })
 }
 
+func TestRelayAcceptorKeepsAWantedLink(t *testing.T) {
+	_, _, a, b := relayPair(t, 300*time.Millisecond, time.Hour)
+	a.WantAll()
+	waitFor(t, func() bool { return relayLinked(a.Peers, b.ID()) && relayLinked(b.Peers, a.ID()) })
+	// Only a wants the link and nothing is sent: b must not drop it while
+	// a's wake entry is live (it used to, every idle period, and a then
+	// linked again).
+	l := b.Peers.link(a.ID())
+	time.Sleep(time.Second)
+	if got := b.Peers.link(a.ID()); got != l {
+		t.Fatal("idle link dropped while the other side still wants it")
+	}
+}
+
 func TestRelayBusyLinkStaysOpen(t *testing.T) {
 	_, _, a, b := relayPair(t, 300*time.Millisecond, 300*time.Millisecond)
 	a.WantAll()

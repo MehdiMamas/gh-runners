@@ -233,6 +233,14 @@ func (s *relayState) wanted(id string) bool {
 	return time.Now().Before(s.wantUntil[id])
 }
 
+// theyWant reports whether id's wake entry for this machine is still live:
+// the dialing side renews it while it wants the link.
+func (s *relayState) theyWant(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return time.Now().Before(s.seen[id])
+}
+
 func (s *relayState) want(id string) {
 	s.mu.Lock()
 	s.wantUntil[id] = time.Now().Add(orDefault(s.t.want, relayWantFor))
@@ -465,13 +473,14 @@ func (r *peerRun) relayAccept(ctx context.Context, e Entry) {
 }
 
 // closeIdle closes relay links that carried nothing for the idle time while
-// nothing wants them.
+// neither side wants them. The accepting side checks the dialer's wake entry,
+// or it would drop a link the other side still wants every idle period.
 func (r *peerRun) closeIdle() {
 	idle := orDefault(r.rl.t.idle, relayIdleAfter)
 	r.mu.Lock()
 	var stale []*link
 	for id, l := range r.links {
-		if l.relay && !r.rl.wanted(id) && l.c.idleFor() > idle {
+		if l.relay && !r.rl.wanted(id) && !r.rl.theyWant(id) && l.c.idleFor() > idle {
 			stale = append(stale, l)
 		}
 	}
