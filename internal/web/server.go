@@ -61,13 +61,16 @@ type Hooks struct {
 
 // Server is the dashboard.
 type Server struct {
-	h      Hooks
-	secret string
-	tasks  *taskQueue
-	auth   authCache
-	repos  repoCache
-	remote remoteCache
-	login  loginFlow
+	// HostAddr is the interface the main host listens on; "" is all of
+	// them. Tests set 127.0.0.1.
+	HostAddr string
+	h        Hooks
+	secret   string
+	tasks    *taskQueue
+	auth     authCache
+	repos    repoCache
+	remote   remoteCache
+	login    loginFlow
 	// What GitHub says per repository: workflow labels, all runners; and
 	// the hand-made runners found on this machine.
 	wfLabels  timedCache[[]ops.LabelSet]

@@ -361,6 +361,7 @@ func TestMainHostSwitch(t *testing.T) {
 	setup(t)
 	h := &fleet.Host{Dir: t.TempDir(), Addrs: func() []string { return []string{"127.0.0.1"} }}
 	s := New(Hooks{Version: "test", Host: h}, secret)
+	s.HostAddr = "127.0.0.1"
 	hh := s.Handler(http.NotFoundHandler())
 	t.Cleanup(h.Stop)
 	if code := api(t, hh, "POST", "/api/machines/invite", "", nil); code != http.StatusConflict {
