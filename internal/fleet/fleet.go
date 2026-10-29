@@ -146,13 +146,36 @@ type conn struct {
 	pending map[uint64]chan frame
 	done    chan struct{}
 	err     error
+	used    time.Time // last request, response or job traffic (not pings)
 }
 
 func newConn(nc net.Conn) *conn {
-	return &conn{nc: nc, pending: map[uint64]chan frame{}, done: make(chan struct{})}
+	return &conn{nc: nc, pending: map[uint64]chan frame{}, done: make(chan struct{}), used: time.Now()}
+}
+
+// touch notes traffic that is not a ping, for idleFor.
+func (c *conn) touch(f frame) {
+	if f.Type == tPing || f.Type == tPong || f.Type == tStatus {
+		return
+	}
+	c.mu.Lock()
+	c.used = time.Now()
+	c.mu.Unlock()
+}
+
+// idleFor is how long nothing but pings crossed the connection; zero while
+// a call waits for its answer.
+func (c *conn) idleFor() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.pending) > 0 {
+		return 0
+	}
+	return time.Since(c.used)
 }
 
 func (c *conn) send(f frame) error {
+	c.touch(f)
 	b, err := json.Marshal(f)
 	if err != nil {
 		return err
@@ -190,6 +213,7 @@ func (c *conn) recv(timeout time.Duration) (frame, error) {
 	if err := json.Unmarshal(b, &f); err != nil {
 		return frame{}, fmt.Errorf("bad message: %w", err)
 	}
+	c.touch(f)
 	return f, nil
 }
 

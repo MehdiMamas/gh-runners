@@ -1448,7 +1448,7 @@ function machineCard(m) {
     h('div', { class: 'card-head' },
       h('div', {}, h('div', { class: 'row' }, h('h2', {}, machineName(m)), m.online ? h('span', { class: 'pill ok' }, 'Online') : (m.peer ? h('span', { class: 'pill bad' }, 'Signed in, can\'t reach it') : h('span', { class: 'pill' }, 'Offline')), info.paused ? h('span', { class: 'pill warn' }, 'Paused') : null),
         h('div', { class: 'muted small' }, ['gh-runners ' + (info.version || '?'), osName(info.os) + (info.arch ? ' · ' + info.arch : ''),
-          m.via ? 'reached through ' + (m.via_name || m.via) : m.online ? 'live' : (m.last_seen ? 'last seen ' + ago(m.last_seen) : 'never connected')].join(' · '))),
+          m.via ? 'reached through ' + (m.via_name || m.via) : m.relay ? 'Linked through the relay' : m.online ? 'live' : (m.last_seen ? 'last seen ' + ago(m.last_seen) : 'never connected')].join(' · '))),
       h('div', { class: 'row' },
         // A machine that can't be reached can't take any of these, so only
         // Remove stays.

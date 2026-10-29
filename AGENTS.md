@@ -22,3 +22,9 @@ gh-runners: one static Go binary that sets up and supervises self-hosted GitHub 
 - Redraw tabs only through `redraw(tab)`, never call `renderX()` from timers or fetch callbacks (`TestAppJSRedrawsThroughGuard` enforces it).
 - Inputs accept human forms ("10min", "1 hour"); show limits inline with Save disabled.
 - Visual fixes get before and after screenshots on the issue.
+
+## Account machines through the relay (#94)
+- PCs on one GitHub account link directly first. When the direct dial fails and a link is wanted, `internal/fleet/relay.go` links through a WebSocket relay (`GH_RUNNERS_RELAY_URL`, default `fleet.DefaultRelayURL`; empty turns it off). The same mutual TLS runs inside the pipe, so the relay sees no plaintext. Close codes 4408/4409 are normal failed attempts, retried on the next round without a log line.
+- Wake files: `wants/<target id>.json` in `<login>/gh-runners-machines`, `{"from":{"<dialer id>":"<RFC3339 until>"}}`. The dialer writes its entry (2 min), the target polls its own file every 10 s and connects as `accept`.
+- A link is "wanted" for 2 minutes after a Machines tab request (`Peers.WantAll`), and a `Peers.Call` or `PeerExecutor.RunJob` to an unlinked peer waits up to 25 s for it. A relay link idle for 2 minutes and not wanted is closed.
+- Tests use an in-process fake relay and a fake wake store (`relay_test.go`); never the real relay or GitHub account.

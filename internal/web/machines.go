@@ -158,6 +158,7 @@ func (s *Server) getMachines(w http.ResponseWriter, r *http.Request) {
 	if p := s.h.Peers; p != nil {
 		if on, port := p.Running(); on {
 			v.Account, v.AccountPort, v.Login = true, port, p.Login()
+			p.WantAll() // the tab is open: link through the relay where needed
 			for _, pe := range p.Peers() {
 				v.Machines = append(v.Machines, pe.Machine())
 			}

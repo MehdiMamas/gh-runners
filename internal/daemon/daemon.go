@@ -162,6 +162,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		CIDir:        d.member.CIDir,
 		CITools:      d.member.CITools,
 		CIEmulatorOK: d.member.CIEmulatorOK,
+		RelayURL:     fleet.RelayURLFromEnv(),
 	}
 	d.member.IsPeer = d.peers.Linked
 	dash := web.New(web.Hooks{
