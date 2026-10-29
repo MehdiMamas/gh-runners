@@ -329,9 +329,14 @@ func (r *peerRun) awaitRelay(ctx context.Context, id string) *link {
 // relay does not help either.
 func (r *peerRun) connect(ctx context.Context, e Entry) (*conn, error) {
 	var err error
-	if len(e.Addrs) == 0 {
+	if f := r.p.directDial; f != nil {
+		err = f(ctx, e)
+	}
+	switch {
+	case err != nil:
+	case len(e.Addrs) == 0:
 		err = errors.New("it published no address")
-	} else {
+	default:
 		var c *conn
 		if c, _, err = dialWith(ctx, e.Addrs, e.Port, r.clientConfig(e.Fingerprint)); err == nil {
 			return c, nil
@@ -428,9 +433,11 @@ func (r *peerRun) pollWants(ctx context.Context) {
 		r.mu.Lock()
 		e, known := r.entries[id]
 		linked := r.links[id] != nil
-		// Both want each other: the lower id dials, so it does not accept.
-		dialing := r.selfID < id && r.stateLocked(id).dialing
 		r.mu.Unlock()
+		// Both want each other: the lower id dials, so it does not accept.
+		// (Not "while a direct dial runs": to a PC on another network that
+		// takes most of every round, so it would never accept.)
+		dialing := r.selfID < id && s.wanted(id)
 		if !known || linked || dialing || !s.claim(id) {
 			continue
 		}

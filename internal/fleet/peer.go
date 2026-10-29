@@ -70,10 +70,11 @@ type Peers struct {
 
 	// RelayURL is the relay that links machines which cannot reach each
 	// other directly; empty means no relay (the daemon passes
-	// RelayURLFromEnv()). wants and relayT are for tests.
-	RelayURL string
-	wants    wantsStore
-	relayT   relayTimes
+	// RelayURLFromEnv()). wants, relayT and directDial are for tests.
+	RelayURL   string
+	wants      wantsStore
+	relayT     relayTimes
+	directDial func(ctx context.Context, e Entry) error // runs before the direct dial; an error fails it
 
 	mu       sync.Mutex
 	run      *peerRun

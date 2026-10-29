@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -310,4 +311,26 @@ func TestWakeFileRoundTrip(t *testing.T) {
 	if !g.has("wants/" + a.ID() + ".json") {
 		t.Fatal("wake file not in the machines repository")
 	}
+}
+
+// To a PC on another network the direct dial hangs until its timeout, so the
+// lower id is dialing for most of each round. Woken by the higher id, it must
+// still accept through the relay (#94: it never did, so no link came).
+func TestRelayAcceptsWhileDirectDialHangs(t *testing.T) {
+	hang := func(p *Peers) {
+		p.directDial = func(ctx context.Context, _ Entry) error {
+			select {
+			case <-ctx.Done():
+			case <-time.After(3 * time.Second):
+			}
+			return errors.New("no answer")
+		}
+	}
+	_, _, a, b := relayPair(t, time.Hour, time.Minute, hang)
+	hi, lo := a, b
+	if a.ID() < b.ID() {
+		hi, lo = b, a
+	}
+	hi.WantAll()
+	waitFor(t, func() bool { return relayLinked(hi.Peers, lo.ID()) && relayLinked(lo.Peers, hi.ID()) })
 }
