@@ -105,13 +105,16 @@ func envKey(k string) string {
 
 var secretKey = regexp.MustCompile(`(?i)TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY`)
 
+// freshEnvFn is a variable so tests can run without the host registry.
+var freshEnvFn = freshEnv
+
 // ScrubEnv builds the environment steps run in: a few basics from the
 // parent plus CI=true and the GITHUB_* values a script may read. Nothing
 // else from the parent leaks in, and no key that looks like a credential is
 // ever kept.
 func ScrubEnv(parent []string, r RunEnv, extra map[string]string) []string {
 	have := map[string]string{}
-	for _, kv := range parent {
+	for _, kv := range freshEnvFn(parent) {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok {
 			continue
