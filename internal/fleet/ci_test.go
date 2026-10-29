@@ -181,3 +181,43 @@ func TestRemoteExecutorUnknownMember(t *testing.T) {
 		t.Fatalf("got %v %q", r.Status, r.Reason)
 	}
 }
+
+func TestRemoteJobKeepsLogAndHistory(t *testing.T) {
+	t.Setenv("GH_RUNNERS_HOME", t.TempDir())
+	hits := 0
+	stubGitHub(t, &hits)
+	h := newHost(t)
+	h.CIRepos = func() []string { return []string{"o/r"} }
+	connectCI(t, h)
+	id := ciMemberID(t, h)
+
+	s := spec(t, "cat data.txt")
+	s.RunEnv.Ref = "refs/pull/7/merge"
+	if r := (RemoteExecutor{Host: h, MemberID: id}).RunJob(context.Background(), s); r.Status != localci.Pass {
+		t.Fatalf("status %v (%s)", r.Status, r.Reason)
+	}
+	runs := localci.History()
+	if len(runs) != 1 || runs[0].Repo != "o/r" || runs[0].PR != 7 || runs[0].Dir == "" {
+		t.Fatalf("history = %+v", runs)
+	}
+	b, err := os.ReadFile(filepath.Join(runs[0].Dir, "logs", "build.log"))
+	if err != nil || !strings.Contains(string(b), "hello from the repo") {
+		t.Fatalf("kept log = %q, %v", b, err)
+	}
+}
+
+func TestKeepRemoteLogWithoutRepoOrPR(t *testing.T) {
+	t.Setenv("GH_RUNNERS_HOME", t.TempDir())
+	log := filepath.Join(t.TempDir(), "job.log")
+	if err := os.WriteFile(log, []byte("out\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	keepRemoteLog(ciJob{Name: "build"}, "", log, localci.Result{Status: localci.Pass}, time.Now())
+	runs := localci.History()
+	if len(runs) != 1 || !strings.Contains(runs[0].Dir, "unknown") {
+		t.Fatalf("history = %+v", runs)
+	}
+	if b, err := os.ReadFile(filepath.Join(runs[0].Dir, "logs", "build.log")); err != nil || string(b) != "out\n" {
+		t.Fatalf("log = %q, %v", b, err)
+	}
+}
