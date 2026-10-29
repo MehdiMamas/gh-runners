@@ -162,20 +162,6 @@ func (p *Peers) Running() (bool, int) {
 	return true, p.run.port
 }
 
-// SendStatus sends the other account PCs this machine's status now instead of
-// at the next status tick, so a pause or resume shows there at once.
-func (p *Peers) SendStatus() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.run == nil {
-		return
-	}
-	select {
-	case p.run.statusNow <- struct{}{}:
-	default:
-	}
-}
-
 // StartErr is why the last Start failed, if it did.
 func (p *Peers) StartErr() error {
 	p.mu.Lock()
