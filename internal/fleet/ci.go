@@ -27,6 +27,7 @@ import (
 
 	"github.com/MehdiMamas/gh-runners/internal/github"
 	"github.com/MehdiMamas/gh-runners/internal/localci"
+	"github.com/MehdiMamas/gh-runners/internal/store"
 )
 
 const (
@@ -404,13 +405,50 @@ func (r *ciRunner) run(ctx context.Context, c *conn, f frame) frame {
 		}
 		defer unlock()
 	}
+	started := time.Now()
 	res := localci.LocalExecutor{}.RunJob(jctx, localci.JobSpec{
 		Name: job.Name, Job: job.Job, Tarball: tarball, RunDir: dir, Log: logPath, Env: env, RunEnv: job.RunEnv,
 	})
 	if jctx.Err() != nil && res.Status == localci.Fail {
 		res.Reason = "cancelled"
 	}
+	keepRemoteLog(job, r.For, logPath, res, started)
 	return finish(res)
+}
+
+// keepRemoteLog keeps the log of a job this machine ran for another one
+// under ~/.gh-runners/ci/<owner-repo>/ and adds it to ci/history.json, so
+// the job can be looked at here after the job folder is removed. A failure
+// to keep it is ignored: it never fails the job.
+func keepRemoteLog(job ciJob, from, logPath string, res localci.Result, started time.Time) {
+	repo := strings.ReplaceAll(job.Repo, "/", "-")
+	if repo == "" {
+		repo = "unknown"
+	}
+	pr := localci.PRFromRef(job.RunEnv.Ref)
+	sha := job.SHA
+	if len(sha) > 7 {
+		sha = sha[:7]
+	}
+	if sha == "" {
+		sha = "unknown"
+	}
+	runDir := filepath.Join(store.Home(), "ci", repo, fmt.Sprintf("pr%d-%s-%d-remote", pr, sha, started.Unix()))
+	if err := os.MkdirAll(filepath.Join(runDir, "logs"), 0o755); err != nil {
+		return
+	}
+	if b, err := os.ReadFile(logPath); err == nil {
+		_ = os.WriteFile(filepath.Join(runDir, "logs", strings.NewReplacer("/", "_", "\\", "_").Replace(job.Name)+".log"), b, 0o644)
+	}
+	if from == "" {
+		from = "unknown"
+	}
+	_ = localci.AddHistory(localci.HistoryRun{
+		ID: strconv.FormatInt(started.UnixNano(), 36), Repo: job.Repo, PR: pr, SHA: job.SHA,
+		Title: "remote from " + from, Started: started, Ended: time.Now(), Dir: runDir,
+		Results: []localci.Result{res}, Passed: res.Status == localci.Pass,
+		Outcome: localci.Outcome{State: localci.NotPosted, Reason: "Ran here for " + from + "; the sender posts the result."},
+	})
 }
 
 // removeJobDir retries because Windows keeps the job log locked for a
