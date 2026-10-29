@@ -31,6 +31,7 @@ func (d *Daemon) Pause() error {
 	}
 	d.paused.Store(true)
 	d.Log.Printf("pausing: stopping all runners")
+	d.tellHost() // show the pause while the runners stop
 	d.mu.Lock()
 	var wg sync.WaitGroup
 	for id, c := range d.children {
