@@ -28,9 +28,11 @@ done
 
 if command -v lipo >/dev/null 2>&1; then
 	lipo -create -output "$out/gh-runners-darwin-universal" "$out/gh-runners-darwin-amd64" "$out/gh-runners-darwin-arm64"
-	# Re-sign ad hoc so Apple Silicon accepts the merged binary.
-	codesign --force --sign - "$out/gh-runners-darwin-universal"
-	for f in "$out"/gh-runners-darwin-*; do codesign --force --sign - "$f"; done
+	# Re-sign ad hoc so Apple Silicon accepts the merged binary. A fixed
+	# identifier keeps one code identity across releases, so macOS does not
+	# ask for Local Network permission again after each update.
+	codesign --force --sign - --identifier io.github.mehdimamas.gh-runners "$out/gh-runners-darwin-universal"
+	for f in "$out"/gh-runners-darwin-*; do codesign --force --sign - --identifier io.github.mehdimamas.gh-runners "$f"; done
 fi
 
 cd "$out"
