@@ -150,6 +150,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	setJobs, runDone := StartRunning(RunningRun{Repo: o.Owner + "/" + o.Repo, PR: o.PR, SHA: sha, Title: pr.Title, Dir: runDir})
 	defer runDone()
 	tarball := filepath.Join(runDir, "source.tgz")
+	defer os.Remove(tarball)
 	if err := c.DownloadTarball(ctx, o.Owner, o.Repo, sha, tarball); err != nil {
 		return rep, fmt.Errorf("download source: %w", err)
 	}
@@ -226,9 +227,8 @@ func Run(ctx context.Context, o Options) (Report, error) {
 				Log: filepath.Join(runDir, "logs", t.Name+".log"),
 				Env: jobEnv, RunEnv: renv,
 			})
-			if res.Status == Pass {
-				_ = os.RemoveAll(filepath.Join(jobDir, "src"))
-			}
+			// The log in logs/ is what people read; the checkout is not kept.
+			_ = os.RemoveAll(filepath.Join(jobDir, "src"))
 			state, desc := "success", "Passed in "+res.Duration.Round(time.Second).String()
 			if res.Status == Fail {
 				state, desc = "failure", "Failed: "+res.Reason

@@ -448,6 +448,10 @@ March 2026 and then postponed it after feedback; check
 [GitHub's pricing](https://docs.github.com/en/billing/managing-billing-for-your-products/managing-billing-for-github-actions/about-billing-for-github-actions)
 for the current state.
 
+## Disk use
+
+The daemon keeps `~/.gh-runners` small without any setting. Local CI deletes each job's source checkout and the run's download when the job ends (the log stays) and removes run folders older than 14 days. Once at start and then every hour the daemon also deletes runner versions the `bin` and `externals` links no longer point to and the update staging folder, and, for a runner that is not running a job, empties its `_work` folder (except the `_actions`, `_tool` and `_PipelineMapping` caches) when it holds more than 2 GB or has not been touched for 3 days. When something was freed the daemon log says so, for example `disk: freed 3.2 GB (...)`.
+
 ## Updates
 
 gh-runners updates itself. The background service checks for a new release
