@@ -115,6 +115,7 @@ type Machine struct {
 	Peer bool `json:"peer,omitempty"`
 	// Via, for a peer, is the id (and ViaName the name) of the machine the
 	// calls go through when there is no direct link.
+	Relay   bool     `json:"relay,omitempty"` // linked through the relay
 	Via     string   `json:"via,omitempty"`
 	ViaName string   `json:"via_name,omitempty"`
 	Error   string   `json:"error,omitempty"`

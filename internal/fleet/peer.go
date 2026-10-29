@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/github"
@@ -69,6 +68,13 @@ type Peers struct {
 	// Timings; zero means the defaults.
 	PublishEvery, ListEvery, DialEvery time.Duration
 
+	// RelayURL is the relay that links machines which cannot reach each
+	// other directly; empty means no relay (the daemon passes
+	// RelayURLFromEnv()). wants and relayT are for tests.
+	RelayURL string
+	wants    wantsStore
+	relayT   relayTimes
+
 	mu       sync.Mutex
 	run      *peerRun
 	startErr error
@@ -86,8 +92,9 @@ type peerRun struct {
 	selfID string
 	wg     sync.WaitGroup
 	wake   chan struct{}
-	ci     *ciRunner // jobs other machines send here
-	ciLogs ciLogSet  // logs of the jobs this machine sent out
+	rl     *relayState // nil without a relay
+	ci     *ciRunner   // jobs other machines send here
+	ciLogs ciLogSet    // logs of the jobs this machine sent out
 
 	mu      sync.Mutex
 	entries map[string]Entry
@@ -102,6 +109,7 @@ type link struct {
 	c      *conn
 	dialer string
 	since  time.Time
+	relay  bool // runs through the relay
 }
 
 type peerState struct {
@@ -127,6 +135,8 @@ type Peer struct {
 	// ViaName its name, when there is no direct link but a linked machine
 	// has one. Such a machine counts as online.
 	Via, ViaName string
+	// Relay says the link runs through the relay.
+	Relay bool
 }
 
 // ErrPeerNotAllowed answers a call the allowlist does not cover.
@@ -225,11 +235,16 @@ func (p *Peers) start(parent context.Context) (*peerRun, error) {
 	dir.Self = r.selfEntry
 	dir.OnList = r.onList
 	r.ci = &ciRunner{Dir: p.CIDir, Tools: p.CITools, EmulatorOK: p.CIEmulatorOK, Fetch: p.fetchSource, For: "another PC"}
+	r.rl = newRelayState(p, dir)
 	r.wg.Add(4)
 	go func() { defer r.wg.Done(); dir.Run(ctx) }()
 	go func() { defer r.wg.Done(); r.acceptLoop(ctx) }()
 	go func() { defer r.wg.Done(); r.dialLoop(ctx) }()
 	go func() { defer r.wg.Done(); r.statusLoop(ctx) }()
+	if r.rl != nil {
+		r.wg.Add(1)
+		go func() { defer r.wg.Done(); r.wantsLoop(ctx) }()
+	}
 	p.logf("account machines: listening on port %d as %s", r.port, selfID)
 	return r, nil
 }
@@ -303,7 +318,7 @@ func (p *Peers) Peers() []Peer {
 			pe.LastSeen, pe.Info, pe.HasInfo, pe.Error = st.lastSeen, st.info, st.hasInfo, st.err
 		}
 		if l := r.links[id]; l != nil {
-			pe.Online, pe.Since, pe.Error = true, l.since, ""
+			pe.Online, pe.Since, pe.Error, pe.Relay = true, l.since, "", l.relay
 		} else if via := r.relayLocked(id); via != "" {
 			pe.Online, pe.Error, pe.Via = true, "", via
 			if v, ok := r.entries[via]; ok && v.Name != "" {
@@ -339,6 +354,9 @@ func (p *Peers) Call(ctx context.Context, id, method, pathQuery string, body []b
 		via = r.links[r.relayLocked(id)]
 	}
 	r.mu.Unlock()
+	if l == nil && via == nil {
+		l = r.awaitRelay(ctx, id)
+	}
 	req := frame{Kind: kindAPI, Method: method, Path: pathQuery, Body: body}
 	switch {
 	case l != nil:
@@ -461,6 +479,9 @@ func (e PeerExecutor) RunJob(ctx context.Context, spec localci.JobSpec) localci.
 	r.mu.Lock()
 	l := r.links[e.ID]
 	r.mu.Unlock()
+	if l == nil {
+		l = r.awaitRelay(ctx, e.ID)
+	}
 	if l == nil {
 		return runRemote(ctx, spec, nil, &r.ciLogs)
 	}
@@ -642,7 +663,7 @@ func (r *peerRun) incoming(ctx context.Context, tc *tls.Conn) {
 		c.close(errors.New("id mismatch"))
 		return
 	}
-	l := &link{id: id, c: c, dialer: id}
+	l := &link{id: id, c: c, dialer: id, relay: isRelayConn(c.nc)}
 	if !r.register(l, f.Info) {
 		_ = c.send(frame{Type: tDenied, Error: "already connected"})
 		c.close(errors.New("duplicate"))
@@ -831,7 +852,7 @@ func (r *peerRun) dialRound(ctx context.Context) {
 		if st.dialing {
 			continue
 		}
-		if r.selfID > id {
+		if r.selfID > id && (r.rl == nil || !r.rl.wanted(id)) {
 			st.misses++
 			if st.misses <= 2 {
 				continue
@@ -861,10 +882,7 @@ func (r *peerRun) dialRound(ctx context.Context) {
 }
 
 func (r *peerRun) dialPeer(ctx context.Context, e Entry) error {
-	if len(e.Addrs) == 0 {
-		return errors.New("it published no address")
-	}
-	c, _, err := dialWith(ctx, e.Addrs, e.Port, r.clientConfig(e.Fingerprint))
+	c, err := r.connect(ctx, e)
 	if err != nil {
 		return err
 	}
@@ -881,7 +899,7 @@ func (r *peerRun) dialPeer(ctx context.Context, e Entry) error {
 		c.close(err)
 		return err
 	}
-	l := &link{id: e.ID, c: c, dialer: r.selfID}
+	l := &link{id: e.ID, c: c, dialer: r.selfID, relay: isRelayConn(c.nc)}
 	if !r.register(l, f.Info) {
 		c.close(errors.New("duplicate"))
 		return nil
@@ -919,43 +937,10 @@ func (r *peerRun) statusLoop(ctx context.Context) {
 	}
 }
 
-// plainErr says why a connection failed in words a user can act on.
-func plainErr(err error) string {
-	switch {
-	case err == nil:
-		return ""
-	case errors.Is(err, ErrFingerprint):
-		return "Something else answered at its address (its certificate does not match the directory)"
-	case errors.Is(err, syscall.ECONNREFUSED):
-		return "Connection refused: gh-runners is not running there, or a firewall blocks the port"
-	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded):
-		return "No answer: the PC is off, on another network, or a firewall blocks the port"
-	}
-	var ne net.Error
-	if errors.As(err, &ne) && ne.Timeout() {
-		return "No answer: the PC is off, on another network, or a firewall blocks the port"
-	}
-	msg := err.Error()
-	switch {
-	case strings.Contains(msg, "bad certificate"), strings.Contains(msg, "certificate required"):
-		return "It did not accept this PC's certificate (it may not have seen this PC in the directory yet)"
-	case strings.Contains(msg, "i/o timeout"), strings.Contains(msg, "timed out"):
-		return "No answer: the PC is off, on another network, or a firewall blocks the port"
-	case strings.Contains(msg, "refused"):
-		return "Connection refused: gh-runners is not running there, or a firewall blocks the port"
-	case strings.Contains(msg, "no route"), strings.Contains(msg, "unreachable"):
-		return "No route to it: it is on another network"
-	}
-	if i := strings.LastIndex(msg, "\n"); i >= 0 {
-		msg = msg[i+1:]
-	}
-	return msg
-}
-
 // Machine describes a peer for the dashboard's Machines list.
 func (pe Peer) Machine() Machine {
 	m := Machine{ID: pe.ID, Via: pe.Via, ViaName: pe.ViaName, Online: pe.Online, Since: pe.Since, LastSeen: pe.LastSeen, Info: pe.Info,
-		Peer: true, Error: pe.Error, Addrs: pe.Addrs, Port: pe.Port}
+		Peer: true, Relay: pe.Relay, Error: pe.Error, Addrs: pe.Addrs, Port: pe.Port}
 	if !pe.HasInfo {
 		m.Info = Info{Hostname: pe.Name, OS: pe.OS, Arch: pe.Arch, Version: pe.Version, Runners: []RunnerInfo{}}
 	}
