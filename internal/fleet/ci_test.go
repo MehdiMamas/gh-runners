@@ -221,3 +221,24 @@ func TestKeepRemoteLogWithoutRepoOrPR(t *testing.T) {
 		t.Fatalf("log = %q, %v", b, err)
 	}
 }
+
+func TestPruneJobDirs(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []string{"a", "b"} {
+		if err := os.MkdirAll(filepath.Join(dir, n, "src"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := PruneJobDirs(dir, func(id string) bool { return id == "a" }); got != 1 {
+		t.Fatalf("removed %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a")); err != nil {
+		t.Fatal("running folder a was removed")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "b")); err == nil {
+		t.Fatal("folder b was not removed")
+	}
+	if got := PruneJobDirs(filepath.Join(dir, "missing"), func(string) bool { return false }); got != 0 {
+		t.Fatalf("missing dir removed %d, want 0", got)
+	}
+}

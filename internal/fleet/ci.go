@@ -459,6 +459,27 @@ func removeJobDir(dir string) {
 	}
 }
 
+// PruneJobDirs removes each job folder under jobsDir that running says is
+// not running, and returns how many it removed. Folders are left over when
+// removeJobDir gave up because a detached process (a Gradle daemon) held
+// files in them.
+func PruneJobDirs(jobsDir string, running func(id string) bool) int {
+	entries, err := os.ReadDir(jobsDir)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range entries {
+		if !e.IsDir() || running(e.Name()) {
+			continue
+		}
+		if os.RemoveAll(filepath.Join(jobsDir, e.Name())) == nil {
+			n++
+		}
+	}
+	return n
+}
+
 // ciHandler wraps handleAPI: "ci" requests run a job, the rest are
 // dashboard calls.
 func (m *Member) ciHandler(ctx context.Context, c *conn) func(frame) frame {
