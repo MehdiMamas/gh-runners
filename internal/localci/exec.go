@@ -143,29 +143,32 @@ func ScrubEnv(parent []string, r RunEnv, extra map[string]string) []string {
 }
 
 // Extract unpacks a GitHub source tarball into dest, dropping its single
-// top-level folder and refusing paths that escape dest.
-func Extract(tarball, dest string) error {
+// top-level folder and refusing paths that escape dest. Where the OS won't
+// create a symlink it copies the target instead; links it can't resolve are
+// returned as log lines.
+func Extract(tarball, dest string) ([]string, error) {
 	f, err := os.Open(tarball)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer f.Close()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
 	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return err
+		return nil, err
 	}
+	var links []pendingLink
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
-			return nil
+			return resolveLinks(dest, links), nil
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if h.Typeflag == tar.TypeXGlobalHeader {
 			continue
@@ -176,18 +179,18 @@ func Extract(tarball, dest string) error {
 		}
 		target := filepath.Join(dest, filepath.FromSlash(rel))
 		if target != dest && !strings.HasPrefix(target, dest+string(filepath.Separator)) {
-			return fmt.Errorf("tarball path escapes the workspace: %s", h.Name)
+			return nil, fmt.Errorf("tarball path escapes the workspace: %s", h.Name)
 		}
 		switch h.Typeflag {
 		case tar.TypeDir:
 			err = os.MkdirAll(target, 0o755)
 		case tar.TypeReg:
 			if err = os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return err
+				return nil, err
 			}
 			var w *os.File
 			if w, err = os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(h.Mode)&0o777|0o200); err != nil {
-				return err
+				return nil, err
 			}
 			_, err = io.Copy(w, tr)
 			if cerr := w.Close(); err == nil {
@@ -195,11 +198,14 @@ func Extract(tarball, dest string) error {
 			}
 		case tar.TypeSymlink:
 			if err = os.MkdirAll(filepath.Dir(target), 0o755); err == nil {
-				err = os.Symlink(h.Linkname, target)
+				if err = symlink(h.Linkname, target); err != nil {
+					links = append(links, pendingLink{target, h.Linkname})
+					err = nil
+				}
 			}
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 }
@@ -227,9 +233,13 @@ func (LocalExecutor) RunJob(ctx context.Context, spec JobSpec) Result {
 	// cancelled.
 	defer KillUnder(spec.RunDir)
 	ws := filepath.Join(spec.RunDir, "src")
-	if err := Extract(spec.Tarball, ws); err != nil {
+	skipped, err := Extract(spec.Tarball, ws)
+	if err != nil {
 		fmt.Fprintln(lf, "extract failed:", err)
 		return finish(Fail, "extract failed")
+	}
+	for _, line := range skipped {
+		fmt.Fprintln(lf, line)
 	}
 	// Emulator jobs need their ports free; the emulator lock is already
 	// held, so a taken port belongs to something outside gh-runners.
