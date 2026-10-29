@@ -319,7 +319,7 @@ func runUses(ctx context.Context, st Step, ws, runDir string, env []string, log 
 	name, _, _ := strings.Cut(st.Uses, "@")
 	switch name {
 	case "actions/checkout":
-		return nil
+		return gitInit(ctx, ws, env, log, envValue(env, "GITHUB_REPOSITORY"), envValue(env, "GITHUB_SHA"))
 	case "actions/setup-node":
 		out, err := capture(ctx, ws, env, "node", "--version")
 		if err != nil {
