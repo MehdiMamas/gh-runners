@@ -29,14 +29,14 @@ func helperArgs(mode string) []string {
 
 func TestRunLockedWaitsThenRuns(t *testing.T) {
 	dir := t.TempDir()
-	holder := &localci.Locks{Dir: dir}
+	holder := &localci.Locks{Dir: dir, Poll: 20 * time.Millisecond}
 	rel, err := holder.Lock("emulator")
 	if err != nil {
 		t.Fatal(err)
 	}
 	go func() { time.Sleep(300 * time.Millisecond); rel() }()
 	var out, errb bytes.Buffer
-	code, err := runLocked(nil, &localci.Locks{Dir: dir}, "emulator", 10*time.Second, helperArgs("ok"), nil, &out, &errb, 50*time.Millisecond)
+	code, err := runLocked(nil, &localci.Locks{Dir: dir, Poll: 20 * time.Millisecond}, "emulator", 10*time.Second, helperArgs("ok"), nil, &out, &errb)
 	if err != nil || code != 0 {
 		t.Fatalf("code=%d err=%v", code, err)
 	}
@@ -47,17 +47,17 @@ func TestRunLockedWaitsThenRuns(t *testing.T) {
 
 func TestRunLockedTimeoutExits75(t *testing.T) {
 	dir := t.TempDir()
-	rel, _ := (&localci.Locks{Dir: dir}).Lock("emulator")
+	rel, _ := (&localci.Locks{Dir: dir, Poll: 20 * time.Millisecond}).Lock("emulator")
 	defer rel()
 	var errb bytes.Buffer
-	code, err := runLocked(nil, &localci.Locks{Dir: dir}, "emulator", 200*time.Millisecond, helperArgs("ok"), nil, &bytes.Buffer{}, &errb, 50*time.Millisecond)
+	code, err := runLocked(nil, &localci.Locks{Dir: dir, Poll: 20 * time.Millisecond}, "emulator", 200*time.Millisecond, helperArgs("ok"), nil, &bytes.Buffer{}, &errb)
 	if code != 75 || err == nil || !strings.Contains(err.Error(), "still held after") {
 		t.Fatalf("code=%d err=%v", code, err)
 	}
 }
 
 func TestRunLockedPassesExitCode(t *testing.T) {
-	code, err := runLocked(nil, &localci.Locks{Dir: t.TempDir()}, "emulator", time.Second, helperArgs("exit7"), nil, &bytes.Buffer{}, &bytes.Buffer{}, 50*time.Millisecond)
+	code, err := runLocked(nil, &localci.Locks{Dir: t.TempDir(), Poll: 20 * time.Millisecond}, "emulator", time.Second, helperArgs("exit7"), nil, &bytes.Buffer{}, &bytes.Buffer{})
 	if err != nil || code != 7 {
 		t.Fatalf("code=%d err=%v", code, err)
 	}

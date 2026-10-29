@@ -31,7 +31,7 @@ gh-runners: one static Go binary that sets up and supervises self-hosted GitHub 
 - The daemon's auto-update waits for remote CI jobs (`Member.CIBusy`, `Peers.CIBusy`), `ci run` runs (`localci.RunningRuns`) and active CI jobs (`localci.ActiveJobs`), as well as runner jobs (#120).
 - `actions/checkout` in local CI makes the job's `src` a one-commit git repo (`gitInit`, `internal/localci/checkout.go`, #124); that commit's sha differs from `GITHUB_SHA`, use `GITHUB_SHA` for the real one.
 
-- A script or session that starts Firebase emulators or other fixed-port servers on a gh-runners machine wraps the start in `gh-runners ci lock [--name emulator] [--timeout 30m] -- <command>` (same file lock as local CI and remote jobs; waits, exits 75 on timeout), e.g. `gh-runners ci lock -- npx firebase emulators:exec ...` (#130).
+- A script or session that starts Firebase emulators or other fixed-port servers on a gh-runners machine wraps the start in `gh-runners ci lock [--name emulator] [--timeout 30m] -- <command>` (same file lock as local CI and remote jobs; waits, exits 75 on timeout; waiters are served in arrival order, ticket queue `<name>.queue/`, #132), e.g. `gh-runners ci lock -- npx firebase emulators:exec ...` (#130).
 
 ## Disk use (#109)
 - `internal/runner/janitor.go` (old runner versions, idle `_work`) and `localci.PruneRuns` (CI runs older than 14 days) run from `internal/daemon/disk.go` at start and hourly. A runner counts as busy while a `Runner.Worker` process runs under its folder. Local CI removes each job's `src` and the run's tarball when it ends. Leftover remote job folders under `ci/fleet/jobs` (untouched for 6 h) are pruned in the same pass (`fleet.PruneJobDirs`, #117).
