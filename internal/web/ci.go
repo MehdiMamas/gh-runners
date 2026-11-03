@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/control"
+	"github.com/MehdiMamas/gh-runners/internal/github"
 	"github.com/MehdiMamas/gh-runners/internal/localci"
 	"github.com/MehdiMamas/gh-runners/internal/store"
 )
@@ -511,7 +512,15 @@ func (s *Server) ciWatchOnce(ctx context.Context) {
 		}
 		for _, pr := range prs {
 			key := fmt.Sprintf("%s#%d@%s", full, pr.Number, pr.Head.SHA)
-			if seen[key] || localci.TrustPR(ctx, c, pr, localci.Allowlist(cfg.CI[full], login), false) != nil {
+			if seen[key] {
+				// The head already ran. Its secret jobs were skipped until an
+				// allowed login approves this commit: run them once then.
+				if s.approvalRerun(ctx, c, owner, repo, full, pr, cfg.CI[full], login, key, seen) {
+					changed = true
+				}
+				continue
+			}
+			if localci.TrustPR(ctx, c, pr, localci.Allowlist(cfg.CI[full], login), false) != nil {
 				continue
 			}
 			if _, _, err := s.queueCI(owner, repo, pr.Number, false, false, true, "", nil); err != nil {
@@ -525,6 +534,47 @@ func (s *Server) ciWatchOnce(ctx context.Context) {
 		_ = os.MkdirAll(filepath.Dir(ciSeenPath()), 0o755)
 		_ = store.WriteJSON(ciSeenPath(), seen, 0o644)
 	}
+}
+
+// approvalRerun queues the secret jobs of a pull request whose head already
+// ran, once, when an allowed login has approved that commit. The seen keys
+// head+approved and head+plain (no secret jobs) keep it to one run and spare
+// the workflow fetch on later rounds. It reports whether seen changed.
+func (s *Server) approvalRerun(ctx context.Context, c *github.Client, owner, repo, full string, pr github.PullRequest, set store.CIRepo, login, key string, seen map[string]bool) bool {
+	done, plain := key+"+approved", key+"+plain"
+	if seen[done] || seen[plain] {
+		return false
+	}
+	data, err := c.FileAt(ctx, owner, repo, localci.WorkflowPath, pr.Head.SHA)
+	if err != nil {
+		return false
+	}
+	wf, err := localci.ParseWorkflow(data)
+	if err != nil {
+		return false
+	}
+	if !wf.HasSecretJobs() {
+		seen[plain] = true
+		return true
+	}
+	if localci.TrustPR(ctx, c, pr, localci.Allowlist(set, login), false) != nil {
+		return false
+	}
+	if ok, err := localci.PullHeadApproved(ctx, c, owner, repo, pr, set, login); err != nil || !ok {
+		return false
+	}
+	var jobs []string
+	for _, n := range wf.Order {
+		if wf.Jobs[n].NeedsSecrets() {
+			jobs = append(jobs, n)
+		}
+	}
+	if _, _, err := s.queueCI(owner, repo, pr.Number, false, false, true, "", jobs); err != nil {
+		s.h.Log.Printf("local ci: %s #%d: %v", full, pr.Number, err)
+		return false
+	}
+	seen[done] = true
+	return true
 }
 
 // WaitCI waits up to d for the Local CI runs to end. The daemon calls it

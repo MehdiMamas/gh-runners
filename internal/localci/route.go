@@ -34,13 +34,16 @@ func osFits(runsOn, goos string) bool {
 // Route picks the machine for a job. Candidates need the job's OS, tools,
 // and for emulator jobs the emulator opt-in. Flutter jobs prefer the host;
 // otherwise the least loaded machine wins, ties going to the host. When
-// nothing fits the reason says what is missing.
-func Route(j *Job, machines []Machine, load func(id string) int) (Machine, string) {
+// nothing fits the reason says what is missing. With localOnly (a job that
+// holds secrets) only the machine running the command may be picked.
+func Route(j *Job, machines []Machine, load func(id string) int, localOnly bool) (Machine, string) {
 	tools, emu := j.Requires()
 	var ok []Machine
 	why := map[string]bool{}
 	for _, m := range machines {
 		switch {
+		case localOnly && !m.Host:
+			why["needs secrets, which stay on this machine"] = true
 		case !osFits(j.RunsOn, m.OS):
 			why["runs-on "+j.RunsOn+" needs a matching OS"] = true
 		case len(Missing(m.Tools, tools)) > 0:
@@ -122,8 +125,12 @@ func (d *Dispatcher) RunJob(ctx context.Context, spec JobSpec) Result {
 		d.busy = map[string]int{}
 	}
 	d.mu.Unlock()
-	m, reason = d.pick(spec.Job)
+	secret := len(spec.SecretEnv) > 0 || spec.SecretValues != nil
+	m, reason = d.pick(spec.Job, secret)
 	if reason != "" {
+		if secret {
+			return Result{Job: spec.Name, Status: Blocked, Reason: "needs secrets, which stay on this machine: " + reason}
+		}
 		return Result{Job: spec.Name, Status: Unsupported, Reason: reason}
 	}
 	key := m.ID + "/" + m.Name
@@ -158,10 +165,10 @@ func (d *Dispatcher) RunJob(ctx context.Context, spec JobSpec) Result {
 	return res
 }
 
-func (d *Dispatcher) pick(j *Job) (Machine, string) {
+func (d *Dispatcher) pick(j *Job, localOnly bool) (Machine, string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	m, reason := Route(j, d.Machines(), func(k string) int { return d.busy[k] })
+	m, reason := Route(j, d.Machines(), func(k string) int { return d.busy[k] }, localOnly)
 	if reason == "" {
 		d.busy[m.ID+"/"+m.Name]++
 	}
