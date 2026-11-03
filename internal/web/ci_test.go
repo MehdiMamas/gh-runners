@@ -44,6 +44,23 @@ func TestCISettings(t *testing.T) {
 	}
 }
 
+func TestPutCIKeepsOtherFields(t *testing.T) {
+	s, h := setup(t)
+	s.ciDispatch = nil
+	// A repo entry whose Allow holds the word collaborators survives a save
+	// that does not touch it, and an entry equal to the zero value is removed.
+	if code := api(t, h, "PUT", "/api/ci/o/r", `{"allow":["collaborators"]}`, nil); code != http.StatusOK {
+		t.Fatalf("put: %d", code)
+	}
+	if code := api(t, h, "PUT", "/api/ci/o/r", `{"post":true,"allow":["collaborators"]}`, nil); code != http.StatusOK {
+		t.Fatalf("put: %d", code)
+	}
+	cfg, _ := store.LoadConfig()
+	if c := cfg.CI["o/r"]; !c.Post || len(c.Allow) != 1 || c.Allow[0] != "collaborators" {
+		t.Fatalf("config %+v", c)
+	}
+}
+
 func TestCIRunValidation(t *testing.T) {
 	s, h := setup(t)
 	s.ciDispatch = nil

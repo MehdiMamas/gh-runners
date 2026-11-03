@@ -254,3 +254,13 @@ func (c *Client) ListOpenIssues(ctx context.Context, owner, repo string) ([]Issu
 	}
 	return all, nil
 }
+
+// CollaboratorPermission returns a user's permission on a repo: admin,
+// maintain, write, triage or read. A user who is no collaborator is a 404 error.
+func (c *Client) CollaboratorPermission(ctx context.Context, owner, repo, user string) (string, error) {
+	var out struct {
+		Permission string `json:"permission"`
+	}
+	err := c.Do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/collaborators/%s/permission", owner, repo, url.PathEscape(user)), nil, &out)
+	return out.Permission, err
+}
