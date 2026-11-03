@@ -82,3 +82,19 @@ func TestUnsupportedPostsAndMergesNothing(t *testing.T) {
 		t.Errorf("output lacks NOT SUPPORTED:\n%s", out.String())
 	}
 }
+
+type failExec struct{}
+
+func (failExec) RunJob(ctx context.Context, s JobSpec) Result {
+	return Result{Job: s.Name, Status: Fail, Reason: "step failed: x"}
+}
+
+func TestFailedJobNeverGivesCIPassedSuccess(t *testing.T) {
+	end := last(runStatuses(t, emuWorkflow, `[]`, failExec{}, nil))
+	if p := end["ci-passed"]; p["state"] == "success" || p["state"] == "pending" {
+		t.Errorf("ci-passed ended %v", p)
+	}
+	if p := end["local-ci/rules"]; p["state"] == "success" {
+		t.Errorf("rules ended %v", p)
+	}
+}

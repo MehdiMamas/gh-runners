@@ -5,7 +5,9 @@ package localci
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -29,6 +31,8 @@ type Job struct {
 	Env     map[string]string
 	Outputs map[string]string
 	Steps   []Step
+	// Timeout is timeout-minutes; 0 means unset (DefaultJobTimeout applies).
+	Timeout time.Duration
 	// Raw is the job's YAML text, used to spot secrets and aggregate jobs.
 	Raw string
 }
@@ -43,9 +47,21 @@ type Step struct {
 	With    map[string]string
 	Env     map[string]string
 	WorkDir string
+	Timeout time.Duration // timeout-minutes; 0 means unset
+}
+
+// minutesOf reads a timeout-minutes value. An expression or anything that
+// is not a positive number counts as unset.
+func minutesOf(n yaml.Node) time.Duration {
+	f, err := strconv.ParseFloat(n.Value, 64)
+	if n.Kind != yaml.ScalarNode || err != nil || f <= 0 {
+		return 0
+	}
+	return time.Duration(f * float64(minuteUnit))
 }
 
 type rawJob struct {
+	Timeout  yaml.Node  `yaml:"timeout-minutes"`
 	Needs    stringList `yaml:"needs"`
 	If       string     `yaml:"if"`
 	RunsOn   yaml.Node  `yaml:"runs-on"`
@@ -65,6 +81,7 @@ type rawJob struct {
 		With    map[string]string `yaml:"with"`
 		Env     map[string]string `yaml:"env"`
 		WorkDir string            `yaml:"working-directory"`
+		Timeout yaml.Node         `yaml:"timeout-minutes"`
 	} `yaml:"steps"`
 }
 
@@ -105,7 +122,7 @@ func ParseWorkflow(data []byte) (*Workflow, error) {
 		raw, _ := yaml.Marshal(node)
 		j := &Job{
 			Name: name, Needs: rj.Needs, If: rj.If, WorkDir: rj.Defaults.Run.WorkDir,
-			Env: rj.Env, Outputs: rj.Outputs, Raw: string(raw),
+			Env: rj.Env, Outputs: rj.Outputs, Raw: string(raw), Timeout: minutesOf(rj.Timeout),
 		}
 		if rj.RunsOn.Kind == yaml.ScalarNode {
 			j.RunsOn = rj.RunsOn.Value
@@ -113,7 +130,7 @@ func ParseWorkflow(data []byte) (*Workflow, error) {
 			j.RunsOn = rj.RunsOn.Content[0].Value
 		}
 		for _, s := range rj.Steps {
-			j.Steps = append(j.Steps, Step{ID: s.ID, Name: s.Name, If: s.If, Uses: s.Uses, Run: s.Run, With: s.With, Env: s.Env, WorkDir: s.WorkDir})
+			j.Steps = append(j.Steps, Step{ID: s.ID, Name: s.Name, If: s.If, Uses: s.Uses, Run: s.Run, With: s.With, Env: s.Env, WorkDir: s.WorkDir, Timeout: minutesOf(s.Timeout)})
 		}
 		w.Jobs[name] = j
 		w.Order = append(w.Order, name)

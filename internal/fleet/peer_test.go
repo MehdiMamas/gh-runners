@@ -525,7 +525,7 @@ func TestPeerCICancelStopsTheJob(t *testing.T) {
 	cancel()
 	select {
 	case r := <-res:
-		if r.Status != localci.Skipped || r.Reason != "cancelled" {
+		if r.Status != localci.Blocked || r.Reason != "cancelled" {
 			t.Fatalf("got %v %q", r.Status, r.Reason)
 		}
 	case <-time.After(10 * time.Second):

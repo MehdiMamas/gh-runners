@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -40,7 +41,16 @@ type Result struct {
 	Duration time.Duration
 	Log      string // path of the job's log file
 	Machine  string // which machine ran it; empty when nothing ran
+	// Infra is set when the job failed on a tool crash (see infraMarkers)
+	// that a retry did not clear, not on a test.
+	Infra bool
 }
+
+// DefaultJobTimeout ends a job that has no timeout-minutes of its own.
+const DefaultJobTimeout = 60 * time.Minute
+
+// minuteUnit is what one timeout-minutes is worth; tests shorten it.
+var minuteUnit = time.Minute
 
 // JobSpec is everything an executor needs to run one job.
 type JobSpec struct {
@@ -259,7 +269,13 @@ func (LocalExecutor) RunJob(ctx context.Context, spec JobSpec) Result {
 	}
 	env := append([]string{}, spec.Env...)
 	env = append(env, "GITHUB_WORKSPACE="+bashPath(ws))
-	failed, failedStep := false, ""
+	jobTimeout := spec.Job.Timeout
+	if jobTimeout <= 0 {
+		jobTimeout = DefaultJobTimeout
+	}
+	jctx, cancelJob := context.WithTimeout(ctx, jobTimeout)
+	defer cancelJob()
+	failed, failedStep, timedOut, infra := false, "", "", ""
 	for i, st := range spec.Job.Steps {
 		label := st.Name
 		if label == "" {
@@ -284,10 +300,49 @@ func (LocalExecutor) RunJob(ctx context.Context, spec JobSpec) Result {
 		}
 		fmt.Fprintf(lf, "::step %d: %s\n", i+1, label)
 		var err error
-		if st.Uses != "" {
-			err = runUses(ctx, st, ws, spec.RunDir, env, lf)
-		} else {
-			err = runScript(ctx, st, spec.Job, ws, env, lf)
+		for attempt := 0; attempt < 2; attempt++ {
+			sctx, cancelStep, limit := jctx, func() {}, jobTimeout
+			if st.Timeout > 0 {
+				sctx, cancelStep = context.WithTimeout(jctx, st.Timeout)
+				limit = st.Timeout
+			}
+			off, _ := lf.Seek(0, io.SeekCurrent)
+			if st.Uses != "" {
+				err = runUses(sctx, st, ws, spec.RunDir, env, lf)
+			} else {
+				err = runScript(sctx, st, spec.Job, ws, env, lf)
+			}
+			expired := errors.Is(sctx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
+			cancelStep()
+			if expired {
+				if jctx.Err() != nil {
+					limit = jobTimeout
+				}
+				if timedOut == "" {
+					timedOut = fmt.Sprintf("timed out after %s in step %s", limit, label)
+				}
+				if err == nil {
+					err = errors.New(timedOut)
+				}
+				break
+			}
+			out := stepOutput(spec.Log, off)
+			if err == nil {
+				if testFailed(out) {
+					err = errors.New("test output reports failures (exit code was 0)")
+				}
+				break
+			}
+			marker := infraMarker(out)
+			if marker == "" {
+				break
+			}
+			if attempt == 0 {
+				fmt.Fprintf(lf, "::retry step %d: %s\n", i+1, marker)
+				continue
+			}
+			res.Infra = true
+			infra = fmt.Sprintf("infrastructure failure: %s (retried once)", marker)
 		}
 		if err != nil {
 			fmt.Fprintf(lf, "::error %v\n", err)
@@ -295,10 +350,19 @@ func (LocalExecutor) RunJob(ctx context.Context, spec JobSpec) Result {
 				failed, failedStep = true, label
 			}
 		}
+		if jctx.Err() != nil {
+			break
+		}
 	}
 	if failed {
 		if portClashLog(spec.Log) {
 			return finish(Blocked, "port clash with another process")
+		}
+		if timedOut != "" {
+			return finish(Fail, timedOut)
+		}
+		if infra != "" {
+			return finish(Fail, infra)
 		}
 		return finish(Fail, "step failed: "+failedStep)
 	}
@@ -434,7 +498,21 @@ func runCmd(ctx context.Context, dir string, env []string, log io.Writer, name s
 	if err := cmd.Wait(); err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
+	// A step whose context ended never passes, even when the shell of a
+	// killed process tree still exited 0.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
 	return nil
+}
+
+// stepOutput is the job log from offset off on: what one step wrote.
+func stepOutput(path string, off int64) string {
+	b, err := os.ReadFile(path)
+	if err != nil || off < 0 || off > int64(len(b)) {
+		return ""
+	}
+	return string(b[off:])
 }
 
 func capture(ctx context.Context, dir string, env []string, name string, args ...string) (string, error) {

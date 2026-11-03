@@ -62,6 +62,7 @@ type ciResult struct {
 	Status     localci.Status `json:"status"`
 	Reason     string         `json:"reason"`
 	DurationMS int64          `json:"duration_ms"`
+	Infra      bool           `json:"infra,omitempty"`
 }
 
 var tarballRe = regexp.MustCompile(`^/repos/(` + name + `)/(` + name + `)/tarball/([0-9a-fA-F]{7,40})$`)
@@ -260,7 +261,9 @@ func runRemote(ctx context.Context, spec localci.JobSpec, c *conn, logs *ciLogSe
 	switch {
 	case ctx.Err() != nil:
 		_ = c.send(frame{Type: tCICancel, Path: id})
-		res.Status, res.Reason, res.Duration = localci.Skipped, "cancelled", time.Since(start)
+		// A cancelled job is no verdict: Skipped would count as passed
+		// and could set ci-passed (#137).
+		res.Status, res.Reason, res.Duration = localci.Blocked, "cancelled", time.Since(start)
 		return res
 	case err != nil:
 		fmt.Fprintln(lf, "::error machine went offline:", err)
@@ -275,6 +278,7 @@ func runRemote(ctx context.Context, spec localci.JobSpec, c *conn, logs *ciLogSe
 		return fail("bad result from the machine")
 	}
 	res.Status, res.Reason, res.Duration = cr.Status, cr.Reason, time.Duration(cr.DurationMS)*time.Millisecond
+	res.Infra = cr.Infra
 	return res
 }
 
@@ -389,7 +393,7 @@ func (r *ciRunner) run(ctx context.Context, c *conn, f frame) frame {
 	finish := func(res localci.Result) frame {
 		close(stopTail)
 		<-tailDone
-		b, _ := json.Marshal(ciResult{Status: res.Status, Reason: res.Reason, DurationMS: res.Duration.Milliseconds()})
+		b, _ := json.Marshal(ciResult{Status: res.Status, Reason: res.Reason, DurationMS: res.Duration.Milliseconds(), Infra: res.Infra})
 		return frame{Status: http.StatusOK, Body: b}
 	}
 

@@ -48,7 +48,11 @@ func CommentBody(in CommentInput) string {
 	for _, r := range in.Results {
 		res := string(r.Status)
 		if r.Reason != "" && r.Status != Pass {
-			res += " - " + Scrub(r.Reason, in.Secrets)
+			prefix := ""
+			if r.Infra {
+				prefix = "Infrastructure: "
+			}
+			res += " - " + prefix + Scrub(r.Reason, in.Secrets)
 		}
 		mach := r.Machine
 		if mach == "" {
