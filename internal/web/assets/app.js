@@ -1126,11 +1126,11 @@ function ciDialog(full) {
     h('span', { class: 'ci-sw-text' }, h('span', {}, title), h('span', { class: 'hint' }, hint)));
   const settings = h('div', { class: 'ci-settings' },
     opt('watch', 'Run pull requests automatically', 'Every new commit on an open pull request runs here, if its author is allowed below.'),
-    opt('post', 'Post results on the pull request', 'Adds a check with the result of each job. Off: results stay on this machine.'),
-    opt('merge', 'Merge when everything passes', 'Only pull requests that are approved and green on every job.'),
     sw(hasCollab, (v) => { collabOn = v; save(); },
       h('span', { class: 'ci-sw-text' }, h('span', {}, 'Also run pull requests from repo collaborators'),
         h('span', { class: 'hint' }, 'People with write access to the repo. Forks never run on their own. Jobs that use secrets still wait for an approval from an author listed below.'))),
+    opt('post', 'Post results on the pull request', 'Adds a check with the result of each job. Off: results stay on this machine.'),
+    opt('merge', 'Merge when everything passes', 'Only pull requests that are approved and green on every job.'),
     h('label', { class: 'field' }, 'Authors whose pull requests run on their own', allow,
       h('span', { class: 'hint' }, 'Comma separated GitHub logins. Empty means only you. Their approval of a commit lets jobs that use secrets run.')));
 
