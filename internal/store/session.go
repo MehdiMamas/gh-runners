@@ -86,3 +86,29 @@ func ConsumeKeepRunning() bool {
 	d := cur.Sub(time.Unix(saved, 0))
 	return d < bootTolerance && d > -bootTolerance
 }
+
+// DaemonLivePath is the marker a running daemon keeps. Still there at the
+// next start means the last daemon ended by a reboot, logout, crash or plain
+// signal, so the runners that were on stay on.
+func DaemonLivePath() string { return filepath.Join(Home(), "daemon-live") }
+
+// SetDaemonLive writes the marker with the current boot time.
+func SetDaemonLive() error {
+	if err := os.MkdirAll(Home(), 0o755); err != nil {
+		return err
+	}
+	var content []byte
+	if bt, err := BootTime(); err == nil {
+		content = []byte(strconv.FormatInt(bt.Unix(), 10))
+	}
+	return os.WriteFile(DaemonLivePath(), content, 0o644)
+}
+
+// ClearDaemonLive removes the marker (a deliberate stop).
+func ClearDaemonLive() { _ = os.Remove(DaemonLivePath()) }
+
+// DaemonLiveBefore reports whether the marker exists, of any age and boot.
+func DaemonLiveBefore() bool {
+	_, err := os.Stat(DaemonLivePath())
+	return err == nil
+}

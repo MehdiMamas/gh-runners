@@ -114,3 +114,29 @@ func TestSetKeepRunningWritesBootTime(t *testing.T) {
 		t.Fatal("ClearKeepRunning left the marker")
 	}
 }
+
+func TestDaemonLive(t *testing.T) {
+	t.Setenv("GH_RUNNERS_HOME", t.TempDir())
+	if DaemonLiveBefore() {
+		t.Fatal("no marker yet")
+	}
+	if err := SetDaemonLive(); err != nil {
+		t.Fatal(err)
+	}
+	if !DaemonLiveBefore() {
+		t.Fatal("marker missing")
+	}
+	// Another boot time and an old mtime still count.
+	if err := os.WriteFile(DaemonLivePath(), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-1000 * time.Hour)
+	_ = os.Chtimes(DaemonLivePath(), old, old)
+	if !DaemonLiveBefore() {
+		t.Fatal("old marker from another boot must count")
+	}
+	ClearDaemonLive()
+	if DaemonLiveBefore() {
+		t.Fatal("marker not cleared")
+	}
+}

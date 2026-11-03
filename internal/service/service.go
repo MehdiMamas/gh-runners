@@ -82,7 +82,11 @@ func Executable() (string, error) {
 func Install() (string, error) { return install() }
 
 // Uninstall stops the daemon and removes the login entry.
-func Uninstall() error { return uninstall() }
+func Uninstall() error {
+	err := uninstall()
+	store.ClearDaemonLive()
+	return err
+}
 
 // UninstallKeepRunning removes the login entry but leaves a daemon running
 // until logout, so the dashboard that asked for it stays up.
@@ -111,6 +115,7 @@ func Stop() error {
 	// A signal-driven exit (launchd's bootout) leaves the restart marker;
 	// an explicit stop must come back with everything stopped.
 	store.ClearKeepRunning()
+	store.ClearDaemonLive()
 	return err
 }
 
