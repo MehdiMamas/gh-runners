@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -95,11 +96,12 @@ func (s *Server) putCI(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, err)
 		return
 	}
-	set := store.CIRepo{Watch: req.Watch, Post: req.Post, Merge: req.Merge, Allow: allow}
+	set := cfg.CI[full]
+	set.Watch, set.Post, set.Merge, set.Allow = req.Watch, req.Post, req.Merge, allow
 	if cfg.CI == nil {
 		cfg.CI = map[string]store.CIRepo{}
 	}
-	if set.Watch || set.Post || set.Merge || len(set.Allow) > 0 {
+	if !reflect.DeepEqual(set, store.CIRepo{}) {
 		cfg.CI[full] = set
 	} else {
 		delete(cfg.CI, full)
@@ -509,7 +511,7 @@ func (s *Server) ciWatchOnce(ctx context.Context) {
 		}
 		for _, pr := range prs {
 			key := fmt.Sprintf("%s#%d@%s", full, pr.Number, pr.Head.SHA)
-			if seen[key] || localci.CheckTrust(pr, localci.Allowlist(cfg.CI[full], login), false) != nil {
+			if seen[key] || localci.TrustPR(ctx, c, pr, localci.Allowlist(cfg.CI[full], login), false) != nil {
 				continue
 			}
 			if _, _, err := s.queueCI(owner, repo, pr.Number, false, false, true, "", nil); err != nil {

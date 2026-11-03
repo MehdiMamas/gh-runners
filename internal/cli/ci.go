@@ -155,7 +155,7 @@ func newCIWatchCmd() *cobra.Command {
 						if seen[key] || sig.Err() != nil {
 							continue
 						}
-						if err := localci.CheckTrust(pr, localci.Allowlist(set, me.Login), false); err != nil {
+						if err := localci.TrustPR(sig, c, pr, localci.Allowlist(set, me.Login), false); err != nil {
 							fmt.Fprintln(out, err)
 						} else {
 							o := localci.Options{
@@ -247,7 +247,7 @@ func newCIConfigCmd() *cobra.Command {
 	cmd.Flags().StringVar(&watch, "watch", "", "on|off: run my PRs automatically on every new commit")
 	cmd.Flags().StringVar(&post, "post", "", "on|off: post statuses and a comment on the PR")
 	cmd.Flags().StringVar(&merge, "merge", "", "on|off: squash-merge when every job passed and the PR is approved")
-	cmd.Flags().StringVar(&allow, "allow", "", "comma separated authors whose PRs run on their own (default: you)")
+	cmd.Flags().StringVar(&allow, "allow", "", "comma separated authors whose PRs run on their own (default: you); the word collaborators adds everyone with write, maintain or admin access")
 	return cmd
 }
 

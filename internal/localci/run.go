@@ -112,7 +112,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	if pr.State != "open" {
 		return rep, fmt.Errorf("PR #%d is %s", pr.Number, pr.State)
 	}
-	if err := CheckTrust(pr, Allowlist(o.Settings, o.Login), o.Approve); err != nil {
+	if err := TrustPR(ctx, c, pr, Allowlist(o.Settings, o.Login), o.Approve); err != nil {
 		return rep, err
 	}
 	sha := pr.Head.SHA
