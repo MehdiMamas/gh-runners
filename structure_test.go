@@ -14,7 +14,7 @@ const maxLines = 800
 // bigFiles are the files that were already over the cap when it was set.
 // Each may shrink but must not grow past its recorded size.
 var bigFiles = map[string]int{
-	"internal/web/assets/app.js": 1956,
+	"internal/web/assets/app.js": 1720,
 	"internal/cli/commands.go":   920,
 	"internal/fleet/peer.go":     972,
 }

@@ -64,6 +64,15 @@ func TestPutCIKeepsOtherFields(t *testing.T) {
 	if c := cfg.CI["o/r"]; !c.Post || len(c.Allow) != 1 || c.Allow[0] != "collaborators" {
 		t.Fatalf("config %+v", c)
 	}
+	// A login next to the word survives a round trip through GET /api/ci.
+	if code := api(t, h, "PUT", "/api/ci/o/r", `{"allow":["alice","collaborators"]}`, nil); code != http.StatusOK {
+		t.Fatalf("put: %d", code)
+	}
+	var v ciView
+	if code := api(t, h, "GET", "/api/ci", "", &v); code != http.StatusOK || len(v.Repos) != 1 ||
+		len(v.Repos[0].Allow) != 2 || v.Repos[0].Allow[0] != "alice" || v.Repos[0].Allow[1] != "collaborators" {
+		t.Fatalf("get: %d %+v", code, v)
+	}
 }
 
 func TestCIRunValidation(t *testing.T) {
