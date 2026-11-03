@@ -1112,9 +1112,13 @@ function ciDialog(full) {
   const set = { watch: !!cur.watch, post: !!cur.post, merge: !!cur.merge };
   let timer = null;
   let liveTimer = null;
-  const allow = h('input', { type: 'text', value: list(cur.allow), placeholder: (S.state && S.state.auth.login) || 'you', 'aria-label': 'Allowed authors', onchange: () => save() });
+  const allowList = cur.allow || [];
+  const isCollab = (a) => a.toLowerCase() === 'collaborators';
+  const hasCollab = allowList.some(isCollab);
+  let collabOn = hasCollab;
+  const allow = h('input', { type: 'text', value: list(allowList.filter((a) => !isCollab(a))), placeholder: (S.state && S.state.auth.login) || 'you', 'aria-label': 'Allowed authors', onchange: () => save() });
   const save = () => guard(async () => {
-    await api('PUT', '/api/ci/' + full.split('/').map(encodeURIComponent).join('/'), { ...set, allow: split(allow.value) });
+    await api('PUT', '/api/ci/' + full.split('/').map(encodeURIComponent).join('/'), { ...set, allow: [...split(allow.value).filter((a) => !isCollab(a)), ...(collabOn ? ['collaborators'] : [])] });
     toast('Local CI settings saved for ' + full);
     await loadCI();
   });
@@ -1124,8 +1128,11 @@ function ciDialog(full) {
     opt('watch', 'Run pull requests automatically', 'Every new commit on an open pull request runs here, if its author is allowed below.'),
     opt('post', 'Post results on the pull request', 'Adds a check with the result of each job. Off: results stay on this machine.'),
     opt('merge', 'Merge when everything passes', 'Only pull requests that are approved and green on every job.'),
+    sw(hasCollab, (v) => { collabOn = v; save(); },
+      h('span', { class: 'ci-sw-text' }, h('span', {}, 'Also run pull requests from repo collaborators'),
+        h('span', { class: 'hint' }, 'People with write access to the repo. Forks never run on their own. Jobs that use secrets still wait for an approval from an author listed below.'))),
     h('label', { class: 'field' }, 'Authors whose pull requests run on their own', allow,
-      h('span', { class: 'hint' }, 'Comma separated. Empty means only you. Pull requests from forks never run on their own.')));
+      h('span', { class: 'hint' }, 'Comma separated GitHub logins. Empty means only you. Their approval of a commit lets jobs that use secrets run.')));
 
   const prInput = h('input', { type: 'number', min: 1, placeholder: 'PR number', 'aria-label': 'Pull request number' });
   const dry = h('input', { type: 'checkbox', checked: true });
