@@ -218,6 +218,36 @@ func (c *Client) Approved(ctx context.Context, owner, repo string, n int) (bool,
 	return ok, nil
 }
 
+// Review is one review of a pull request.
+type Review struct {
+	State    string // APPROVED, CHANGES_REQUESTED, DISMISSED, COMMENTED
+	CommitID string // the head commit the review was made on
+	Login    string
+}
+
+// PullRequestReviews lists the reviews of a pull request, oldest first.
+func (c *Client) PullRequestReviews(ctx context.Context, owner, repo string, n int) ([]Review, error) {
+	var all []Review
+	for page := 1; ; page++ {
+		var rs []struct {
+			State    string `json:"state"`
+			CommitID string `json:"commit_id"`
+			User     struct {
+				Login string `json:"login"`
+			} `json:"user"`
+		}
+		if err := c.Do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=100&page=%d", owner, repo, n, page), nil, &rs); err != nil {
+			return nil, err
+		}
+		for _, r := range rs {
+			all = append(all, Review{State: r.State, CommitID: r.CommitID, Login: r.User.Login})
+		}
+		if len(rs) < 100 {
+			return all, nil
+		}
+	}
+}
+
 // SquashMerge squash-merges a pull request, pinned to the head sha that was tested.
 func (c *Client) SquashMerge(ctx context.Context, owner, repo string, n int, sha string) error {
 	return c.Do(ctx, http.MethodPut, fmt.Sprintf("/repos/%s/%s/pulls/%d/merge", owner, repo, n),

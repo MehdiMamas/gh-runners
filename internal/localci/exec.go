@@ -63,6 +63,11 @@ type JobSpec struct {
 	// RunEnv lets a fleet member rebuild the environment itself; the host's
 	// Env never leaves the host.
 	RunEnv RunEnv
+	// SecretEnv are the env pairs whose value came from a secret, and
+	// SecretValues every secret value the job reads (masked in its log).
+	// Never serialised: a job with secrets runs only on this machine.
+	SecretEnv    map[string]string `json:"-"`
+	SecretValues []string          `json:"-"`
 }
 
 // Executor runs one job. The local executor runs it on this machine; a
@@ -241,6 +246,15 @@ func (LocalExecutor) RunJob(ctx context.Context, spec JobSpec) Result {
 		return finish(Fail, err.Error())
 	}
 	defer lf.Close()
+	// Everything written to the log goes through logw; with secrets it hides
+	// their values, also when one is split across two writes.
+	var logw io.Writer = lf
+	flush := func() {}
+	if len(spec.SecretValues) > 0 {
+		mw := newMaskWriter(lf, spec.SecretValues)
+		logw, flush = mw, func() { _ = mw.Flush() }
+		defer flush()
+	}
 	// Whatever the steps started and left running (an emulator that
 	// detached itself) goes with the job, whether it passed, failed or was
 	// cancelled.
@@ -253,22 +267,25 @@ func (LocalExecutor) RunJob(ctx context.Context, spec JobSpec) Result {
 	ws := filepath.Join(spec.RunDir, "src")
 	skipped, err := Extract(spec.Tarball, ws)
 	if err != nil {
-		fmt.Fprintln(lf, "extract failed:", err)
+		fmt.Fprintln(logw, "extract failed:", err)
 		return finish(Fail, "extract failed")
 	}
 	for _, line := range skipped {
-		fmt.Fprintln(lf, line)
+		fmt.Fprintln(logw, line)
 	}
 	// Emulator jobs need their ports free; the emulator lock is already
 	// held, so a taken port belongs to something outside gh-runners.
 	if _, emu := spec.Job.Requires(); emu {
 		if msg := CheckPorts(ctx, EmulatorPorts(ws)); msg != "" {
-			fmt.Fprintln(lf, "::error "+msg)
+			fmt.Fprintln(logw, "::error "+msg)
 			return finish(Blocked, msg)
 		}
 	}
 	env := append([]string{}, spec.Env...)
 	env = append(env, "GITHUB_WORKSPACE="+bashPath(ws))
+	for k, v := range spec.SecretEnv {
+		env = append(env, k+"="+v)
+	}
 	jobTimeout := spec.Job.Timeout
 	if jobTimeout <= 0 {
 		jobTimeout = DefaultJobTimeout
@@ -295,10 +312,10 @@ func (LocalExecutor) RunJob(ctx context.Context, spec JobSpec) Result {
 				continue
 			}
 		default:
-			fmt.Fprintf(lf, "::step %d (%s): skipped, unsupported condition %q\n", i+1, label, st.If)
+			fmt.Fprintf(logw, "::step %d (%s): skipped, unsupported condition %q\n", i+1, label, st.If)
 			continue
 		}
-		fmt.Fprintf(lf, "::step %d: %s\n", i+1, label)
+		fmt.Fprintf(logw, "::step %d: %s\n", i+1, label)
 		var err error
 		for attempt := 0; attempt < 2; attempt++ {
 			sctx, cancelStep, limit := jctx, func() {}, jobTimeout
@@ -306,12 +323,14 @@ func (LocalExecutor) RunJob(ctx context.Context, spec JobSpec) Result {
 				sctx, cancelStep = context.WithTimeout(jctx, st.Timeout)
 				limit = st.Timeout
 			}
+			flush()
 			off, _ := lf.Seek(0, io.SeekCurrent)
 			if st.Uses != "" {
-				err = runUses(sctx, st, ws, spec.RunDir, env, lf)
+				err = runUses(sctx, st, ws, spec.RunDir, env, logw)
 			} else {
-				err = runScript(sctx, st, spec.Job, ws, env, lf)
+				err = runScript(sctx, st, spec.Job, ws, env, logw)
 			}
+			flush()
 			expired := errors.Is(sctx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
 			cancelStep()
 			if expired {
@@ -338,14 +357,14 @@ func (LocalExecutor) RunJob(ctx context.Context, spec JobSpec) Result {
 				break
 			}
 			if attempt == 0 {
-				fmt.Fprintf(lf, "::retry step %d: %s\n", i+1, marker)
+				fmt.Fprintf(logw, "::retry step %d: %s\n", i+1, marker)
 				continue
 			}
 			res.Infra = true
 			infra = fmt.Sprintf("infrastructure failure: %s (retried once)", marker)
 		}
 		if err != nil {
-			fmt.Fprintf(lf, "::error %v\n", err)
+			fmt.Fprintf(logw, "::error %v\n", err)
 			if !failed {
 				failed, failedStep = true, label
 			}
@@ -354,6 +373,7 @@ func (LocalExecutor) RunJob(ctx context.Context, spec JobSpec) Result {
 			break
 		}
 	}
+	flush()
 	if failed {
 		if portClashLog(spec.Log) {
 			return finish(Blocked, "port clash with another process")

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -25,7 +26,7 @@ func newCICmd() *cobra.Command {
 		Use:   "ci",
 		Short: "Run a repo's ci.yml on this machine and report back on the pull request",
 	}
-	cmd.AddCommand(newCIRunCmd(), newCIQueueCmd(), newCICancelCmd(), newCIWatchCmd(), newCIConfigCmd(), newCIDoctorCmd(), newCIEmulatorCmd(), newCILockCmd())
+	cmd.AddCommand(newCIRunCmd(), newCIQueueCmd(), newCICancelCmd(), newCIWatchCmd(), newCIConfigCmd(), newCIDoctorCmd(), newCIEmulatorCmd(), newCILockCmd(), newCISecretCmd())
 	return cmd
 }
 
@@ -381,4 +382,114 @@ func newCIDoctorCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&ref, "ref", "", "branch or sha to read ci.yml from (default: the default branch)")
 	return cmd
+}
+
+func newCISecretCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "secret",
+		Short: "Keep a repo's secrets on this machine, for the jobs of a PR whose head commit an allowed reviewer approved",
+		Long: `Secrets live only in ~/.gh-runners/secrets/<owner>/<repo>.json on this machine
+(mode 0600) and never leave it. A job that reads ${{ secrets.NAME }} gets them
+only after a login on the allowlist approved the exact head commit of the PR
+(or you ran "ci run --approve"). An approved PR runs its own code with these
+secrets and your keychain, like a self-hosted runner: approve only commits you
+have read.`,
+	}
+	cmd.AddCommand(newCISecretSetCmd(), newCISecretRmCmd(), newCISecretListCmd())
+	return cmd
+}
+
+func newCISecretSetCmd() *cobra.Command {
+	var file string
+	cmd := &cobra.Command{
+		Use:   "set <owner/repo> <NAME>",
+		Short: "Set a secret: the value is read from stdin, or --file gives a file whose path jobs get",
+		Example: `  printf '%s' "$TOKEN" | gh-runners ci secret set owner/repo UPLOAD_TOKEN
+  gh-runners ci secret set owner/repo SERVICE_KEY --file /path/key.json`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if _, _, err := splitRepo(args[0]); err != nil {
+				return err
+			}
+			sec := store.Secret{}
+			if file != "" {
+				abs, err := filepath.Abs(file)
+				if err != nil {
+					return err
+				}
+				if _, err := os.Stat(abs); err != nil {
+					return err
+				}
+				sec.File = abs
+			} else {
+				b, err := io.ReadAll(cmd.InOrStdin())
+				if err != nil {
+					return err
+				}
+				sec.Value = strings.TrimSuffix(strings.TrimSuffix(string(b), "\n"), "\r")
+				if sec.Value == "" {
+					return fmt.Errorf("no value on stdin (pipe it in, or use --file)")
+				}
+			}
+			if err := store.SetSecret(args[0], args[1], sec); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s: secret %s saved on this machine\n", args[0], args[1])
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&file, "file", "", "use this file as the secret; jobs get its absolute path")
+	return cmd
+}
+
+func newCISecretRmCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "rm <owner/repo> <NAME>",
+		Short: "Remove a secret",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if _, _, err := splitRepo(args[0]); err != nil {
+				return err
+			}
+			ok, err := store.RemoveSecret(args[0], args[1])
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("%s has no secret %s", args[0], args[1])
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s: secret %s removed\n", args[0], args[1])
+			return nil
+		},
+	}
+}
+
+func newCISecretListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list <owner/repo>",
+		Short: "List secret names and kind (never the values)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if _, _, err := splitRepo(args[0]); err != nil {
+				return err
+			}
+			m, err := store.LoadSecrets(args[0])
+			if err != nil {
+				return err
+			}
+			names, _ := store.SecretNames(args[0])
+			if len(names) == 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s has no secrets\n", args[0])
+				return nil
+			}
+			for _, n := range names {
+				kind := "value"
+				if m[n].File != "" {
+					kind = "file"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\n", n, kind)
+			}
+			return nil
+		},
+	}
 }

@@ -2,16 +2,21 @@ package web
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/MehdiMamas/gh-runners/internal/github"
 	"github.com/MehdiMamas/gh-runners/internal/localci"
 	"github.com/MehdiMamas/gh-runners/internal/store"
 )
@@ -446,5 +451,77 @@ func TestCIRunUnknownMachine(t *testing.T) {
 	}
 	if n := pendingCount(s); n != 0 {
 		t.Fatalf("%d queued, want 0", n)
+	}
+}
+
+// TestWatchApprovalRequeuesOnce: a head that already ran is queued once more,
+// for its secret jobs, when an allowed login approves that exact commit.
+func TestWatchApprovalRequeuesOnce(t *testing.T) {
+	s, _ := setup(t)
+	s.ciDispatch = nil
+	wf := "jobs:\n  up:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ${{ secrets.UP_TOKEN }}\n"
+	var approved atomic.Bool
+	var reviewCalls atomic.Int32
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/user":
+			_, _ = io.WriteString(w, `{"login":"me"}`)
+		case r.URL.Path == "/repos/o/r/pulls":
+			_, _ = io.WriteString(w, `[{"number":7,"title":"t","state":"open","user":{"login":"me"},"head":{"sha":"abcdef1234","repo":{"full_name":"o/r"}},"base":{"repo":{"full_name":"o/r"}}}]`)
+		case strings.HasSuffix(r.URL.Path, "/pulls/7/reviews"):
+			reviewCalls.Add(1)
+			if approved.Load() {
+				_, _ = io.WriteString(w, `[{"state":"APPROVED","commit_id":"abcdef1234","user":{"login":"me"}}]`)
+			} else {
+				_, _ = io.WriteString(w, `[]`)
+			}
+		case strings.Contains(r.URL.Path, "/contents/"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte(wf))})
+		default:
+			http.NotFound(w, r) // the queued runs then end at once
+		}
+	}))
+	defer fake.Close()
+	old := github.APIBase
+	github.APIBase = fake.URL
+	t.Cleanup(func() { github.APIBase = old })
+	t.Setenv("GH_RUNNERS_TOKEN", "tok")
+	cfg, _ := store.LoadConfig()
+	cfg.CI = map[string]store.CIRepo{"o/r": {Watch: true}}
+	if err := store.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	queued := func() int {
+		s.ci.mu.Lock()
+		defer s.ci.mu.Unlock()
+		return len(s.ci.list)
+	}
+	settle := func() {
+		for end := time.Now().Add(10 * time.Second); s.ci.busy() > 0 && time.Now().Before(end); {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	ctx := context.Background()
+	s.ciWatchOnce(ctx)
+	settle()
+	if n := queued(); n != 1 {
+		t.Fatalf("new head: %d runs queued, want 1", n)
+	}
+	s.ciWatchOnce(ctx)
+	settle()
+	if n := queued(); n != 1 {
+		t.Fatalf("not approved yet: %d runs queued, want 1", n)
+	}
+	approved.Store(true)
+	s.ciWatchOnce(ctx)
+	settle()
+	if n := queued(); n != 2 {
+		t.Fatalf("approved: %d runs queued, want 2", n)
+	}
+	calls := reviewCalls.Load()
+	s.ciWatchOnce(ctx)
+	settle()
+	if n := queued(); n != 2 || reviewCalls.Load() != calls {
+		t.Fatalf("after the approval run: %d runs queued (want 2), %d more review fetches", n, reviewCalls.Load()-calls)
 	}
 }

@@ -22,20 +22,23 @@ const Marker = "<!-- local-ci -->"
 
 // Options is one run of the local CI against a pull request.
 type Options struct {
-	Client   *github.Client
-	Owner    string
-	Repo     string
-	PR       int
-	DryRun   bool     // never post, never merge
-	Approve  bool     // run despite the trust gate
-	Jobs     []string // only these jobs (and what they need); empty means all
-	Workflow string   // workflow file to read at the PR head; empty means WorkflowPath
-	Settings store.CIRepo
-	Login    string // signed-in user, the default allowlist
-	Conc     int    // parallel jobs; default NumCPU/2
-	Exec     Executor
-	Out      io.Writer
-	Before   []Event // events from before the run started (head seen, queued), put first in its feed
+	Client  *github.Client
+	Owner   string
+	Repo    string
+	PR      int
+	DryRun  bool // never post, never merge
+	Approve bool // run despite the trust gate
+	// SecretsOK is set by Run: jobs that read secrets run only when Approve
+	// is set or an allowlisted login approved the exact head commit.
+	SecretsOK bool
+	Jobs      []string // only these jobs (and what they need); empty means all
+	Workflow  string   // workflow file to read at the PR head; empty means WorkflowPath
+	Settings  store.CIRepo
+	Login     string // signed-in user, the default allowlist
+	Conc      int    // parallel jobs; default NumCPU/2
+	Exec      Executor
+	Out       io.Writer
+	Before    []Event // events from before the run started (head seen, queued), put first in its feed
 	// LogURL gives the link to one job's log on this machine's dashboard,
 	// from the run id and the job name. Nil means statuses carry no link.
 	LogURL func(runID, job string) string
@@ -131,6 +134,23 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	if err != nil {
 		return rep, err
 	}
+	o.SecretsOK = o.Approve
+	var secrets map[string]store.Secret
+	if wf.HasSecretJobs() {
+		if !o.SecretsOK {
+			ok, err := PullHeadApproved(ctx, c, o.Owner, o.Repo, pr, o.Settings, o.Login)
+			if err != nil {
+				fmt.Fprintf(o.Out, "could not read reviews: %v\n", err)
+			}
+			o.SecretsOK = ok
+		}
+		if o.SecretsOK {
+			if secrets, err = store.LoadSecrets(o.Owner + "/" + o.Repo); err != nil {
+				return rep, err
+			}
+		}
+	}
+	gate := &SecretGate{OK: o.SecretsOK, Allow: ApprovalLogins(o.Settings, o.Login), SHA: sha, Secrets: secrets}
 	files, err := c.PullRequestFiles(ctx, o.Owner, o.Repo, o.PR)
 	if err != nil {
 		return rep, err
@@ -223,19 +243,30 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	renv := RunEnv{Repo: o.Owner + "/" + o.Repo, SHA: sha, Ref: fmt.Sprintf("refs/pull/%d/merge", o.PR)}
 	jobEnv := ScrubEnv(os.Environ(), renv, nil)
 	jobSecrets := envValues(jobEnv)
+	var secMu sync.Mutex
+	var usedSecrets []string // values the jobs read, for the PR comment
 	runner := func(ctx context.Context, t Task, needs map[string]Result) Result {
 		j := wf.Jobs[t.Name]
-		res := Decide(wf, j, needs, outputs, changesName == t.Name)
+		res := decideJob(wf, j, needs, outputs, changesName == t.Name, gate)
 		if res.Status == "" {
+			spec := JobSpec{
+				Name: t.Name, Job: j, Tarball: tarball, RunDir: filepath.Join(runDir, t.Name),
+				Log: filepath.Join(runDir, "logs", t.Name+".log"),
+				Env: jobEnv, RunEnv: renv,
+			}
+			if j.NeedsSecrets() {
+				spec.Job, spec.SecretEnv = ApplySecrets(j, gate.Secrets)
+				spec.SecretValues = secretValues(j, gate.Secrets)
+				secMu.Lock()
+				usedSecrets = append(usedSecrets, spec.SecretValues...)
+				secMu.Unlock()
+			}
 			ctxName := "local-ci/" + t.Name
 			ev.AddEvent(Event{Kind: "job_started", Job: t.Name, Text: "Job " + t.Name + " started."})
 			status("pending", ctxName, "Running", logLink(t.Name))
-			jobDir := filepath.Join(runDir, t.Name)
-			res = o.Exec.RunJob(ctx, JobSpec{
-				Name: t.Name, Job: j, Tarball: tarball, RunDir: jobDir,
-				Log: filepath.Join(runDir, "logs", t.Name+".log"),
-				Env: jobEnv, RunEnv: renv,
-			})
+			jobDir := spec.RunDir
+			res = o.Exec.RunJob(ctx, spec)
+			res.Reason = MaskString(res.Reason, spec.SecretValues)
 			// The log in logs/ is what people read; the checkout is not kept.
 			_ = os.RemoveAll(filepath.Join(jobDir, "src"))
 			state, desc := "success", "Passed in "+res.Duration.Round(time.Second).String()
@@ -319,7 +350,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		}
 	}
 	if err := c.UpsertComment(ctx, o.Owner, o.Repo, o.PR, Marker, CommentBody(CommentInput{
-		PR: pr, Results: rep.Results, Secrets: jobSecrets,
+		PR: pr, Results: rep.Results, Secrets: append(append([]string{}, jobSecrets...), usedSecrets...),
 		Known: func() []github.Issue {
 			is, _ := c.ListOpenIssues(ctx, o.Owner, o.Repo)
 			return is
@@ -384,6 +415,12 @@ func selectJobs(wf *Workflow, names []string) map[string]bool {
 // Decide settles a job without running it when it can: computed, skipped,
 // unsupported, or aggregate. A zero Status in the answer means "run it".
 func Decide(wf *Workflow, j *Job, needs map[string]Result, outputs map[string]map[string]string, isChanges bool) Result {
+	return decideJob(wf, j, needs, outputs, isChanges, nil)
+}
+
+// decideJob is Decide with the secrets gate of the run; nil means no secrets
+// are available.
+func decideJob(wf *Workflow, j *Job, needs map[string]Result, outputs map[string]map[string]string, isChanges bool, g *SecretGate) Result {
 	if isChanges {
 		return Result{Status: Pass, Reason: "computed from the changed files"}
 	}
@@ -416,7 +453,20 @@ func Decide(wf *Workflow, j *Job, needs map[string]Result, outputs map[string]ma
 		return Result{Status: Unsupported, Reason: "unsupported expression: " + j.If}
 	}
 	if j.NeedsSecrets() {
-		return Result{Status: Skipped, Reason: "needs secrets"}
+		switch {
+		case g == nil:
+			return Result{Status: Skipped, Reason: "needs secrets"}
+		case !g.OK:
+			who := strings.Join(g.Allow, " or ")
+			if who == "" {
+				who = "an allowed reviewer"
+			}
+			return Result{Status: Skipped, Reason: fmt.Sprintf("needs secrets; runs after %s approves commit %s", who, short(g.SHA))}
+		}
+		if n := missingSecret(j, g.Secrets); n != "" {
+			return Result{Status: Skipped, Reason: "needs secrets: missing " + n}
+		}
+		j, _ = ApplySecrets(j, g.Secrets)
 	}
 	for _, s := range j.Steps {
 		if s.Uses != "" && !knownUses(s.Uses) {
