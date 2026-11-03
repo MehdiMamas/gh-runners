@@ -137,12 +137,15 @@ func newFleetTest(t *testing.T) *fleetTest {
 	var mv machinesView
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
 		api(t, f.host, "GET", "/api/machines", "", &mv)
-		if len(mv.Machines) == 1 && mv.Machines[0].Online || time.Now().After(deadline) {
+		if len(mv.Machines) == 1 && mv.Machines[0].Online && m.Status().Connected || time.Now().After(deadline) {
 			break
 		}
 	}
 	if len(mv.Machines) != 1 || !mv.Machines[0].Online || mv.Machines[0].Info.Hostname != "pc2" {
 		t.Fatalf("machines: %+v", mv)
+	}
+	if !m.Status().Connected {
+		t.Fatalf("member not connected: %+v", m.Status())
 	}
 	f.id = mv.Machines[0].ID
 	return f
