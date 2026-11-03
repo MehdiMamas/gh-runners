@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/MehdiMamas/gh-runners/internal/control"
@@ -48,7 +49,8 @@ func TestStartStopped(t *testing.T) {
 	if got := store.LoadLastSession().IDs; len(got) != 1 || got[0] != "a" {
 		t.Fatalf("last session = %v", got)
 	}
-	// A second start with everything already stopped keeps the session.
+	// A second start after a deliberate stop with everything already stopped keeps the session.
+	d.markExit(false)
 	d.startStopped()
 	if got := store.LoadLastSession().IDs; len(got) != 1 || got[0] != "a" {
 		t.Fatalf("empty start overwrote session: %v", got)
@@ -57,6 +59,7 @@ func TestStartStopped(t *testing.T) {
 	a.Disabled = false
 	_ = store.Save(a)
 	_ = store.SetKeepRunning()
+	d.markExit(false)
 	d.startStopped()
 	if a, _ = store.Load("a"); a.Disabled {
 		t.Fatal("keep-running marker ignored")
@@ -100,5 +103,75 @@ func TestShutdownMarker(t *testing.T) {
 				t.Fatalf("marker present = %v, want %v", err == nil, c.want)
 			}
 		})
+	}
+}
+
+func liveSetup(t *testing.T) *Daemon {
+	t.Helper()
+	t.Setenv("GH_RUNNERS_HOME", t.TempDir())
+	fakeRunner(t, "a", false)
+	return &Daemon{Log: log.New(io.Discard, "", 0)}
+}
+
+func TestStartStoppedAfterReboot(t *testing.T) {
+	// startStopped -> signal exit (markExit(true)) -> startStopped keeps runners on.
+	d := liveSetup(t)
+	d.startStopped()
+	if a, _ := store.Load("a"); !a.Disabled {
+		t.Fatal("first start should stop the runner")
+	}
+	a, _ := store.Load("a")
+	a.Disabled = false
+	_ = store.Save(a)
+	d.markExit(true)
+	if !store.DaemonLiveBefore() {
+		t.Fatal("signal exit must keep the marker")
+	}
+	d.startStopped()
+	if a, _ = store.Load("a"); a.Disabled {
+		t.Fatal("runner stopped after a reboot")
+	}
+}
+
+func TestStartStoppedAfterDeliberateStop(t *testing.T) {
+	d := liveSetup(t)
+	d.startStopped()
+	a, _ := store.Load("a")
+	a.Disabled = false
+	_ = store.Save(a)
+	d.markExit(false)
+	if store.DaemonLiveBefore() {
+		t.Fatal("deliberate stop must clear the marker")
+	}
+	d.startStopped()
+	if a, _ = store.Load("a"); !a.Disabled {
+		t.Fatal("runner should start stopped after a deliberate stop")
+	}
+}
+
+func TestStartStoppedWritesMarkerAlways(t *testing.T) {
+	d := liveSetup(t)
+	d.paused.Store(true)
+	d.startStopped()
+	if !store.DaemonLiveBefore() {
+		t.Fatal("paused start must write the marker")
+	}
+	store.ClearDaemonLive()
+	t.Setenv("GH_RUNNERS_HOME", t.TempDir()) // no runners at all
+	d.paused.Store(false)
+	d.startStopped()
+	if !store.DaemonLiveBefore() {
+		t.Fatal("start with no runners must write the marker")
+	}
+}
+
+func TestStartStoppedLogsReturn(t *testing.T) {
+	d := liveSetup(t)
+	var buf strings.Builder
+	d.Log = log.New(&buf, "", 0)
+	_ = store.SetDaemonLive()
+	d.startStopped()
+	if !strings.Contains(buf.String(), "came back after a reboot or crash") {
+		t.Fatalf("log = %q", buf.String())
 	}
 }

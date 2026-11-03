@@ -23,12 +23,24 @@ func stopAtStart(runners []store.Runner, paused, keepRunning bool) (stop []store
 // startStopped applies stopAtStart to the stored runners.
 func (d *Daemon) startStopped() {
 	keep := store.ConsumeKeepRunning()
+	live := store.DaemonLiveBefore()
+	if err := store.SetDaemonLive(); err != nil {
+		d.Log.Printf("write daemon-live marker: %v", err)
+	}
 	runners, err := store.List()
 	if err != nil {
 		d.Log.Printf("list runners: %v", err)
 		return
 	}
-	stop, session := stopAtStart(runners, d.paused.Load(), keep)
+	if live && !keep {
+		for _, r := range runners {
+			if r.Configured() && !r.Disabled {
+				d.Log.Printf("came back after a reboot or crash; the runners that were on stay on")
+				break
+			}
+		}
+	}
+	stop, session := stopAtStart(runners, d.paused.Load(), keep || live)
 	if len(stop) == 0 {
 		return
 	}
@@ -50,4 +62,13 @@ func (d *Daemon) startStopped() {
 		n++
 	}
 	d.Log.Printf("started with %d runner(s) stopped; the dashboard, menu and `gh-runners start --last` bring them back", n)
+}
+
+// markExit clears the daemon-live marker when the daemon was asked to stop
+// (POST /shutdown). A signal (reboot, logout, bootout, kill) leaves it, so
+// the next start brings the runners back.
+func (d *Daemon) markExit(signalled bool) {
+	if !signalled {
+		store.ClearDaemonLive()
+	}
 }

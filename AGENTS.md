@@ -17,6 +17,9 @@ gh-runners: one static Go binary that sets up and supervises self-hosted GitHub 
 ## CI
 `.github/workflows`: `ci.yml` (gofmt, vet, race tests on Linux, macOS, Windows), `e2e.yml` (manual end-to-end), `release.yml` (manual release).
 
+## Start behaviour (#144)
+- The daemon writes `~/.gh-runners/daemon-live` at every start (`startStopped`) and removes it on a deliberate stop (`/shutdown` via `markExit`, `service.Stop`/`Uninstall`). A marker still there at start means a reboot, logout, crash or signal: runners that were on stay on. Otherwise a fresh start stops them (`stopAtStart`).
+
 ## Dashboard rules (also in CLAUDE.md)
 - Test every new or changed input in a real browser: type, wait 8+ seconds, confirm it survives, save, check the saved value.
 - Redraw tabs only through `redraw(tab)`, never call `renderX()` from timers or fetch callbacks (`TestAppJSRedrawsThroughGuard` enforces it).

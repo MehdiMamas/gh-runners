@@ -220,6 +220,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 		select {
 		case <-ctx.Done():
+			d.markExit(signalled.Err() != nil)
 			if signalled.Err() != nil {
 				d.keepRunningForRestart()
 			}
