@@ -105,12 +105,12 @@ function stateClass(s) {
   if (!s) return '';
   if (s === 'running' || s === 'online' || s === 'jit-busy') return 'ok';
   if (s === 'busy') return 'info';
-  if (s.startsWith('restarting') || s === 'starting' || s === 'stopping' || s === 'jit-idle' || s === 'paused') return 'warn';
+  if (s.startsWith('restarting') || s === 'starting' || s === 'stopping' || s === 'jit-idle' || s === 'paused' || s === 'held') return 'warn';
   if (s === 'not registered' || s === 'error' || s === 'missing' || s === 'no daemon') return 'bad';
   return '';
 }
 function stateText(s) {
-  return { running: 'Running', stopped: 'Stopped', starting: 'Starting', stopping: 'Stopping', online: 'Online on GitHub', offline: 'Offline on GitHub', busy: 'Running a job', missing: 'Not on GitHub', error: 'GitHub unreachable', 'not registered': 'Not registered', 'jit-idle': 'Waiting for its job', 'jit-busy': 'Running a job' }[s] || (s.charAt(0).toUpperCase() + s.slice(1));
+  return { running: 'Running', stopped: 'Stopped', starting: 'Starting', stopping: 'Stopping', online: 'Online on GitHub', offline: 'Offline on GitHub', busy: 'Running a job', missing: 'Not on GitHub', error: 'GitHub unreachable', 'not registered': 'Not registered', 'jit-idle': 'Waiting for its job', 'jit-busy': 'Running a job', held: 'Waiting: host job limit' }[s] || (s.charAt(0).toUpperCase() + s.slice(1));
 }
 function pill(s, extra) { return h('span', { class: 'pill ' + stateClass(s) + (extra ? ' ' + extra : '') }, stateText(s)); }
 
@@ -1407,7 +1407,7 @@ function renderAutomation() {
     h('p', {}, 'Status: ', h('b', {}, st.on_demand || 'off')),
     h('p', {}, 'Jobs it takes: ', h('code', {}, 'runs-on: [self-hosted, ' + osName(st.os) + ']'), ' or any of ', h('span', { class: 'chips' }, st.machine_labels.map((l) => h('span', { class: 'chip' }, l)))),
     h('div', { class: 'fields' },
-      h('label', { class: 'field' }, 'Runners at once', h('input', { type: 'number', min: 1, max: 64, value: cfg.on_demand.max_concurrent || 2, oninput: (e) => { cfg.on_demand.max_concurrent = parseInt(e.target.value, 10) || 0; markDirty(odCard); } })),
+      h('label', { class: 'field' }, 'Runners at once', h('input', { type: 'number', min: 1, max: 64, value: cfg.on_demand.max_concurrent || 2, oninput: (e) => { cfg.on_demand.max_concurrent = parseInt(e.target.value, 10) || 0; markDirty(odCard); } })), h('label', { class: 'field' }, 'Max jobs at once on this machine', h('input', { type: 'number', min: 0, max: 64, value: cfg.max_jobs || 0, oninput: (e) => { cfg.max_jobs = parseInt(e.target.value, 10) || 0; markDirty(odCard); } }), h('span', { class: 'muted small' }, '0 = no limit')),
       h('label', { class: 'field' }, 'Check for jobs every', select(odCard, cfg.on_demand, 'poll', [['15s', '15 seconds'], ['30s', '30 seconds'], ['1m0s', '1 minute'], ['2m0s', '2 minutes']], '1m')),
       h('label', { class: 'field' }, 'Watch repos pushed within', select(odCard, cfg.on_demand, 'active_within', [['24h0m0s', '1 day'], ['168h0m0s', '7 days'], ['336h0m0s', '14 days'], ['720h0m0s', '30 days'], ['2160h0m0s', '90 days']], '336h')),
       h('label', { class: 'field' }, 'Owners', input(odCard, cfg.on_demand, 'owners', { isList: true, placeholder: st.auth.login || 'you' })),
