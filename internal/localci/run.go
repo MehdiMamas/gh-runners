@@ -134,6 +134,10 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	if err != nil {
 		return rep, err
 	}
+	selected, err := validateJobs(wf, o.Jobs, wfPath)
+	if err != nil {
+		return rep, err
+	}
 	o.SecretsOK = o.Approve
 	var secrets map[string]store.Secret
 	if wf.HasSecretJobs() {
@@ -187,7 +191,6 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			outputs[n], changesName = out, n
 		}
 	}
-	selected := selectJobs(wf, o.Jobs)
 	var planned []string
 	for _, n := range wf.Order {
 		if selected[n] {
@@ -383,6 +386,23 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		}
 	}
 	return rep, nil
+}
+
+// validateJobs checks the --jobs names against the workflow and returns the
+// selection. Unknown names and an empty selection are errors, so a typo never
+// ends in a green run of nothing.
+func validateJobs(wf *Workflow, names []string, wfPath string) (map[string]bool, error) {
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if _, ok := wf.Jobs[n]; !ok {
+			return nil, fmt.Errorf("unknown job %q in %s; jobs: %s", n, wfPath, strings.Join(wf.Order, ", "))
+		}
+	}
+	sel := selectJobs(wf, names)
+	if len(sel) == 0 {
+		return nil, fmt.Errorf("no jobs to run in %s", wfPath)
+	}
+	return sel, nil
 }
 
 // selectJobs returns the jobs to run: all of them, or the named ones with

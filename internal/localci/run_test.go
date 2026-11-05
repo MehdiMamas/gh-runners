@@ -202,3 +202,74 @@ func TestSecretJobApproveFlagAndMissingName(t *testing.T) {
 		t.Fatalf("missing: %v %q ran %d", res.Status, res.Reason, len(specs))
 	}
 }
+
+// runJobsErr runs wf with the given --jobs names against a fake GitHub and
+// returns Run's error, the executor and every write the fake received.
+func runJobsErr(t *testing.T, wf string, jobs []string) (error, *recordExec, []string) {
+	t.Helper()
+	t.Setenv("GH_RUNNERS_HOME", t.TempDir())
+	var mu sync.Mutex
+	var writes []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.Method != http.MethodGet {
+			writes = append(writes, r.Method+" "+r.URL.Path)
+			w.Write([]byte(`{}`))
+			return
+		}
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/pulls/7"):
+			w.Write([]byte(`{"number":7,"title":"t","state":"open","user":{"login":"me"},"head":{"sha":"abcdef1234","repo":{"full_name":"o/r"}},"base":{"repo":{"full_name":"o/r"}}}`))
+		case strings.Contains(r.URL.Path, "/contents/"):
+			json.NewEncoder(w).Encode(map[string]string{"encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte(wf))})
+		case strings.Contains(r.URL.Path, "/tarball/"):
+			b, _ := os.ReadFile(makeTarball(t, 1))
+			w.Write(b)
+		default:
+			w.Write([]byte(`[]`))
+		}
+	}))
+	defer srv.Close()
+	c := github.New("tok")
+	c.BaseURL = srv.URL
+	ex := &recordExec{}
+	_, err := Run(context.Background(), Options{
+		Client: c, Owner: "o", Repo: "r", PR: 7, Login: "me", Out: io.Discard, Exec: ex, Conc: 1,
+		Settings: store.CIRepo{Post: true}, Jobs: jobs,
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	return err, ex, append([]string(nil), writes...)
+}
+
+func TestRunUnknownJobNameIsAnError(t *testing.T) {
+	err, ex, writes := runJobsErr(t, secretRunWF, []string{"dashboard"})
+	if err == nil || !strings.Contains(err.Error(), `unknown job "dashboard"`) || !strings.Contains(err.Error(), "jobs: up") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(ex.specs) != 0 || len(writes) != 0 {
+		t.Errorf("ran %d jobs, wrote %v", len(ex.specs), writes)
+	}
+	// A known name next to an unknown one is still an error.
+	if err, _, _ := runJobsErr(t, secretRunWF, []string{"up", "nope"}); err == nil {
+		t.Error("want an error for a mixed list")
+	}
+}
+
+func TestRunWorkflowWithoutJobsIsAnError(t *testing.T) {
+	err, ex, writes := runJobsErr(t, "name: ci\njobs: {}\n", nil)
+	if err == nil || !strings.Contains(err.Error(), "no jobs to run") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(ex.specs) != 0 || len(writes) != 0 {
+		t.Errorf("ran %d jobs, wrote %v", len(ex.specs), writes)
+	}
+}
+
+func TestRunKnownJobNameStillRuns(t *testing.T) {
+	err, ex, _ := runJobsErr(t, emuWorkflow, []string{"rules"})
+	if err != nil || len(ex.specs) != 1 {
+		t.Fatalf("err = %v, ran %d", err, len(ex.specs))
+	}
+}

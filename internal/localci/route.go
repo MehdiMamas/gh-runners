@@ -3,6 +3,7 @@ package localci
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -115,24 +116,49 @@ func LocalMachine(name string, emulatorOK bool) Machine {
 // does not hold one global lock across machines.
 func (d *Dispatcher) SelfLocking() bool { return true }
 
-// RunJob routes the job and runs it there.
+// RunJob routes the job and runs it there. When a fleet machine drops mid-job
+// and nothing is secret, the job runs once more on another machine; if that
+// is not possible the result is Blocked, never a test failure.
 func (d *Dispatcher) RunJob(ctx context.Context, spec JobSpec) Result {
-	var m Machine
-	var reason string
-	// Choose and count the job under one lock so parallel jobs spread out.
-	d.mu.Lock()
-	if d.busy == nil {
-		d.busy = map[string]int{}
-	}
-	d.mu.Unlock()
 	secret := len(spec.SecretEnv) > 0 || spec.SecretValues != nil
-	m, reason = d.pick(spec.Job, secret)
+	m, reason := d.pick(spec.Job, secret, nil)
 	if reason != "" {
 		if secret {
 			return Result{Job: spec.Name, Status: Blocked, Reason: "needs secrets, which stay on this machine: " + reason}
 		}
 		return Result{Job: spec.Name, Status: Unsupported, Reason: reason}
 	}
+	res := d.runOn(ctx, spec, m)
+	if !res.Offline || ctx.Err() != nil || secret {
+		return res
+	}
+	m2, reason := d.pick(spec.Job, secret, map[string]bool{m.ID + "/" + m.Name: true})
+	if reason != "" {
+		return Result{Job: spec.Name, Status: Blocked, Log: res.Log, Machine: m.Name,
+			Reason: fmt.Sprintf("machine %s went offline; no other machine can run it", m.Name)}
+	}
+	res = d.runOn(ctx, spec, m2)
+	prependLine(spec.Log, fmt.Sprintf("::retry machine %s went offline; running on %s\n", m.Name, m2.Name))
+	if res.Offline && ctx.Err() == nil {
+		return Result{Job: spec.Name, Status: Blocked, Log: res.Log, Machine: m2.Name,
+			Reason: fmt.Sprintf("machines %s, %s went offline", m.Name, m2.Name)}
+	}
+	return res
+}
+
+// prependLine puts a line at the top of the log; the second run's executor
+// starts the file afresh, so the note goes in after it.
+func prependLine(path, line string) {
+	if path == "" {
+		return
+	}
+	old, _ := os.ReadFile(path)
+	_ = os.WriteFile(path, append([]byte(line), old...), 0o644)
+}
+
+// runOn runs the job on m, whose busy count pick already raised, and
+// releases that count when the job ends.
+func (d *Dispatcher) runOn(ctx context.Context, spec JobSpec, m Machine) Result {
 	key := m.ID + "/" + m.Name
 	defer func() {
 		d.mu.Lock()
@@ -165,10 +191,21 @@ func (d *Dispatcher) RunJob(ctx context.Context, spec JobSpec) Result {
 	return res
 }
 
-func (d *Dispatcher) pick(j *Job, localOnly bool) (Machine, string) {
+// pick routes the job, skipping the excluded machine keys (ID/Name), and
+// counts it on the chosen machine.
+func (d *Dispatcher) pick(j *Job, localOnly bool, exclude map[string]bool) (Machine, string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	m, reason := Route(j, d.Machines(), func(k string) int { return d.busy[k] }, localOnly)
+	if d.busy == nil {
+		d.busy = map[string]int{}
+	}
+	var ms []Machine
+	for _, m := range d.Machines() {
+		if !exclude[m.ID+"/"+m.Name] {
+			ms = append(ms, m)
+		}
+	}
+	m, reason := Route(j, ms, func(k string) int { return d.busy[k] }, localOnly)
 	if reason == "" {
 		d.busy[m.ID+"/"+m.Name]++
 	}

@@ -44,6 +44,9 @@ type Result struct {
 	// Infra is set when the job failed on a tool crash (see infraMarkers)
 	// that a retry did not clear, not on a test.
 	Infra bool
+	// Offline is set when the machine running the job dropped, so another
+	// machine may try it. A test failure or an Infra crash never sets it.
+	Offline bool
 }
 
 // DefaultJobTimeout ends a job that has no timeout-minutes of its own.

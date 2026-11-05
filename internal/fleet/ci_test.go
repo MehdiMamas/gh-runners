@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -270,4 +271,39 @@ func TestCIBusy(t *testing.T) {
 	if p.CIBusy() == "" {
 		t.Fatal("peers with a job not busy")
 	}
+}
+
+// runRemote sets Offline only when the link is gone, not when the machine
+// answered with an error.
+func TestRunRemoteOfflineFlag(t *testing.T) {
+	logs := &ciLogSet{}
+	if r := runRemote(context.Background(), spec(t, "true"), nil, logs); !r.Offline {
+		t.Fatalf("nil conn: Offline = false, result %+v", r)
+	}
+
+	pipe := func() (*conn, *conn) {
+		a, b := net.Pipe()
+		return newConn(a), newConn(b)
+	}
+	other := func(frame) error { return nil }
+
+	// The machine answers with an error: it is not offline.
+	ca, cb := pipe()
+	go cb.serve(func(frame) frame { return frame{Error: "bad job"} }, other)
+	go ca.serve(func(frame) frame { return frame{} }, other)
+	r := runRemote(context.Background(), spec(t, "true"), ca, logs)
+	if r.Status != localci.Fail || r.Reason != "bad job" || r.Offline {
+		t.Fatalf("resp.Error: %+v", r)
+	}
+	ca.close(nil)
+	cb.close(nil)
+
+	// The link drops: offline.
+	ca, cb = pipe()
+	ca.close(nil)
+	r = runRemote(context.Background(), spec(t, "true"), ca, logs)
+	if !r.Offline || !strings.Contains(r.Reason, "offline") {
+		t.Fatalf("closed link: %+v", r)
+	}
+	cb.close(nil)
 }
