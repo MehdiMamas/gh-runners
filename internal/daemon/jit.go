@@ -210,6 +210,7 @@ func (m *jitManager) poll(ctx context.Context, cfg store.Config) error {
 	m.mu.Lock()
 	repos, me := m.repos, m.me
 	m.mu.Unlock()
+	allowed := jitAllowed(max, cfg.MaxJobs, m.d.busyAlwaysCount())
 	watching := 0
 	for _, repo := range repos {
 		if ok, _ := f.Match(repo, me); !ok || persistent[strings.ToLower(repo.FullName)] {
@@ -226,6 +227,9 @@ func (m *jitManager) poll(ctx context.Context, cfg store.Config) error {
 			continue
 		}
 		for need := queued - m.idleFor(scope); need > 0; need-- {
+			if m.running() >= allowed {
+				break
+			}
 			slot := m.freeSlot()
 			if slot == nil {
 				break
@@ -273,6 +277,32 @@ func (m *jitManager) idleFor(scope github.Scope) int {
 	n := 0
 	for _, s := range m.slots {
 		if s.cmd != nil && !s.gotJob && strings.EqualFold(s.scope.String(), scope.String()) {
+			n++
+		}
+	}
+	return n
+}
+
+// running counts the on-demand runners that are running, busy or not.
+func (m *jitManager) running() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, s := range m.slots {
+		if s.cmd != nil {
+			n++
+		}
+	}
+	return n
+}
+
+// busy counts the on-demand runners that are running a job.
+func (m *jitManager) busy() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, s := range m.slots {
+		if s.cmd != nil && s.gotJob {
 			n++
 		}
 	}

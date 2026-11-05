@@ -60,7 +60,10 @@ type child struct {
 	// healthKill marks a kill by the GitHub health check, so the exit is not
 	// counted as a crash.
 	healthKill bool
-	state      control.ProcState
+	// held marks a runner stopped on purpose because the host job limit
+	// (max_jobs) is reached; it is kept in d.children and not started.
+	held  bool
+	state control.ProcState
 }
 
 // Daemon supervises runners on this machine.
@@ -77,6 +80,7 @@ type Daemon struct {
 	syncErr  string
 	jit      *jitManager
 	paused   atomic.Bool    // see pause.go
+	below    int            // reconcile ticks in a row under the max_jobs limit, see hold.go
 	strays   map[string]int // runner id -> processes left after a stop, see sweep.go
 	seen     map[int]bool   // strays the last sweep saw
 	sweeping atomic.Bool
@@ -429,6 +433,7 @@ func (d *Daemon) reconcile() {
 			want[r.ID] = r
 		}
 	}
+	cfg, _ := store.LoadConfig()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	now := time.Now()
@@ -446,11 +451,15 @@ func (d *Daemon) reconcile() {
 			delete(d.children, id)
 		}
 	}
+	holding := d.applyLimit(cfg.MaxJobs)
 	for id, r := range want {
 		c := d.children[id]
 		if c == nil {
 			c = &child{state: control.ProcState{ID: id, State: "stopped", Since: now}}
 			d.children[id] = c
+		}
+		if c.held && holding {
+			continue
 		}
 		if c.cmd != nil || now.Before(c.state.NextStart) {
 			continue

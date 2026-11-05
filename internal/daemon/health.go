@@ -69,7 +69,7 @@ func (d *Daemon) checkGitHub(now time.Time, runners []store.Runner,
 	d.mu.Lock()
 	for id, c := range d.children {
 		r, ok := byID[id]
-		if !ok || !r.Configured() || c.cmd == nil || c.stopping || c.state.State != "running" ||
+		if !ok || !r.Configured() || c.cmd == nil || c.stopping || c.held || c.state.State != "running" ||
 			now.Sub(c.state.Since) <= healthMinRunning {
 			continue
 		}
@@ -118,7 +118,7 @@ func (d *Daemon) healthOne(now time.Time, hc healthCand, status map[string]strin
 	busy func(dir string) bool, kill func(pid int) error) {
 	id := hc.r.ID
 	c := d.children[id]
-	if c == nil || c.cmd == nil || c.stopping || c.state.PID != hc.pid || !c.state.Since.Equal(hc.since) {
+	if c == nil || c.cmd == nil || c.stopping || c.held || c.state.PID != hc.pid || !c.state.Since.Equal(hc.since) {
 		return // changed since it was collected
 	}
 	st, ok := status[hc.r.Name]
