@@ -8,7 +8,9 @@
     "flow": "node flow.js",
     "multi": "node multi.js",
     "pause": "node pause.js",
-    "remote": "node remote.js"
+    "remote": "node remote.js",
+    "demo": "node demo.js",
+    "social": "node social.js"
   },
   "dependencies": {
     "puppeteer-core": "^23.11.1"

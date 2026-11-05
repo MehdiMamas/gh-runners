@@ -1,18 +1,18 @@
 # gh-runners
 
-Self-hosted GitHub Actions runners on your own Mac, Linux box and Windows PC,
-without downloading a runner and running `config.sh` by hand for every repository.
+Self-hosted GitHub Actions runners on your own Mac, Linux and Windows machines, set up in one click.
+
+![The gh-runners dashboard: repositories, adding a runner, this machine and your other machines](docs/images/demo.gif)
 
 Run `gh-runners` and a dashboard opens in your browser: sign in to GitHub, see
 all your repositories, click **Add runner** next to one, and it downloads,
-registers and starts a runner on this computer. Everything else (stop, start,
-logs, a runner for every repo, on-demand runners, where the runners live, start
-at login) is a click away too.
+registers and starts a runner on this computer. Stop, start, logs, a runner for
+every repo, on-demand runners and start at login are a click away too.
 
 Prefer a terminal? Every action is also a command:
 
 ```sh
-gh-runners add MehdiMamas/my-app   # one repo
+gh-runners add acme/web-app      # one repo
 gh-runners sync --auto on          # every private repo you own, now and in future
 gh-runners on-demand on            # or: no per-repo setup at all, runners only while a job runs
 gh-runners service install         # keep it all running after reboots
@@ -240,7 +240,7 @@ gh-runners ci queue owner/repo 12           # same, but queued in the running da
 gh-runners ci config owner/repo --post on   # turn posting on (off by default)
 gh-runners ci config owner/repo --merge on  # squash-merge when all jobs passed and the PR is approved (off by default)
 gh-runners ci watch owner/repo              # poll every minute and run each new head
-gh-runners ci run AugustanaComputerScienceProjects/Aces-FreshStart 42 --machine DESKTOP-MEHDI --jobs mobile --approve --json
+gh-runners ci run acme/web-app 42 --machine build-pc --jobs mobile --approve --json
 ```
 
 - `ci run --machine <name or id>` sends every selected job to that machine. It must be this PC or a linked account PC; otherwise the command fails with a plain error before anything runs. A job that machine cannot run is marked unsupported with the reason.
@@ -340,7 +340,7 @@ jobs:
   build:
     runs-on: [self-hosted, macOS]        # any of your Macs
     # runs-on: [self-hosted, Linux, X64]
-    # runs-on: [self-hosted, mehdis-macbook-pro]   # one machine (its hostname, lowercased)
+    # runs-on: [self-hosted, build-mac]   # one machine (its hostname, lowercased)
     # runs-on: [self-hosted, gh-runners]           # any machine set up by gh-runners
 ```
 
@@ -499,6 +499,8 @@ rm -rf ~/.gh-runners   # and the binary (and your runners folder, if you moved i
 ```
 
 ## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and send a pull request.
 
 ```sh
 go test ./...
