@@ -82,7 +82,7 @@ func (h *Host) CIMachines() []localci.Machine {
 		}
 		out = append(out, localci.Machine{
 			ID: m.ID, Name: m.Info.Hostname, OS: m.Info.OS, Arch: m.Info.Arch,
-			Tools: m.Info.CI.Tools, EmulatorOK: m.Info.CI.EmulatorOK,
+			Tools: m.Info.CI.Tools, EmulatorOK: m.Info.CI.EmulatorOK, InUse: m.Info.InUse,
 		})
 	}
 	return out

@@ -14,19 +14,22 @@ const holdTicks = 2
 // holdIdle returns the IDs of the idle always-on runners to hold when the
 // jobs running here (busy runners plus jitBusy) have reached maxJobs. busy
 // maps each running always-on runner to whether it runs a job. A busy runner
-// is never held, and maxJobs <= 0 means no limit.
-func holdIdle(busy map[string]bool, jitBusy, maxJobs int) (hold []string) {
-	if maxJobs <= 0 {
-		return nil
-	}
-	n := jitBusy
-	for _, b := range busy {
-		if b {
-			n++
+// is never held, and maxJobs <= 0 means no limit. With inUse (the machine is
+// in use, #164) the limit counts as reached whatever the count.
+func holdIdle(busy map[string]bool, jitBusy, maxJobs int, inUse bool) (hold []string) {
+	if !inUse {
+		if maxJobs <= 0 {
+			return nil
 		}
-	}
-	if n < maxJobs {
-		return nil
+		n := jitBusy
+		for _, b := range busy {
+			if b {
+				n++
+			}
+		}
+		if n < maxJobs {
+			return nil
+		}
 	}
 	for id, b := range busy {
 		if !b {
@@ -39,7 +42,11 @@ func holdIdle(busy map[string]bool, jitBusy, maxJobs int) (hold []string) {
 
 // jitAllowed is how many on-demand runners may run at once: max, cut down so
 // that the always-on runners busy with a job plus these stay within maxJobs.
-func jitAllowed(max, maxJobs, busyAlways int) int {
+// It is 0 while the machine is in use.
+func jitAllowed(max, maxJobs, busyAlways int, inUse bool) int {
+	if inUse {
+		return 0
+	}
 	if maxJobs <= 0 {
 		return max
 	}
@@ -68,7 +75,7 @@ func (d *Daemon) busyAlways() map[string]bool {
 // busyAlwaysCount is the number of always-on runners running a job. It is 0
 // without calling the process list when no limit is set.
 func (d *Daemon) busyAlwaysCount() int {
-	if cfg, _ := store.LoadConfig(); cfg.MaxJobs <= 0 {
+	if cfg, _ := store.LoadConfig(); cfg.MaxJobs <= 0 && !d.deskBusy.Load() {
 		return 0
 	}
 	d.mu.Lock()
@@ -84,9 +91,15 @@ func (d *Daemon) busyAlwaysCount() int {
 
 // applyLimit holds the idle runners while the max_jobs limit is reached and
 // reports whether held runners must stay stopped. A hold lifts only after the
-// busy count stayed under the limit for holdTicks ticks. Caller holds d.mu.
-func (d *Daemon) applyLimit(maxJobs int) (holding bool) {
-	if maxJobs <= 0 {
+// busy count stayed under the limit for holdTicks ticks. With inUse every idle
+// runner is held and the hold lifts holdTicks ticks after the machine is free.
+// Caller holds d.mu.
+func (d *Daemon) applyLimit(maxJobs int, inUse bool) (holding bool) {
+	anyHeld := false
+	for _, c := range d.children {
+		anyHeld = anyHeld || c.held
+	}
+	if maxJobs <= 0 && !inUse && !anyHeld {
 		d.below = 0
 		for _, c := range d.children {
 			c.held = false
@@ -100,13 +113,13 @@ func (d *Daemon) applyLimit(maxJobs int) (holding bool) {
 			n++
 		}
 	}
-	reached := n >= maxJobs
+	reached := inUse || (maxJobs > 0 && n >= maxJobs)
 	if reached {
 		d.below = 0
 	} else if d.below < holdTicks {
 		d.below++
 	}
-	for _, id := range holdIdle(busy, d.jit.busy(), maxJobs) {
+	for _, id := range holdIdle(busy, d.jit.busy(), maxJobs, inUse) {
 		c := d.children[id]
 		// A job may have arrived since the busy set was taken.
 		if c == nil || c.cmd == nil || c.stopping || runner.Busy(c.dir) {
@@ -114,7 +127,11 @@ func (d *Daemon) applyLimit(maxJobs int) (holding bool) {
 		}
 		c.held, c.stopping = true, true
 		c.state.State = "stopping"
-		d.Log.Printf("[%s] holding: %d jobs running, limit %d", id, n, maxJobs)
+		if inUse {
+			d.Log.Printf("[%s] holding: machine in use", id)
+		} else {
+			d.Log.Printf("[%s] holding: %d jobs running, limit %d", id, n, maxJobs)
+		}
 		go d.stopChild(id, c, stopGrace)
 	}
 	if !reached && d.below >= holdTicks {

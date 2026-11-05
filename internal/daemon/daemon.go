@@ -79,12 +79,17 @@ type Daemon struct {
 	lastSync time.Time
 	syncErr  string
 	jit      *jitManager
-	paused   atomic.Bool    // see pause.go
-	below    int            // reconcile ticks in a row under the max_jobs limit, see hold.go
-	strays   map[string]int // runner id -> processes left after a stop, see sweep.go
-	seen     map[int]bool   // strays the last sweep saw
-	sweeping atomic.Bool
-	updated  atomic.Bool // a new binary was installed; see stopResult
+	paused   atomic.Bool  // see pause.go
+	deskBusy atomic.Bool  // the busy_check command says the machine is in use, see deskbusy.go
+	deskAt   atomic.Int64 // unix nanoseconds deskBusy turned on
+	deskErr  string       // last busy_check error already logged, owned by deskLoop
+	// inUseCheck runs the busy_check command; nil means the real command.
+	inUseCheck func(ctx context.Context) (bool, error)
+	below      int            // reconcile ticks in a row under the max_jobs limit, see hold.go
+	strays     map[string]int // runner id -> processes left after a stop, see sweep.go
+	seen       map[int]bool   // strays the last sweep saw
+	sweeping   atomic.Bool
+	updated    atomic.Bool // a new binary was installed; see stopResult
 
 	// GitHub health check (health.go), guarded by mu.
 	ghCheck     control.GitHubCheck
@@ -232,6 +237,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.diskLoop(ctx)
 	go d.jobLimitLoop(ctx)
 	go d.healthLoop(ctx)
+	go d.deskLoop(ctx)
 
 	t := time.NewTicker(tick)
 	defer t.Stop()
@@ -402,6 +408,9 @@ func (d *Daemon) status() control.Status {
 	if s.Paused {
 		s.PausedSince = store.LoadPause().Since
 	}
+	if d.deskBusy.Load() {
+		s.InUse, s.InUseSince = true, time.Unix(0, d.deskAt.Load())
+	}
 	for id, c := range d.children {
 		s.Runners = append(s.Runners, c.state)
 		if n := d.strays[id]; n > 0 {
@@ -451,7 +460,7 @@ func (d *Daemon) reconcile() {
 			delete(d.children, id)
 		}
 	}
-	holding := d.applyLimit(cfg.MaxJobs)
+	holding := d.applyLimit(cfg.MaxJobs, d.deskBusy.Load())
 	for id, r := range want {
 		c := d.children[id]
 		if c == nil {
@@ -656,7 +665,7 @@ func (d *Daemon) isHostMember(id string) bool {
 // fleetInfo is what this machine tells its main host.
 func (d *Daemon) fleetInfo() fleet.Info {
 	host, _ := os.Hostname()
-	info := fleet.Info{Hostname: host, OS: runtime.GOOS, Arch: runtime.GOARCH, Version: d.Version, Runners: []fleet.RunnerInfo{}, Paused: d.paused.Load()}
+	info := fleet.Info{Hostname: host, OS: runtime.GOOS, Arch: runtime.GOARCH, Version: d.Version, Runners: []fleet.RunnerInfo{}, Paused: d.paused.Load(), InUse: d.deskBusy.Load()}
 	if d.peers != nil {
 		info.Login, info.MachineID = d.peers.Login(), d.peers.ID()
 	}

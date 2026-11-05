@@ -244,3 +244,17 @@ func TestRouteNeedToolsUnsupported(t *testing.T) {
 		t.Fatalf("got %q", why)
 	}
 }
+
+func TestRouteSkipsMachineInUse(t *testing.T) {
+	tools := []string{"bash", "node"}
+	busy := Machine{Name: "desk", OS: "linux", Tools: tools, Host: true, InUse: true}
+	free := Machine{ID: "f", Name: "other", OS: "linux", Tools: tools}
+	j := jobWith("ubuntu-latest")
+	if m, why := Route(j, []Machine{busy, free}, noLoad, false); why != "" || m.Name != "other" {
+		t.Fatalf("got %v %q", m.Name, why)
+	}
+	_, why := Route(j, []Machine{busy}, noLoad, false)
+	if !strings.Contains(why, "desk is in use") {
+		t.Fatalf("want the in-use reason, got %q", why)
+	}
+}

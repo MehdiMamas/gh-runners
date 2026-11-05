@@ -433,7 +433,7 @@ func (p *Peers) CIMachines() []localci.Machine {
 		}
 		out = append(out, localci.Machine{
 			ID: pe.ID, Name: name, OS: pe.Info.OS, Arch: pe.Info.Arch,
-			Tools: pe.Info.CI.Tools, EmulatorOK: pe.Info.CI.EmulatorOK,
+			Tools: pe.Info.CI.Tools, EmulatorOK: pe.Info.CI.EmulatorOK, InUse: pe.Info.InUse,
 		})
 	}
 	return out
