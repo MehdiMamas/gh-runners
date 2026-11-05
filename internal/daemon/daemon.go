@@ -56,7 +56,10 @@ type child struct {
 	done     chan struct{}
 	dir      string
 	stopping bool
-	state    control.ProcState
+	// healthKill marks a kill by the GitHub health check, so the exit is not
+	// counted as a crash.
+	healthKill bool
+	state      control.ProcState
 }
 
 // Daemon supervises runners on this machine.
@@ -77,6 +80,11 @@ type Daemon struct {
 	seen     map[int]bool   // strays the last sweep saw
 	sweeping atomic.Bool
 	updated  atomic.Bool // a new binary was installed; see stopResult
+
+	// GitHub health check (health.go), guarded by mu.
+	ghCheck     control.GitHubCheck
+	healthKills map[string]time.Time // runner id -> last health restart
+	healthSeen  map[string]string    // runner id -> note already logged
 
 	updateNow chan struct{}
 	// updateCfg wakes the update loop when settings may have changed.
@@ -206,6 +214,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go dash.CIWatch(ctx)
 	go d.diskLoop(ctx)
 	go d.jobLimitLoop(ctx)
+	go d.healthLoop(ctx)
 
 	t := time.NewTicker(tick)
 	defer t.Stop()
@@ -371,7 +380,7 @@ func nudge(c chan struct{}) {
 
 func (d *Daemon) status() control.Status {
 	d.mu.Lock()
-	s := control.Status{PID: os.Getpid(), Version: d.Version, Started: d.started, LastSync: d.lastSync, SyncErr: d.syncErr, Update: d.upd}
+	s := control.Status{PID: os.Getpid(), Version: d.Version, Started: d.started, LastSync: d.lastSync, SyncErr: d.syncErr, Update: d.upd, GitHubCheck: d.ghCheck}
 	s.Paused = d.paused.Load()
 	if s.Paused {
 		s.PausedSince = store.LoadPause().Since
@@ -461,6 +470,7 @@ func (d *Daemon) start(r store.Runner, c *child) error {
 	c.cmd, c.done, c.dir, c.stopping = cmd, make(chan struct{}), r.Dir(), false
 	c.state.State, c.state.PID, c.state.Since = "running", cmd.Process.Pid, time.Now()
 	c.state.NextStart = time.Time{}
+	c.state.GitHubOffline, c.state.GitHubOfflineSince = false, time.Time{}
 	d.Log.Printf("[%s] started (pid %d)", r.ID, cmd.Process.Pid)
 	go func() {
 		err := cmd.Wait()
@@ -483,6 +493,12 @@ func (d *Daemon) start(r store.Runner, c *child) error {
 		if ranFor > stableAfter {
 			c.state.Restarts = 0
 		}
+		if c.healthKill {
+			// Killed on purpose by the health check: not a crash.
+			c.healthKill = false
+			c.state.Restarts = 0
+			exit = "restarted: GitHub showed it offline"
+		}
 		d.backoff(c, exit)
 		nudge(d.reload)
 	}()
@@ -492,6 +508,7 @@ func (d *Daemon) start(r store.Runner, c *child) error {
 // backoff schedules the next start; caller holds d.mu.
 func (d *Daemon) backoff(c *child, reason string) {
 	c.state.Restarts++
+	c.state.GitHubOffline, c.state.GitHubOfflineSince = false, time.Time{}
 	wait := minBackoff << min(c.state.Restarts-1, 10)
 	if wait > maxBackoff {
 		wait = maxBackoff

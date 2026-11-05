@@ -43,6 +43,7 @@ type runnerView struct {
 	Version    string   `json:"version"`
 	Dir        string   `json:"dir"`
 	Created    string   `json:"created"`
+	runnerHealthView
 }
 
 type stateView struct {
@@ -75,6 +76,7 @@ type stateView struct {
 	// queued or running in this dashboard.
 	CIActive []localci.ActiveJob `json:"ci_active"`
 	CITasks  []taskView          `json:"ci_tasks"`
+	stateHealthView
 }
 
 type serviceView struct {
@@ -96,7 +98,7 @@ func (s *Server) runnerViews(st control.Status) []runnerView {
 			ID: r.ID, Scope: r.Scope(), Kind: r.Kind, Owner: r.Owner, Repo: r.Repo, Name: r.Name,
 			Labels: r.Labels, Source: r.Source, Disabled: r.Disabled, Configured: r.Configured(),
 			State: state, LastExit: last, Restarts: p.Restarts, Since: since(p.Since),
-			Version: r.Version, Dir: r.Dir(), Created: since(r.CreatedAt),
+			Version: r.Version, Dir: r.Dir(), Created: since(r.CreatedAt), runnerHealthView: runnerHealthOf(p),
 		})
 	}
 	return out
@@ -118,7 +120,7 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 		Service: serviceView{svc.Installed, svc.Where}, Auth: s.authView(r.Context()),
 		Runners: s.runnerViews(st), OnDemand: st.OnDemand, LastSync: since(st.LastSync),
 		SyncErr: st.SyncErr, Config: cfg, TasksBusy: s.tasks.busy(), OnDemandProcs: []control.ProcState{},
-		Update: st.Update, CIActive: localci.ActiveJobs(), CITasks: []taskView{},
+		Update: st.Update, CIActive: localci.ActiveJobs(), CITasks: []taskView{}, stateHealthView: stateHealthOf(st),
 	}
 	for _, t := range s.ci.views() {
 		if t.State == "queued" || t.State == "running" {
