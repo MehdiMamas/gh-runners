@@ -44,6 +44,12 @@ Restart=on-failure
 RestartSec=10
 %sKillMode=mixed
 TimeoutStopSec=90
+# A runaway CI job is throttled, then OOM-killed inside this unit, instead of
+# freezing the machine; OOMPolicy=continue keeps the daemon and other runners up.
+MemoryHigh=70%%
+MemoryMax=80%%
+MemorySwapMax=1G
+OOMPolicy=continue
 
 [Install]
 WantedBy=default.target

@@ -44,6 +44,9 @@ gh-runners: one static Go binary that sets up and supervises self-hosted GitHub 
 - Watcher: `Server.approvalRerun` (`internal/web/ci.go`) queues a head that already ran once more, limited to its secret jobs, when it gets the approval (seen keys `+approved`, `+plain`).
 - Security note: an approved PR runs its own code with the secrets and the user's keychain, like a self-hosted runner.
 
+## Memory (#149)
+- The Linux systemd unit (`Unit`, `internal/service/service_linux.go`) caps the daemon and every runner job under it: `MemoryHigh=70%`, `MemoryMax=80%`, `MemorySwapMax=1G`, `OOMPolicy=continue`, so a runaway job is killed alone instead of freezing the machine (a WSL VM froze when a test step's leftover node processes filled it). `gh-runners service install` rewrites the unit.
+
 ## Disk use (#109)
 - `internal/runner/janitor.go` (old runner versions, idle `_work`) and `localci.PruneRuns` (CI runs older than 14 days) run from `internal/daemon/disk.go` at start and hourly. A runner counts as busy while a `Runner.Worker` process runs under its folder. Local CI removes each job's `src` and the run's tarball when it ends. Leftover remote job folders under `ci/fleet/jobs` (untouched for 6 h) are pruned in the same pass (`fleet.PruneJobDirs`, #117).
 - Every local CI job's processes join one Windows job object with kill-on-close (`proc.Group`, `localci.RunJob`, #122), so nothing a step started outlives the job, its cancel or the daemon.
