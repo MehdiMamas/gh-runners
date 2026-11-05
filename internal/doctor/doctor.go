@@ -103,6 +103,11 @@ func Run(ctx context.Context, st *control.Status) []Check {
 		add(Fix, "%s", msg)
 	}
 
+	since, broken := service.InteropBroken()
+	if msg := interopCheck(os.Getenv("WSL_DISTRO_NAME") != "", since, broken); msg != "" {
+		add(Fix, "%s", msg)
+	}
+
 	if p := store.LoadPause(); p.Paused {
 		add(Note, "this machine is paused: no runner, on-demand runner, sync or update runs; gh-runners resume turns them back on")
 	}
@@ -171,4 +176,17 @@ func keepaliveCheck(goos string, s service.Status) string {
 		return "the task that restarts a dead daemon is missing: gh-runners service install"
 	}
 	return ""
+}
+
+// interopCheck warns under WSL when the watchdog found that Windows programs
+// cannot start from the distro.
+func interopCheck(wsl bool, since time.Time, broken bool) string {
+	if !wsl || !broken {
+		return ""
+	}
+	when := ""
+	if !since.IsZero() {
+		when = " since " + since.Format("2006-01-02 15:04")
+	}
+	return "Windows programs cannot start from WSL" + when + " (WSL interop is broken); `wsl --shutdown` from Windows, not from inside WSL, brings it back, and also stops the daemon and the runners until WSL starts again"
 }

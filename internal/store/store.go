@@ -50,6 +50,10 @@ func DaemonLog() string    { return filepath.Join(Home(), "daemon.log") }
 func CacheDir() string     { return filepath.Join(Home(), "cache") }
 func UISecretPath() string { return filepath.Join(Home(), "ui-secret") }
 
+// WatchdogDirPath holds the unix path of the WSL watchdog's script folder, so
+// WSL can find it when cmd.exe cannot start.
+func WatchdogDirPath() string { return filepath.Join(Home(), "watchdog-dir") }
+
 // FleetDir holds the main host's certificate and members, or this
 // machine's link to its main host.
 func FleetDir() string { return filepath.Join(Home(), "fleet") }

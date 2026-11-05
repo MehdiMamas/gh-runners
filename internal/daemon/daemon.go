@@ -133,6 +133,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 		} else if ok {
 			d.Log.Printf("created keepalive task")
 		}
+		if ok, err := service.EnsureWatchdog(); err != nil {
+			d.Log.Printf("WSL watchdog script: %v", err)
+		} else if ok {
+			d.Log.Printf("updated WSL watchdog script")
+		}
 	}()
 
 	// ctx is cancelled by an OS signal (launchd, a service stop); the

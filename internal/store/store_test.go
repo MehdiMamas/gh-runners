@@ -211,3 +211,11 @@ func TestJobLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestWatchdogDirPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GH_RUNNERS_HOME", home)
+	if got, want := WatchdogDirPath(), filepath.Join(home, "watchdog-dir"); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
