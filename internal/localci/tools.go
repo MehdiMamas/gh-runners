@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -126,8 +127,9 @@ func (j *Job) Requires() (tools []string, emulator bool) {
 		tools = append(tools, "java")
 		emulator = true
 	}
+	tools = append(tools, j.NeedTools...)
 	sort.Strings(tools)
-	return tools, emulator
+	return slices.Compact(tools), emulator
 }
 
 // Missing returns the needed tools a set does not have.

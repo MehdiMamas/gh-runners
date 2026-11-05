@@ -5,6 +5,7 @@ package localci
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -23,14 +24,16 @@ type Workflow struct {
 
 // Job is one job of the workflow.
 type Job struct {
-	Name    string
-	Needs   []string
-	If      string
-	RunsOn  string
-	WorkDir string // defaults.run.working-directory
-	Env     map[string]string
-	Outputs map[string]string
-	Steps   []Step
+	Name  string
+	Needs []string
+	// NeedTools are the tools named by the job env GH_RUNNERS_NEEDS.
+	NeedTools []string
+	If        string
+	RunsOn    string
+	WorkDir   string // defaults.run.working-directory
+	Env       map[string]string
+	Outputs   map[string]string
+	Steps     []Step
 	// Timeout is timeout-minutes; 0 means unset (DefaultJobTimeout applies).
 	Timeout time.Duration
 	// Raw is the job's YAML text, used to spot secrets and aggregate jobs.
@@ -119,10 +122,14 @@ func ParseWorkflow(data []byte) (*Workflow, error) {
 		if err := node.Decode(&rj); err != nil {
 			return nil, fmt.Errorf("job %s: %w", name, err)
 		}
+		needTools, err := parseNeedTools(rj.Env["GH_RUNNERS_NEEDS"])
+		if err != nil {
+			return nil, fmt.Errorf("job %s: GH_RUNNERS_NEEDS: %w", name, err)
+		}
 		raw, _ := yaml.Marshal(node)
 		j := &Job{
 			Name: name, Needs: rj.Needs, If: rj.If, WorkDir: rj.Defaults.Run.WorkDir,
-			Env: rj.Env, Outputs: rj.Outputs, Raw: string(raw), Timeout: minutesOf(rj.Timeout),
+			NeedTools: needTools, Env: rj.Env, Outputs: rj.Outputs, Raw: string(raw), Timeout: minutesOf(rj.Timeout),
 		}
 		if rj.RunsOn.Kind == yaml.ScalarNode {
 			j.RunsOn = rj.RunsOn.Value
@@ -210,4 +217,18 @@ func (j *Job) PathFilters() (map[string][]string, string, bool) {
 		}
 	}
 	return nil, "", false
+}
+
+// parseNeedTools reads GH_RUNNERS_NEEDS: tool names separated by spaces or
+// commas. An unknown name is an error so a typo cannot run a job on a
+// machine without the tool.
+func parseNeedTools(v string) ([]string, error) {
+	var out []string
+	for _, n := range strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' }) {
+		if !slices.Contains(ToolNames, n) {
+			return nil, fmt.Errorf("unknown tool %q (allowed: %s)", n, strings.Join(ToolNames, ", "))
+		}
+		out = append(out, n)
+	}
+	return out, nil
 }
