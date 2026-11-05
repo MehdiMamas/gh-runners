@@ -235,3 +235,12 @@ func TestDispatcherDoesNotRetryTestFailureOrInfra(t *testing.T) {
 		}
 	}
 }
+
+func TestRouteNeedToolsUnsupported(t *testing.T) {
+	m := Machine{Name: "box", OS: "linux", Tools: []string{"bash", "node"}, Host: true}
+	j := &Job{RunsOn: "ubuntu-latest", NeedTools: []string{"flutter"}}
+	_, why := Route(j, []Machine{m}, noLoad, false)
+	if !strings.Contains(why, "lacks flutter") {
+		t.Fatalf("got %q", why)
+	}
+}

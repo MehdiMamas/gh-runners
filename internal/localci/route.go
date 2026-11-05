@@ -48,7 +48,7 @@ func Route(j *Job, machines []Machine, load func(id string) int, localOnly bool)
 		case !osFits(j.RunsOn, m.OS):
 			why["runs-on "+j.RunsOn+" needs a matching OS"] = true
 		case len(Missing(m.Tools, tools)) > 0:
-			why[fmt.Sprintf("%s lacks %s", m.Name, strings.Join(Missing(m.Tools, tools), ", "))] = true
+			why[fmt.Sprintf("%s lacks %s (not found on this machine's PATH; check with gh-runners ci doctor)", m.Name, strings.Join(Missing(m.Tools, tools), ", "))] = true
 		case emu && !m.EmulatorOK:
 			why[m.Name+" is not set up for emulator jobs"] = true
 		default:
