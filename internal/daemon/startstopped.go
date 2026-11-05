@@ -1,6 +1,23 @@
 package daemon
 
-import "github.com/MehdiMamas/gh-runners/internal/store"
+import (
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/MehdiMamas/gh-runners/internal/store"
+)
+
+// crashLine is the log line for a start that finds the daemon-live marker:
+// the last run ended without a stop. The time is the mod time of daemon.log,
+// read before this run writes anything to it.
+func crashLine(logPath string) string {
+	st, err := os.Stat(logPath)
+	if err != nil {
+		return "previous run ended without a stop"
+	}
+	return fmt.Sprintf("previous run ended without a stop (last log %s)", st.ModTime().Local().Format(time.DateTime))
+}
 
 // stopAtStart is the rule for a fresh daemon start: every runner starts
 // stopped, and the ones that were on are remembered as the last session so
@@ -24,6 +41,9 @@ func stopAtStart(runners []store.Runner, paused, keepRunning bool) (stop []store
 func (d *Daemon) startStopped() {
 	keep := store.ConsumeKeepRunning()
 	live := store.DaemonLiveBefore()
+	if live {
+		d.Log.Print(crashLine(store.DaemonLog())) // stats the file before this write
+	}
 	if err := store.SetDaemonLive(); err != nil {
 		d.Log.Printf("write daemon-live marker: %v", err)
 	}

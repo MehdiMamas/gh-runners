@@ -356,7 +356,7 @@ func (r *peerRun) connect(ctx context.Context, e Entry) (*conn, error) {
 	c, rerr := r.relayConnect(ctx, e)
 	if rerr != nil {
 		if !errors.Is(rerr, errNoPartner) {
-			r.p.logf("account machines: %s: relay: %s", e.Name, plainErr(rerr))
+			r.logFailure(e.ID, "relay", e.Name, "relay: "+plainErr(rerr))
 		}
 		return nil, err
 	}
@@ -468,7 +468,7 @@ func (r *peerRun) relayAccept(ctx context.Context, e Entry) {
 		}
 	}
 	if ctx.Err() == nil && !errors.Is(err, errNoPartner) {
-		r.p.logf("account machines: %s: relay: %s", e.Name, plainErr(err))
+		r.logFailure(e.ID, "relay-accept", e.Name, "relay: "+plainErr(err))
 	}
 }
 

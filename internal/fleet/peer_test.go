@@ -732,3 +732,34 @@ func TestMigrationOtherLoginStaysMember(t *testing.T) {
 		}
 	}
 }
+
+func TestLogFailureOnlyWhenItChanges(t *testing.T) {
+	var lines []string
+	r := &peerRun{state: map[string]*peerState{}}
+	r.p = &Peers{Log: func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }}
+	for i := 0; i < 5; i++ {
+		r.logFailure("a", "dial", "PC", "No answer")
+	}
+	if len(lines) != 1 {
+		t.Fatalf("same failure logged %d times: %q", len(lines), lines)
+	}
+	r.logFailure("a", "dial", "PC", "Refused")
+	r.logFailure("a", "relay", "PC", "relay: No answer")
+	r.logFailure("a", "dial", "PC", "Refused")
+	if len(lines) != 3 {
+		t.Fatalf("lines = %q", lines)
+	}
+	// The failure line of one kind does not hide the other kind's.
+	r.logFailure("b", "dial", "Other", "No answer")
+	if len(lines) != 4 {
+		t.Fatalf("other peer not logged: %q", lines)
+	}
+	// After a connection, the same failure logs again.
+	r.mu.Lock()
+	r.stateLocked("a").logged = nil
+	r.mu.Unlock()
+	r.logFailure("a", "dial", "PC", "Refused")
+	if len(lines) != 5 || lines[4] != "account machines: PC: Refused" {
+		t.Fatalf("lines = %q", lines)
+	}
+}

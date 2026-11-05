@@ -26,6 +26,9 @@ gh-runners: one static Go binary that sets up and supervises self-hosted GitHub 
 - Inputs accept human forms ("10min", "1 hour"); show limits inline with Save disabled.
 - Visual fixes get before and after screenshots on the issue.
 
+## Windows keepalive (#156)
+- `service install` on Windows sets the HKCU Run key (login) and a per-user scheduled task `gh-runners keepalive` (`internal/service/keepalive.go`, every 5 min, no elevation, `conhost.exe --headless` so no window; a copy with its own home gets `gh-runners keepalive (gh-runners-<hash>)`). The task runs `daemon --detach --keepalive`, which starts a daemon only when the `daemon-live` marker exists: a kill or crash is revived, a deliberate stop (`service stop`, `/shutdown`) is not. `uninstall` deletes the task; `doctor` warns when the Run key exists without it.
+
 ## Local CI `ci run` flags
 - `--machine <name or id>`: all jobs go to that machine (this PC or a linked account PC), unknown name is an error before anything runs (`control.SelectCIMachine`). `--json`: one JSON summary on stdout, table on stderr, exit 0 only if every job passed (`internal/cli/cirunjson.go`). `--workflow <path>`: read jobs from another file under `.github/workflows/` (`localci.ValidateWorkflowPath`). Example: `gh-runners ci run owner/repo 42 --machine DESKTOP-MEHDI --jobs mobile --approve --json`.
 - Local CI job limits and verdicts (#137): a job ends `FAIL` "timed out after ..." after its `timeout-minutes` (default `localci.DefaultJobTimeout`, 60 min); a step may have its own `timeout-minutes`. A step whose context ended never passes (`runCmd`). A step that exits 0 but prints a failure marker (`testFailMarkers`, `internal/localci/markers.go`) fails; a failed step printing an `infraMarkers` line (Dart compiler crash) is rerun once (`::retry step N`), then the job fails with `Result.Infra` and the PR comment says "Infrastructure:".

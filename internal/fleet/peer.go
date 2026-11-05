@@ -121,6 +121,25 @@ type peerState struct {
 	hasInfo  bool
 	misses   int
 	dialing  bool
+	// logged is the last failure line written per kind, so a failure that
+	// repeats every round is logged once, until it changes or the peer connects.
+	logged map[string]string
+}
+
+// logFailure logs "account machines: <name>: <msg>" unless the last line of
+// this kind for the peer was the same.
+func (r *peerRun) logFailure(id, kind, name, msg string) {
+	r.mu.Lock()
+	st := r.stateLocked(id)
+	same := st.logged[kind] == msg
+	if st.logged == nil {
+		st.logged = map[string]string{}
+	}
+	st.logged[kind] = msg
+	r.mu.Unlock()
+	if !same {
+		r.p.logf("account machines: %s: %s", name, msg)
+	}
 }
 
 // Peer is another machine of the account, as this one sees it.
@@ -700,7 +719,7 @@ func (r *peerRun) register(l *link, info *Info) bool {
 	l.since = time.Now()
 	r.links[l.id] = l
 	st := r.stateLocked(l.id)
-	st.err, st.misses, st.lastSeen = "", 0, time.Now()
+	st.err, st.misses, st.lastSeen, st.logged = "", 0, time.Now(), nil
 	if info != nil {
 		st.info, st.hasInfo = *info, true
 	}
@@ -877,7 +896,7 @@ func (r *peerRun) dialRound(ctx context.Context) {
 			}
 			r.mu.Unlock()
 			if err != nil && ctx.Err() == nil {
-				r.p.logf("account machines: %s: %s", e.Name, plainErr(err))
+				r.logFailure(e.ID, "dial", e.Name, plainErr(err))
 			}
 		}()
 	}
