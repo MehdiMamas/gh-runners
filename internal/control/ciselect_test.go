@@ -31,3 +31,14 @@ func TestSelectCIMachineUnknownErrors(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestSelectCIMachineClearsInUseOnPin(t *testing.T) {
+	ms := []localci.Machine{{Name: "desk", Host: true, InUse: true}, {ID: "x", Name: "other", InUse: true}}
+	got, err := SelectCIMachine(ms, "desk")
+	if err != nil || len(got) != 1 || got[0].InUse {
+		t.Fatalf("pinned machine keeps InUse: %+v %v", got, err)
+	}
+	if all, _ := SelectCIMachine(ms, ""); !all[0].InUse || !all[1].InUse {
+		t.Fatal("no pin must leave InUse alone")
+	}
+}

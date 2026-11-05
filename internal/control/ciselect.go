@@ -20,6 +20,7 @@ func SelectCIMachine(ms []localci.Machine, name string) ([]localci.Machine, erro
 	var names []string
 	for _, m := range ms {
 		if strings.EqualFold(m.Name, name) || (m.ID != "" && m.ID == name) {
+			m.InUse = false // a person picked it
 			return []localci.Machine{m}, nil
 		}
 		names = append(names, m.Name)

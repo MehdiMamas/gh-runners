@@ -114,6 +114,8 @@ type Info struct {
 	Runners  []RunnerInfo `json:"runners"`
 	// Paused means the machine is paused: none of its runners run.
 	Paused bool `json:"paused,omitempty"`
+	// InUse means someone is using the machine: it takes no new jobs.
+	InUse bool `json:"in_use,omitempty"`
 	// CI is set when this machine accepts CI jobs from the main host.
 	CI *CIInfo `json:"ci,omitempty"`
 	// Login is the GitHub login this machine is signed in with (empty when

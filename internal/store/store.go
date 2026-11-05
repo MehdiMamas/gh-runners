@@ -277,6 +277,11 @@ type Config struct {
 	// MaxJobs caps jobs running at once on this machine; idle runners pause
 	// while the cap is reached. 0 or unset means no limit.
 	MaxJobs int `json:"max_jobs,omitempty"`
+	// BusyCheck is a command (program and arguments) that tells whether
+	// someone is using this machine: exit 0 means free, 75 means in use,
+	// anything else counts as free. While in use, runners take no new jobs.
+	// Empty means off. Config file only.
+	BusyCheck []string `json:"busy_check,omitempty"`
 	// AutoUpdate installs new gh-runners releases when no job is running;
 	// unset means on.
 	AutoUpdate *bool `json:"auto_update,omitempty"`

@@ -119,6 +119,9 @@ func (m *jitManager) loop(ctx context.Context) {
 			paused := m.paused
 			m.mu.Unlock()
 			if cfg.OnDemand.Enabled && !paused && !m.d.paused.Load() {
+				if m.d.deskBusy.Load() {
+					m.stopIdle()
+				}
 				err = m.poll(ctx, cfg)
 			}
 		}
@@ -210,7 +213,7 @@ func (m *jitManager) poll(ctx context.Context, cfg store.Config) error {
 	m.mu.Lock()
 	repos, me := m.repos, m.me
 	m.mu.Unlock()
-	allowed := jitAllowed(max, cfg.MaxJobs, m.d.busyAlwaysCount())
+	allowed := jitAllowed(max, cfg.MaxJobs, m.d.busyAlwaysCount(), m.d.deskBusy.Load())
 	watching := 0
 	for _, repo := range repos {
 		if ok, _ := f.Match(repo, me); !ok || persistent[strings.ToLower(repo.FullName)] {
@@ -455,6 +458,29 @@ func (m *jitManager) stopAllNow() {
 		go func(s *jitSlot) {
 			defer wg.Done()
 			proc.Stop(s.cmd, s.done, pauseGrace)
+		}(s)
+	}
+	wg.Wait()
+}
+
+// stopIdle stops the on-demand runners that wait for a job, while the machine
+// is in use (#164). One that runs a job finishes it.
+func (m *jitManager) stopIdle() {
+	m.mu.Lock()
+	var idle []*jitSlot
+	for _, s := range m.slots {
+		if s.cmd != nil && s.done != nil && !s.gotJob {
+			idle = append(idle, s)
+		}
+	}
+	m.mu.Unlock()
+	var wg sync.WaitGroup
+	for _, s := range idle {
+		wg.Add(1)
+		go func(s *jitSlot) {
+			defer wg.Done()
+			m.d.Log.Printf("on-demand %s: stopping %s, machine in use", s.scope, filepath.Base(s.dir))
+			proc.Stop(s.cmd, s.done, stopGrace)
 		}(s)
 	}
 	wg.Wait()

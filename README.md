@@ -435,6 +435,15 @@ waits on GitHub until a listener comes back, which happens after the running
 jobs have dropped below the cap for about 10 seconds. A running job is never
 stopped. `0` or unset means no limit.
 
+**Keep the machine free while you use it.** `"busy_check": ["program", "arg"]` in
+`config.json` (no dashboard input) names a command the daemon runs every 45
+seconds. Exit `0` means free, exit `75` means in use; anything else counts as
+free. While in use, idle runners are stopped, no on-demand runner starts and
+local CI sends no new job to this machine (unless you pick it with
+`--machine`); a job that is running finishes. Runners come back about 10 seconds
+after the command reports free again. The command decides how long "in use"
+lasts, for example after the last key press.
+
 ## Security
 
 - **Do not use self-hosted runners on public repositories.** Anyone can open a

@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+
+	"github.com/MehdiMamas/gh-runners/internal/store"
 )
 
 // Machine is one place a job can run: this machine or a fleet member.
@@ -18,6 +20,7 @@ type Machine struct {
 	Tools      []string
 	EmulatorOK bool // may run jobs that start the Firebase emulators
 	Host       bool // the machine running the command
+	InUse      bool // someone is using it (busy_check); it takes no new jobs
 }
 
 // osFits reports whether a runs-on label can run on the OS.
@@ -49,6 +52,8 @@ func Route(j *Job, machines []Machine, load func(id string) int, localOnly bool)
 			why["runs-on "+j.RunsOn+" needs a matching OS"] = true
 		case len(Missing(m.Tools, tools)) > 0:
 			why[fmt.Sprintf("%s lacks %s (not found on this machine's PATH; check with gh-runners ci doctor)", m.Name, strings.Join(Missing(m.Tools, tools), ", "))] = true
+		case m.InUse:
+			why[m.Name+" is in use"] = true
 		case emu && !m.EmulatorOK:
 			why[m.Name+" is not set up for emulator jobs"] = true
 		default:
@@ -109,7 +114,8 @@ type Dispatcher struct {
 
 // LocalMachine describes this machine.
 func LocalMachine(name string, emulatorOK bool) Machine {
-	return Machine{Name: name, OS: runtime.GOOS, Arch: runtime.GOARCH, Tools: DetectTools(), EmulatorOK: emulatorOK, Host: true}
+	_, inUse := store.InUse()
+	return Machine{Name: name, OS: runtime.GOOS, Arch: runtime.GOARCH, Tools: DetectTools(), EmulatorOK: emulatorOK, Host: true, InUse: inUse}
 }
 
 // SelfLocking marks executors that take the emulator lock themselves, so Run

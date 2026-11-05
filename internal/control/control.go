@@ -55,6 +55,10 @@ type Status struct {
 	// Paused is the machine-level pause: nothing runs until Resume.
 	Paused      bool      `json:"paused,omitempty"`
 	PausedSince time.Time `json:"paused_since,omitzero"`
+	// InUse is set while the busy_check command says the machine is in use:
+	// runners take no new jobs.
+	InUse      bool      `json:"in_use,omitempty"`
+	InUseSince time.Time `json:"in_use_since,omitzero"`
 	// GitHubCheck is when the daemon last asked GitHub whether its runners are online.
 	GitHubCheck GitHubCheck `json:"github_check"`
 }
