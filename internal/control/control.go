@@ -30,6 +30,16 @@ type ProcState struct {
 	Restarts  int       `json:"restarts"`
 	LastExit  string    `json:"last_exit,omitempty"`
 	NextStart time.Time `json:"next_start,omitempty"`
+	// GitHubOffline is set while GitHub shows the running runner offline
+	// (see the daemon's health check); GitHubOfflineSince is the first sighting.
+	GitHubOffline      bool      `json:"github_offline,omitempty"`
+	GitHubOfflineSince time.Time `json:"github_offline_since,omitzero"`
+}
+
+// GitHubCheck is the result of the daemon's last GitHub runner listing.
+type GitHubCheck struct {
+	At  time.Time `json:"at,omitzero"`
+	Err string    `json:"error,omitempty"`
 }
 
 // Status is GET /status.
@@ -45,6 +55,8 @@ type Status struct {
 	// Paused is the machine-level pause: nothing runs until Resume.
 	Paused      bool      `json:"paused,omitempty"`
 	PausedSince time.Time `json:"paused_since,omitzero"`
+	// GitHubCheck is when the daemon last asked GitHub whether its runners are online.
+	GitHubCheck GitHubCheck `json:"github_check"`
 }
 
 // UpdateState is what the daemon knows about gh-runners releases.
