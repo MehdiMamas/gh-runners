@@ -39,3 +39,16 @@ func TestKeepaliveArgs(t *testing.T) {
 		}
 	}
 }
+
+func TestNeedKeepalive(t *testing.T) {
+	for _, c := range []struct{ installed, exists, want bool }{
+		{true, false, true},
+		{true, true, false},
+		{false, false, false},
+		{false, true, false},
+	} {
+		if got := needKeepalive(c.installed, c.exists); got != c.want {
+			t.Errorf("installed=%v exists=%v: got %v", c.installed, c.exists, got)
+		}
+	}
+}

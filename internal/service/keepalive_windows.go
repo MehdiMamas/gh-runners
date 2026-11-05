@@ -43,3 +43,18 @@ func keepaliveExists() bool {
 	_, err := schtasks("/Query", "/TN", keepaliveTask(os.Getenv("GH_RUNNERS_HOME")))
 	return err == nil
 }
+
+func ensureKeepalive() (bool, error) {
+	s := status()
+	if !needKeepalive(s.Installed, s.Keepalive) {
+		return false, nil
+	}
+	exe, err := Executable()
+	if err != nil {
+		return false, err
+	}
+	if err := installKeepalive(exe); err != nil {
+		return false, err
+	}
+	return true, nil
+}
