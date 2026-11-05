@@ -200,3 +200,14 @@ func TestAllowControlDefaultsOn(t *testing.T) {
 		t.Fatal("allow_control=false should be off")
 	}
 }
+
+func TestJobLimit(t *testing.T) {
+	for _, c := range []struct {
+		minutes int
+		want    time.Duration
+	}{{0, 180 * time.Minute}, {-1, 0}, {-30, 0}, {30, 30 * time.Minute}} {
+		if got := (Config{MaxJobMinutes: c.minutes}).JobLimit(); got != c.want {
+			t.Errorf("MaxJobMinutes %d: got %v, want %v", c.minutes, got, c.want)
+		}
+	}
+}

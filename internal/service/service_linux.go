@@ -87,6 +87,11 @@ func install() (string, error) {
 			fmt.Fprintf(os.Stderr, "note: could not enable lingering, so runners only run while you are logged in.\nTo fix: sudo loginctl enable-linger %s\n", u.Username)
 		}
 	}
+	if watchdogWanted() {
+		if err := installWatchdog(); err != nil {
+			fmt.Fprintf(os.Stderr, "note: could not set up the WSL watchdog (%v); a frozen WSL will not be restarted.\n", err)
+		}
+	}
 	return unitPath(), waitRunning(15 * time.Second)
 }
 
@@ -107,6 +112,9 @@ func hasCron(text string) bool {
 // installCron is the fallback without a systemd user session (WSL, some
 // containers): an @reboot crontab line, and start the daemon now.
 func installCron(exe string) (string, error) {
+	if os.Getenv("WSL_DISTRO_NAME") != "" {
+		fmt.Fprintln(os.Stderr, "note: no systemd user session, so no WSL watchdog is set up; a frozen WSL will not be restarted.")
+	}
 	existing, _ := exec.Command("crontab", "-l").Output()
 	if !hasCron(string(existing)) {
 		next := strings.TrimRight(string(existing), "\n")
@@ -127,7 +135,14 @@ func installCron(exe string) (string, error) {
 	return "crontab @reboot", StartDetached()
 }
 
-func uninstall() error {
+func uninstall() error { return uninstallUnit(true) }
+
+// uninstallUnit removes the unit and the crontab line, and the WSL watchdog
+// when watchdog is set.
+func uninstallUnit(watchdog bool) error {
+	if watchdog {
+		removeWatchdog()
+	}
 	if _, err := os.Stat(unitPath()); err == nil {
 		_ = run("systemctl", "--user", "disable", "--now", name()+".service")
 		if err := os.Remove(unitPath()); err != nil {
@@ -182,8 +197,10 @@ func status() Status {
 	return Status{Where: unitPath()}
 }
 
+// uninstallKeepRunning is the update path: the watchdog stays, since the
+// update installs again right after.
 func uninstallKeepRunning() error {
-	if err := uninstall(); err != nil {
+	if err := uninstallUnit(false); err != nil {
 		return err
 	}
 	return StartDetached()

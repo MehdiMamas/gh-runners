@@ -205,6 +205,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.updateLoop(ctx)
 	go dash.CIWatch(ctx)
 	go d.diskLoop(ctx)
+	go d.jobLimitLoop(ctx)
 
 	t := time.NewTicker(tick)
 	defer t.Stop()

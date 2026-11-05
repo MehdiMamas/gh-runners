@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/MehdiMamas/gh-runners/internal/proc"
 )
 
 func mk(t *testing.T, p string, size int) {
@@ -127,5 +129,29 @@ func TestOldTrashRemoved(t *testing.T) {
 	CleanRunners(root, func(string) bool { return true })
 	if has(filepath.Join(dir, "_work", ".trash-1")) {
 		t.Error("old trash kept")
+	}
+}
+
+func TestLongJobs(t *testing.T) {
+	old := strayList
+	defer func() { strayList = old }()
+	now := time.Now()
+	strayList = func(string) []proc.Stray {
+		return []proc.Stray{
+			{PID: 1, Path: "/r/bin/Runner.Worker spawnclient", Start: now.Add(-4 * time.Hour)},
+			{PID: 2, Path: "/r/bin/Runner.Worker spawnclient", Start: now.Add(-10 * time.Minute)},
+			{PID: 3, Path: "/r/bin/Runner.Listener run", Start: now.Add(-9 * time.Hour)},
+			{PID: 4, Path: "/r/bin/Runner.Worker spawnclient"},
+		}
+	}
+	got := LongJobs("/r", 3*time.Hour)
+	if len(got) != 1 || got[0].PID != 1 {
+		t.Fatalf("limit 3h: got %+v, want only pid 1", got)
+	}
+	if got := LongJobs("/r", 5*time.Minute); len(got) != 2 {
+		t.Fatalf("limit 5m: got %+v, want pids 1 and 2", got)
+	}
+	if got := LongJobs("/r", 0); got != nil {
+		t.Fatalf("limit 0: got %+v, want none", got)
 	}
 }

@@ -148,3 +148,22 @@ func sizeOf(path string) int64 {
 	})
 	return n
 }
+
+// strayList is proc.Strays; tests replace it.
+var strayList = proc.Strays
+
+// LongJobs returns the Runner.Worker processes under dir that started more
+// than max ago. A max of 0 means no limit, so none; a worker whose start is
+// unknown is never returned.
+func LongJobs(dir string, max time.Duration) []proc.Stray {
+	if max <= 0 {
+		return nil
+	}
+	var out []proc.Stray
+	for _, s := range strayList(dir) {
+		if strings.Contains(s.Path, "Runner.Worker") && !s.Start.IsZero() && time.Since(s.Start) > max {
+			out = append(out, s)
+		}
+	}
+	return out
+}
