@@ -7,7 +7,7 @@ import (
 
 func TestUnit(t *testing.T) {
 	u := Unit("/home/me/.local/bin/gh-runners", "/usr/bin:/bin", "")
-	for _, want := range []string{`ExecStart="/home/me/.local/bin/gh-runners" daemon`, `Environment="PATH=/usr/bin:/bin"`, "WantedBy=default.target", "KillMode=mixed"} {
+	for _, want := range []string{`ExecStart="/home/me/.local/bin/gh-runners" daemon`, `Environment="PATH=/usr/bin:/bin"`, "WantedBy=default.target", "KillMode=mixed", "MemoryHigh=70%", "MemoryMax=80%", "MemorySwapMax=1G", "OOMPolicy=continue"} {
 		if !strings.Contains(u, want) {
 			t.Errorf("unit lacks %q:\n%s", want, u)
 		}
