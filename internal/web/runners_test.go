@@ -56,3 +56,20 @@ func TestStateShowsGitHubHealth(t *testing.T) {
 		t.Fatalf("runner flags = %v", got)
 	}
 }
+
+func TestConfigMaxJobs(t *testing.T) {
+	_, h := setup(t)
+	var put store.Config
+	if code := api(t, h, "PUT", "/api/config", `{"max_jobs":1}`, &put); code != 200 || put.MaxJobs != 1 {
+		t.Fatalf("put: %d, max_jobs %d", code, put.MaxJobs)
+	}
+	got, err := store.LoadConfig()
+	if err != nil || got.MaxJobs != 1 {
+		t.Fatalf("saved: %v, max_jobs %d", err, got.MaxJobs)
+	}
+	for _, bad := range []string{`{"max_jobs":-1}`, `{"max_jobs":65}`} {
+		if code := api(t, h, "PUT", "/api/config", bad, nil); code != 400 {
+			t.Errorf("%s: got %d, want 400", bad, code)
+		}
+	}
+}

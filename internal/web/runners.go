@@ -661,8 +661,8 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, err)
 		return
 	}
-	if in.OnDemand.MaxConcurrent < 0 || in.OnDemand.MaxConcurrent > 64 {
-		fail(w, http.StatusBadRequest, errors.New("on-demand runners at once must be between 1 and 64"))
+	if in.OnDemand.MaxConcurrent < 0 || in.OnDemand.MaxConcurrent > 64 || in.MaxJobs < 0 || in.MaxJobs > 64 {
+		fail(w, http.StatusBadRequest, errors.New("runners and jobs at once must be between 0 and 64"))
 		return
 	}
 	if in.Sync.Interval.Duration != 0 && in.Sync.Interval.Duration < 5*time.Minute {
@@ -677,7 +677,7 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	turnedOnSync := in.Sync.Auto && !cfg.Sync.Auto
 	cfg.Labels, cfg.RunnerName, cfg.Sync, cfg.OnDemand = clean(in.Labels), strings.TrimSpace(in.RunnerName), in.Sync, in.OnDemand
-	cfg.AutoUpdate = in.AutoUpdate
+	cfg.AutoUpdate, cfg.MaxJobs = in.AutoUpdate, in.MaxJobs
 	cfg.UpdateInterval = in.UpdateInterval
 	cfg.Sync.Owners, cfg.Sync.Include, cfg.Sync.Exclude = clean(cfg.Sync.Owners), clean(cfg.Sync.Include), clean(cfg.Sync.Exclude)
 	cfg.OnDemand.Owners, cfg.OnDemand.Include, cfg.OnDemand.Exclude = clean(cfg.OnDemand.Owners), clean(cfg.OnDemand.Include), clean(cfg.OnDemand.Exclude)

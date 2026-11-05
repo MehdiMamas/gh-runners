@@ -274,6 +274,9 @@ type Config struct {
 	DashboardPort int      `json:"dashboard_port,omitempty"`
 	Sync          Sync     `json:"sync"`
 	OnDemand      OnDemand `json:"on_demand"`
+	// MaxJobs caps jobs running at once on this machine; idle runners pause
+	// while the cap is reached. 0 or unset means no limit.
+	MaxJobs int `json:"max_jobs,omitempty"`
 	// AutoUpdate installs new gh-runners releases when no job is running;
 	// unset means on.
 	AutoUpdate *bool `json:"auto_update,omitempty"`

@@ -29,6 +29,12 @@ func (d *Daemon) stopChild(id string, c *child, grace time.Duration) {
 	c.cmd, c.state.PID = nil, 0
 	c.state.State, c.state.Since = "stopped", time.Now()
 	c.state.GitHubOffline, c.state.GitHubOfflineSince = false, time.Time{}
+	if c.held {
+		// Stopped by the host job limit: stays listed until it may start.
+		c.stopping, c.state.State = false, "held"
+		nudge(d.reload)
+		return
+	}
 	delete(d.children, id)
 	nudge(d.reload)
 }

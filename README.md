@@ -427,6 +427,14 @@ Tune sync and on-demand in `config.json` (`gh-runners config` prints it):
 
 `include` / `exclude` take globs on `owner/repo` or just `repo`.
 
+**Limit jobs at once.** `"max_jobs": 2` (or "Max jobs at once on this machine"
+in the dashboard, under on-demand) caps the jobs running here at the same time.
+While the cap is reached, idle runners are stopped (shown as "Waiting: host job
+limit") and on-demand runners are not started; a job that is queued meanwhile
+waits on GitHub until a listener comes back, which happens after the running
+jobs have dropped below the cap for about 10 seconds. A running job is never
+stopped. `0` or unset means no limit.
+
 ## Security
 
 - **Do not use self-hosted runners on public repositories.** Anyone can open a
