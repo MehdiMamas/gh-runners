@@ -1,0 +1,35 @@
+name: Bug report
+description: Something does not work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what you got. A screenshot of the dashboard helps.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: gh-runners version
+      description: Output of `gh-runners --version`
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Windows with WSL
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `gh-runners doctor`
+      description: Remove tokens and private repository names first.
+      render: text
