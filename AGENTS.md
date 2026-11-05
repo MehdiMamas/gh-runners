@@ -8,7 +8,7 @@ gh-runners: one static Go binary that sets up and supervises self-hosted GitHub 
 - Build: `go build` (produces `./gh-runners`).
 - Test: `go vet ./...` and `go test -race ./...`. Format check: `gofmt -l .` must print nothing.
 - Release binaries: `scripts/build-release.sh <version>` (cross-compiles into `dist/`; optional env `GH_RUNNERS_OAUTH_CLIENT_ID`).
-- Browser UI tests: `scripts/ui-test/` (Node scripts, own `package.json`).
+- Browser UI tests: `scripts/ui-test/` (Node scripts, own `package.json`, pnpm: `cd scripts/ui-test && pnpm install`, then e.g. `pnpm tour`).
 
 ## Where things live
 - `main.go`: entry point. `internal/`: `cli`, `daemon`, `runner`, `service`, `store`, `github`, `web` (dashboard, assets in `internal/web/assets`), `fleet`, `localci`, `doctor`, `update`, and others.
