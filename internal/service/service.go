@@ -64,6 +64,9 @@ type Status struct {
 	Running   bool
 	PID       int
 	Where     string // file or registry key that makes it start
+	// Keepalive is true on Windows when the task that restarts a dead daemon
+	// exists.
+	Keepalive bool
 }
 
 // Executable is the absolute path the service will run.

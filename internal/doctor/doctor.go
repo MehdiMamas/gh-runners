@@ -99,6 +99,10 @@ func Run(ctx context.Context, st *control.Status) []Check {
 		add(Fix, "background service not installed: gh-runners service install")
 	}
 
+	if msg := keepaliveCheck(runtime.GOOS, s); msg != "" {
+		add(Fix, "%s", msg)
+	}
+
 	if p := store.LoadPause(); p.Paused {
 		add(Note, "this machine is paused: no runner, on-demand runner, sync or update runs; gh-runners resume turns them back on")
 	}
@@ -158,4 +162,13 @@ func HasScope(scopes, want string) bool {
 		}
 	}
 	return false
+}
+
+// keepaliveCheck warns on Windows when the login entry exists but the task
+// that restarts a dead daemon does not.
+func keepaliveCheck(goos string, s service.Status) string {
+	if goos == "windows" && s.Installed && !s.Keepalive {
+		return "the task that restarts a dead daemon is missing: gh-runners service install"
+	}
+	return ""
 }

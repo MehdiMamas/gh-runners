@@ -8,9 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -670,34 +668,6 @@ func newServiceCmd() *cobra.Command {
 			return nil
 		}},
 	)
-	return cmd
-}
-
-func newDaemonCmd() *cobra.Command {
-	var detach bool
-	cmd := &cobra.Command{
-		Use:   "daemon",
-		Short: "Run the supervisor in the foreground (the service runs this)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if detach {
-				return service.StartDetached()
-			}
-			lf, err := openDaemonLog()
-			if err != nil {
-				return err
-			}
-			defer lf.Close()
-			var w io.Writer = lf
-			if interactive() {
-				w = io.MultiWriter(lf, os.Stderr)
-			}
-			ctx, stop := signal.NotifyContext(ctx(cmd), os.Interrupt, syscall.SIGTERM)
-			defer stop()
-			d := &daemon.Daemon{Version: Version, Log: newLogger(w)}
-			return d.Run(ctx)
-		},
-	}
-	cmd.Flags().BoolVar(&detach, "detach", false, "start in the background and return")
 	return cmd
 }
 

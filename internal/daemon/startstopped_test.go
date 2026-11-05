@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/control"
 	"github.com/MehdiMamas/gh-runners/internal/store"
@@ -173,5 +174,34 @@ func TestStartStoppedLogsReturn(t *testing.T) {
 	d.startStopped()
 	if !strings.Contains(buf.String(), "came back after a reboot or crash") {
 		t.Fatalf("log = %q", buf.String())
+	}
+}
+
+func TestStartStoppedLogsPreviousRun(t *testing.T) {
+	t.Setenv("GH_RUNNERS_HOME", t.TempDir())
+	var buf strings.Builder
+	d := &Daemon{Log: log.New(&buf, "", 0)}
+	d.startStopped() // fresh start: marker not there yet
+	if strings.Contains(buf.String(), "previous run ended") {
+		t.Fatalf("logged after a clean start: %q", buf.String())
+	}
+	when := time.Date(2026, 11, 4, 10, 30, 0, 0, time.Local)
+	if err := os.WriteFile(store.DaemonLog(), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(store.DaemonLog(), when, when); err != nil {
+		t.Fatal(err)
+	}
+	buf.Reset()
+	d.startStopped() // marker left by the first start: a crash
+	want := "previous run ended without a stop (last log 2026-11-04 10:30:00)"
+	if !strings.Contains(buf.String(), want) {
+		t.Fatalf("log = %q, want it to contain %q", buf.String(), want)
+	}
+	buf.Reset()
+	d.markExit(false)
+	d.startStopped()
+	if strings.Contains(buf.String(), "previous run ended") {
+		t.Fatalf("logged after a deliberate stop: %q", buf.String())
 	}
 }

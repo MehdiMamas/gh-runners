@@ -114,15 +114,6 @@ type link struct {
 	relay  bool // runs through the relay
 }
 
-type peerState struct {
-	err      string
-	lastSeen time.Time
-	info     Info
-	hasInfo  bool
-	misses   int
-	dialing  bool
-}
-
 // Peer is another machine of the account, as this one sees it.
 type Peer struct {
 	Entry
@@ -700,20 +691,11 @@ func (r *peerRun) register(l *link, info *Info) bool {
 	l.since = time.Now()
 	r.links[l.id] = l
 	st := r.stateLocked(l.id)
-	st.err, st.misses, st.lastSeen = "", 0, time.Now()
+	st.err, st.misses, st.lastSeen, st.logged = "", 0, time.Now(), nil
 	if info != nil {
 		st.info, st.hasInfo = *info, true
 	}
 	return true
-}
-
-func (r *peerRun) stateLocked(id string) *peerState {
-	st := r.state[id]
-	if st == nil {
-		st = &peerState{}
-		r.state[id] = st
-	}
-	return st
 }
 
 // serveLink runs a registered link until it fails.
@@ -877,7 +859,7 @@ func (r *peerRun) dialRound(ctx context.Context) {
 			}
 			r.mu.Unlock()
 			if err != nil && ctx.Err() == nil {
-				r.p.logf("account machines: %s: %s", e.Name, plainErr(err))
+				r.logFailure(e.ID, "dial", e.Name, plainErr(err))
 			}
 		}()
 	}

@@ -30,6 +30,9 @@ func install() (string, error) {
 	if err := k.SetStringValue(name(), cmdline); err != nil {
 		return "", err
 	}
+	if err := installKeepalive(exe); err != nil {
+		return "", err
+	}
 	return `HKCU\` + runKey + `\` + name(), StartDetached()
 }
 
@@ -38,6 +41,7 @@ func uninstall() error {
 		_ = k.DeleteValue(name())
 		k.Close()
 	}
+	removeKeepalive()
 	return stop()
 }
 
@@ -58,6 +62,7 @@ func status() Status {
 		s.Installed = err == nil
 		k.Close()
 	}
+	s.Keepalive = keepaliveExists()
 	return s
 }
 
@@ -66,5 +71,6 @@ func uninstallKeepRunning() error {
 		_ = k.DeleteValue(name())
 		k.Close()
 	}
+	removeKeepalive()
 	return nil
 }

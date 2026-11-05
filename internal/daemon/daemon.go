@@ -31,6 +31,7 @@ import (
 	"github.com/MehdiMamas/gh-runners/internal/ops"
 	"github.com/MehdiMamas/gh-runners/internal/proc"
 	"github.com/MehdiMamas/gh-runners/internal/runner"
+	"github.com/MehdiMamas/gh-runners/internal/service"
 	"github.com/MehdiMamas/gh-runners/internal/store"
 	"github.com/MehdiMamas/gh-runners/internal/web"
 )
@@ -126,6 +127,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.jit = newJITManager(d)
 	d.paused.Store(store.IsPaused())
 	d.startStopped()
+	go func() {
+		if ok, err := service.EnsureKeepalive(); err != nil {
+			d.Log.Printf("keepalive task: %v", err)
+		} else if ok {
+			d.Log.Printf("created keepalive task")
+		}
+	}()
 
 	// ctx is cancelled by an OS signal (launchd, a service stop); the
 	// derived one is also cancelled by /shutdown, which is a deliberate stop.
