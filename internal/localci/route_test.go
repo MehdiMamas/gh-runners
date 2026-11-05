@@ -2,6 +2,8 @@ package localci
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -148,5 +150,88 @@ func TestDispatcherSecretJobPinnedToRemoteIsBlocked(t *testing.T) {
 	r = d.RunJob(context.Background(), JobSpec{Name: "up", Job: jobWith("windows-latest"), SecretEnv: map[string]string{"K": "abcd1234"}})
 	if r.Status != Blocked || remote.ran != 1 {
 		t.Fatalf("os mismatch: %+v ran %d", r, remote.ran)
+	}
+}
+
+// seqExec answers per machine: a canned result for each call.
+type seqExec struct {
+	res  []Result
+	runs int
+}
+
+func (s *seqExec) RunJob(ctx context.Context, sp JobSpec) Result {
+	r := s.res[s.runs]
+	s.runs++
+	r.Job = sp.Name
+	return r
+}
+
+func twoRemotes(ex map[string]*seqExec) *Dispatcher {
+	tools := []string{"bash", "node"}
+	ms := []Machine{{ID: "a", Name: "one", OS: "linux", Tools: tools}, {ID: "b", Name: "two", OS: "linux", Tools: tools}}
+	return &Dispatcher{Machines: func() []Machine { return ms }, Remote: func(m Machine) Executor { return ex[m.Name] }}
+}
+
+func offlineRes() Result { return Result{Status: Fail, Reason: "machine went offline", Offline: true} }
+
+func TestDispatcherRetriesOfflineMachineElsewhere(t *testing.T) {
+	// Equal load picks the first listed machine, which drops.
+	one, two := &seqExec{res: []Result{offlineRes()}}, &seqExec{res: []Result{{Status: Pass}}}
+	d := twoRemotes(map[string]*seqExec{"one": one, "two": two})
+	log := filepath.Join(t.TempDir(), "job.log")
+	r := d.RunJob(context.Background(), JobSpec{Name: "b", Job: jobWith("ubuntu-latest"), Log: log})
+	if r.Status != Pass || r.Machine != "two" || one.runs != 1 || two.runs != 1 {
+		t.Fatalf("got %+v, runs %d/%d", r, one.runs, two.runs)
+	}
+	b, _ := os.ReadFile(log)
+	if want := "::retry machine one went offline; running on two"; !strings.Contains(string(b), want) {
+		t.Errorf("log = %q, want %q", b, want)
+	}
+	for k, n := range d.busy {
+		if n != 0 {
+			t.Errorf("busy[%s] = %d", k, n)
+		}
+	}
+}
+
+func TestDispatcherOfflineSingleMachineIsBlocked(t *testing.T) {
+	one := &seqExec{res: []Result{offlineRes()}}
+	tools := []string{"bash", "node"}
+	m := Machine{ID: "a", Name: "one", OS: "linux", Tools: tools}
+	d := &Dispatcher{Machines: func() []Machine { return []Machine{m} }, Remote: func(Machine) Executor { return one }}
+	r := d.RunJob(context.Background(), JobSpec{Name: "b", Job: jobWith("ubuntu-latest")})
+	if r.Status != Blocked || !strings.Contains(r.Reason, "machine one went offline; no other machine can run it") || one.runs != 1 {
+		t.Fatalf("got %+v runs %d", r, one.runs)
+	}
+	if n := d.busy["a/one"]; n != 0 {
+		t.Errorf("busy = %d", n)
+	}
+}
+
+func TestDispatcherBothOfflineIsBlockedAfterTwoTries(t *testing.T) {
+	one, two := &seqExec{res: []Result{offlineRes(), offlineRes()}}, &seqExec{res: []Result{offlineRes(), offlineRes()}}
+	d := twoRemotes(map[string]*seqExec{"one": one, "two": two})
+	r := d.RunJob(context.Background(), JobSpec{Name: "b", Job: jobWith("ubuntu-latest")})
+	if r.Status != Blocked || !strings.Contains(r.Reason, "went offline") || !strings.HasPrefix(r.Reason, "machines ") || one.runs+two.runs != 2 {
+		t.Fatalf("got %+v, runs %d", r, one.runs+two.runs)
+	}
+	for k, n := range d.busy {
+		if n != 0 {
+			t.Errorf("busy[%s] = %d", k, n)
+		}
+	}
+}
+
+func TestDispatcherDoesNotRetryTestFailureOrInfra(t *testing.T) {
+	for name, res := range map[string]Result{
+		"test failure": {Status: Fail, Reason: "step failed: go test"},
+		"infra":        {Status: Fail, Reason: "dart crashed", Infra: true},
+	} {
+		one, two := &seqExec{res: []Result{res, res}}, &seqExec{res: []Result{res, res}}
+		d := twoRemotes(map[string]*seqExec{"one": one, "two": two})
+		r := d.RunJob(context.Background(), JobSpec{Name: "b", Job: jobWith("ubuntu-latest")})
+		if r.Status != Fail || one.runs+two.runs != 1 {
+			t.Errorf("%s: got %+v, runs %d", name, r, one.runs+two.runs)
+		}
 	}
 }

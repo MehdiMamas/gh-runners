@@ -238,6 +238,7 @@ func runRemote(ctx context.Context, spec localci.JobSpec, c *conn, logs *ciLogSe
 		return res
 	}
 	if c == nil {
+		res.Offline = true
 		return fail("machine went offline")
 	}
 	if err := os.MkdirAll(filepath.Dir(spec.Log), 0o755); err != nil {
@@ -267,6 +268,7 @@ func runRemote(ctx context.Context, spec localci.JobSpec, c *conn, logs *ciLogSe
 		return res
 	case err != nil:
 		fmt.Fprintln(lf, "::error machine went offline:", err)
+		res.Offline = true
 		return fail("machine went offline")
 	case resp.Error != "":
 		return fail(resp.Error)
