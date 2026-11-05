@@ -289,6 +289,24 @@ type Config struct {
 	// CIEmulator lets this machine run the jobs that start the Firebase
 	// emulators; unset means yes on macOS and Linux, no on Windows.
 	CIEmulator *bool `json:"ci_emulator,omitempty"`
+	// MaxJobMinutes stops a runner job that runs longer than this. 0 means
+	// 180 minutes, negative means no limit (see JobLimit).
+	MaxJobMinutes int `json:"max_job_minutes,omitempty"`
+}
+
+// DefaultJobMinutes is the job time limit when MaxJobMinutes is unset.
+const DefaultJobMinutes = 180
+
+// JobLimit is how long a runner job may run before the daemon stops it;
+// 0 means no limit.
+func (c Config) JobLimit() time.Duration {
+	switch {
+	case c.MaxJobMinutes < 0:
+		return 0
+	case c.MaxJobMinutes == 0:
+		return DefaultJobMinutes * time.Minute
+	}
+	return time.Duration(c.MaxJobMinutes) * time.Minute
 }
 
 // CIEmulatorOK reports whether emulator jobs may run on this machine.

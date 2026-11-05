@@ -226,7 +226,9 @@ func Alive(pid int) bool { return alive(pid) }
 type Stray struct {
 	PID  int
 	Path string // the command line on unix, the executable path on Windows
-	ref  procRef
+	// Start is when the process started, zero when unknown.
+	Start time.Time
+	ref   procRef
 	// group is a process group that goes with it (unix), 0 for none.
 	group int
 }

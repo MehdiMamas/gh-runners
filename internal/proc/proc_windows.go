@@ -281,7 +281,11 @@ func strays(dir string) []Stray {
 			windows.CloseHandle(h)
 			continue
 		}
-		found = append(found, Stray{PID: int(e.ProcessID), Path: exe, ref: h})
+		st := Stray{PID: int(e.ProcessID), Path: exe, ref: h}
+		if t := created(h); t > 0 {
+			st.Start = time.Unix(0, t*100)
+		}
+		found = append(found, st)
 	}
 	return found
 }
@@ -310,4 +314,24 @@ func alive(pid int) bool {
 	defer windows.CloseHandle(h)
 	var code uint32
 	return windows.GetExitCodeProcess(h, &code) == nil && code == 259 // STILL_ACTIVE
+}
+
+// KillTree terminates pid and every process below it, children first. The
+// tree is noted before anything dies, since a parent's exit hides its
+// children. Each process is opened afresh, so no earlier handle is needed.
+func KillTree(pid int) error {
+	kids := descendants(pid)
+	for i := len(kids) - 1; i >= 0; i-- {
+		_ = windows.TerminateProcess(kids[i], 1)
+		windows.CloseHandle(kids[i])
+	}
+	h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, uint32(pid))
+	if err != nil {
+		if !alive(pid) {
+			return nil
+		}
+		return err
+	}
+	defer windows.CloseHandle(h)
+	return windows.TerminateProcess(h, 1)
 }

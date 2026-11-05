@@ -8,6 +8,7 @@ import (
 
 	"github.com/MehdiMamas/gh-runners/internal/fleet"
 	"github.com/MehdiMamas/gh-runners/internal/localci"
+	"github.com/MehdiMamas/gh-runners/internal/proc"
 	"github.com/MehdiMamas/gh-runners/internal/runner"
 	"github.com/MehdiMamas/gh-runners/internal/store"
 )
@@ -28,6 +29,42 @@ func (d *Daemon) diskLoop(ctx context.Context) {
 		}
 		timer.Reset(diskEvery)
 		d.cleanDisk()
+	}
+}
+
+// jobLimitEvery is how often running jobs are checked against the time limit.
+const jobLimitEvery = time.Minute
+
+// jobLimitLoop stops runner jobs that ran longer than the configured limit.
+func (d *Daemon) jobLimitLoop(ctx context.Context) {
+	t := time.NewTicker(jobLimitEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		cfg, _ := store.LoadConfig()
+		d.stopLongJobs(store.RunnersDir(), cfg.JobLimit(), proc.KillTree)
+	}
+}
+
+// stopLongJobs kills, with everything it started, each job under a runner
+// folder of root that ran longer than limit.
+func (d *Daemon) stopLongJobs(root string, limit time.Duration, kill func(pid int) error) {
+	ents, _ := os.ReadDir(root)
+	for _, e := range ents {
+		if !e.IsDir() {
+			continue
+		}
+		for _, s := range runner.LongJobs(filepath.Join(root, e.Name()), limit) {
+			if err := kill(s.PID); err != nil {
+				d.Log.Printf("job in %s ran over %d min; could not stop it: %v", e.Name(), int(limit.Minutes()), err)
+				continue
+			}
+			d.Log.Printf("job in %s ran over %d min; stopped it", e.Name(), int(limit.Minutes()))
+		}
 	}
 }
 
