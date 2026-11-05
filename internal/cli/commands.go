@@ -674,12 +674,17 @@ func newServiceCmd() *cobra.Command {
 }
 
 func newDaemonCmd() *cobra.Command {
-	var detach bool
+	var detach, keepalive bool
 	cmd := &cobra.Command{
 		Use:   "daemon",
 		Short: "Run the supervisor in the foreground (the service runs this)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if detach {
+				// The keepalive task only revives a daemon that died: the
+				// marker is removed by a deliberate stop (#144).
+				if keepalive && !store.DaemonLiveBefore() {
+					return nil
+				}
 				return service.StartDetached()
 			}
 			lf, err := openDaemonLog()
@@ -698,6 +703,7 @@ func newDaemonCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&detach, "detach", false, "start in the background and return")
+	cmd.Flags().BoolVar(&keepalive, "keepalive", false, "with --detach: start only if the last run ended without a stop (used by the keepalive task)")
 	return cmd
 }
 
