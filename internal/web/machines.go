@@ -187,8 +187,7 @@ func StartHost(h *fleet.Host, addr string) error {
 	if addr == "" {
 		// Read fresh at every start: loopback and Tailscale only unless
 		// fleet_lan is set.
-		h.LAN = cfg.FleetLAN
-		return h.StartPort(fleetPort(cfg))
+		return h.StartPort(fleetPort(cfg), cfg.FleetLAN)
 	}
 	return h.Start(addr + ":" + strconv.Itoa(fleetPort(cfg)))
 }

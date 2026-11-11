@@ -143,19 +143,17 @@ func TestListenScopedRefreshAddsAddress(t *testing.T) {
 }
 
 func TestLocalAddrsForNoLAN(t *testing.T) {
-	lan := map[string]bool{}
-	for _, a := range LocalAddrsFor(true) {
-		lan[a] = true
-	}
 	ts := map[string]bool{}
 	for _, a := range tailscaleIPs() {
 		ts[a] = true
 	}
 	for _, a := range LocalAddrsFor(false) {
+		if ip := net.ParseIP(a); ip != nil && !ts[a] {
+			t.Fatalf("%s in LocalAddrsFor(false) is not a Tailscale address", a)
+		}
 		ip := net.ParseIP(a)
 		if ip != nil && ip.To4() != nil && !tailnet.Contains(ip) {
 			t.Fatalf("LAN address %s in LocalAddrsFor(false)", a)
 		}
 	}
-	_ = lan
 }

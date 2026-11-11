@@ -213,7 +213,7 @@ func (p *Peers) start(parent context.Context) (*peerRun, error) {
 		ln, err = ListenScoped(p.listenPort(), p.LAN, true, p.logf)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("cannot listen for the account's other PCs: %w", err)
+		return nil, fmt.Errorf("cannot listen on port %d for the account's other PCs: %w", p.listenPort(), err)
 	}
 	ctx, cancel := context.WithCancel(parent)
 	r := &peerRun{p: p, cancel: cancel, dir: dir, ln: ln, port: ln.Addr().(*net.TCPAddr).Port, cert: c,

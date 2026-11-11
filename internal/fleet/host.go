@@ -26,6 +26,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/github"
@@ -45,9 +46,6 @@ type Host struct {
 	Token func(context.Context) (string, error)
 	// Addrs lists the addresses put in join codes; nil means LocalAddrs.
 	Addrs func() []string
-	// LAN also listens on, and puts in join codes, the LAN addresses (used
-	// by StartPort); false means loopback and Tailscale only.
-	LAN bool
 	// Log, when set, gets one line per member event.
 	Log func(format string, args ...any)
 	// CIRepos lists the owner/repo names whose source members may download
@@ -63,6 +61,7 @@ type Host struct {
 	ciLogs   ciLogSet   // CI job id → where its log goes
 	smu      sync.Mutex // host.json
 	mu       sync.Mutex
+	lan      atomic.Bool // set by StartPort: LAN addresses in join codes
 	ln       net.Listener
 	port     int
 	cert     *tls.Certificate
@@ -238,10 +237,12 @@ func (h *Host) Start(addr string) error {
 }
 
 // StartPort listens on port on loopback and the Tailscale addresses, or on
-// every interface when h.LAN is set. A taken port is an error.
-func (h *Host) StartPort(port int) error {
+// every interface with lan, which also puts the LAN addresses in join
+// codes. A taken port is an error.
+func (h *Host) StartPort(port int, lan bool) error {
+	h.lan.Store(lan)
 	return h.start(func() (net.Listener, error) {
-		ln, err := ListenScoped(port, h.LAN, false, h.logf)
+		ln, err := ListenScoped(port, lan, false, h.logf)
 		if err != nil {
 			return nil, fmt.Errorf("cannot listen for machines on port %d: %w", port, err)
 		}
@@ -515,7 +516,7 @@ func (h *Host) addrs() []string {
 	if h.Addrs != nil {
 		return h.Addrs()
 	}
-	return LocalAddrsFor(h.LAN)
+	return LocalAddrsFor(h.lan.Load())
 }
 
 // Invite makes a one-time join code that works for InviteTTL.
