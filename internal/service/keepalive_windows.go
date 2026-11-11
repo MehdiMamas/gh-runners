@@ -1,8 +1,11 @@
 package service
 
 import (
+	"log"
 	"os"
 	"os/exec"
+	"os/user"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -18,6 +21,21 @@ func schtasks(args ...string) ([]byte, error) {
 
 func installKeepalive(exe string) error {
 	home := os.Getenv("GH_RUNNERS_HOME")
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		dir := os.TempDir()
+		err = registerTaskXML(func(args ...string) error {
+			out, err := schtasks(args...)
+			if err != nil {
+				return &keepaliveError{err, out}
+			}
+			return nil
+		}, keepaliveTask(home), keepaliveXML(exe, home, u.Username), dir,
+			func(base string) string { return filepath.Join(dir, base) })
+		if err == nil {
+			return nil
+		}
+		log.Printf("keepalive task: S4U logon failed, using the sign-in-only task: %v", err)
+	}
 	out, err := schtasks(keepaliveArgs(exe, home)...)
 	if err != nil {
 		return &keepaliveError{err, out}
@@ -46,8 +64,15 @@ func keepaliveExists() bool {
 
 func ensureKeepalive() (bool, error) {
 	s := status()
-	if !needKeepalive(s.Installed, s.Keepalive) {
+	if !s.Installed {
 		return false, nil
+	}
+	if s.Keepalive {
+		// Tasks made before #178 log on interactively and miss a reboot.
+		out, err := schtasks("/Query", "/TN", keepaliveTask(os.Getenv("GH_RUNNERS_HOME")), "/XML")
+		if !needS4U(string(out), err) {
+			return false, nil
+		}
 	}
 	exe, err := Executable()
 	if err != nil {

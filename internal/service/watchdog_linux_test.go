@@ -155,3 +155,18 @@ func TestSchtasksArgs(t *testing.T) {
 		t.Fatalf("got  %q\nwant %q", got, want)
 	}
 }
+
+func TestWatchdogXML(t *testing.T) {
+	got := watchdogXML(`C:\Users\me\AppData\Local\gh-runners\wsl-watchdog.ps1`, `PC\me`)
+	for _, want := range []string{
+		"<Description>gh-runners WSL watchdog</Description>",
+		"<ExecutionTimeLimit>PT5M</ExecutionTimeLimit>",
+		"<Command>conhost.exe</Command>",
+		`<Arguments>--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File &#34;C:\Users\me\AppData\Local\gh-runners\wsl-watchdog.ps1&#34;</Arguments>`,
+		"<LogonType>S4U</LogonType>", "<Interval>PT5M</Interval>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+}

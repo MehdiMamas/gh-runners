@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,13 +116,70 @@ func renderWatchdog(distro string, uid int) string {
 	).Replace(watchdogTemplate)
 }
 
-// schtasksArgs creates the per-user task that runs the script every 5
-// minutes: no admin, no SYSTEM, and no window (conhost --headless).
+// watchdogCommand is the program and arguments the task runs: no window
+// (conhost --headless).
+func watchdogCommand(scriptWinPath string) (command, args string) {
+	return "conhost.exe", `--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File "` + scriptWinPath + `"`
+}
+
+// schtasksArgs is the plain schtasks command line that runs the script every
+// 5 minutes (no admin, no SYSTEM). It is the fallback when the S4U task
+// cannot be created; it runs only while the user is signed in.
 func schtasksArgs(scriptWinPath string) []string {
-	return []string{
-		"/Create", "/F", "/SC", "MINUTE", "/MO", "5", "/TN", watchdogTask,
-		"/TR", `conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File "` + scriptWinPath + `"`,
+	c, a := watchdogCommand(scriptWinPath)
+	return []string{"/Create", "/F", "/SC", "MINUTE", "/MO", "5", "/TN", watchdogTask, "/TR", c + " " + a}
+}
+
+// watchdogXML is the S4U task definition: it runs before anybody signs in.
+func watchdogXML(scriptWinPath, user string) string {
+	c, a := watchdogCommand(scriptWinPath)
+	return taskXML(watchdogTask, user, c, a, "PT5M")
+}
+
+// windowsUser is DOMAIN\user of the Windows account, read through interop.
+func windowsUser() (string, error) {
+	cmd := exec.Command("cmd.exe", "/c", `echo %USERDOMAIN%\%USERNAME%`)
+	cmd.Dir = "/mnt/c"
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
 	}
+	u := strings.TrimSpace(string(out))
+	if u == "" || strings.Contains(u, "%") || strings.HasPrefix(u, `\`) {
+		return "", fmt.Errorf("could not read the Windows user name: %q", u)
+	}
+	return u, nil
+}
+
+// registerWatchdogTask creates the S4U task, or the sign-in-only one when
+// that fails (logged).
+func registerWatchdogTask(winDir, unixDir string) error {
+	script := winDir + `\` + watchdogScript
+	user, err := windowsUser()
+	if err == nil {
+		err = registerTaskXML(func(args ...string) error { return run("schtasks.exe", args...) },
+			watchdogTask, watchdogXML(script, user), unixDir,
+			func(base string) string { return winDir + `\` + base })
+	}
+	if err == nil {
+		return nil
+	}
+	log.Printf("WSL watchdog task: S4U logon failed, using the sign-in-only task: %v", err)
+	return run("schtasks.exe", schtasksArgs(script)...)
+}
+
+// migrateWatchdogTask recreates an existing task that still logs on with an
+// interactive token. A missing task is never created here. It reports
+// whether it recreated the task.
+func migrateWatchdogTask(winDir, unixDir string) (bool, error) {
+	out, err := exec.Command("schtasks.exe", "/Query", "/TN", watchdogTask, "/XML").Output()
+	if !needS4U(string(out), err) {
+		return false, nil
+	}
+	if err := registerWatchdogTask(winDir, unixDir); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // watchdogWanted tells whether this is WSL with Windows interop, the only
@@ -190,7 +248,7 @@ func installWatchdog() error {
 	if err := recordWatchdogDir(unix); err != nil {
 		return err
 	}
-	return run("schtasks.exe", schtasksArgs(win+`\`+watchdogScript)...)
+	return registerWatchdogTask(win, unix)
 }
 
 // removeWatchdog deletes the task, the script and what the probe left. Best
@@ -215,16 +273,15 @@ func removeWatchdog() {
 }
 
 // EnsureWatchdog rewrites the script of an install that already has one when
-// it differs from the current template. It never creates a script and never
-// touches the task. It reports whether it rewrote.
+// it differs from the current template, and recreates its task as S4U when it
+// still logs on interactively. It never creates a script or a missing task.
+// It reports whether it changed anything.
 func EnsureWatchdog() (bool, error) {
 	if !watchdogWanted() {
 		return false, nil
 	}
-	unix := ""
-	if _, u, err := watchdogDir(); err == nil {
-		unix = u
-	} else {
+	win, unix, derr := watchdogDir()
+	if derr != nil {
 		unix = recordedWatchdogDir()
 	}
 	if unix == "" {
@@ -236,7 +293,15 @@ func EnsureWatchdog() (bool, error) {
 	if err := recordWatchdogDir(unix); err != nil {
 		return false, err
 	}
-	return rewriteWatchdog(unix, renderWatchdog(os.Getenv("WSL_DISTRO_NAME"), os.Getuid()))
+	changed, err := rewriteWatchdog(unix, renderWatchdog(os.Getenv("WSL_DISTRO_NAME"), os.Getuid()))
+	if err != nil {
+		return changed, err
+	}
+	if derr != nil {
+		return changed, nil // no interop: the task cannot be read or made
+	}
+	moved, err := migrateWatchdogTask(win, unix)
+	return changed || moved, err
 }
 
 // rewriteWatchdog replaces the script in dir with content when it exists and
