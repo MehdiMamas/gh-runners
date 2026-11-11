@@ -198,13 +198,17 @@ func TestHoldWhenIdleStopsAtJobEnd(t *testing.T) {
 	if c.cmd == nil || c.held {
 		t.Fatal("a busy runner must not be stopped by the tick")
 	}
-	idleAt := time.Now()
+	idleAt, readsAt := time.Now(), f.count()
 	f.set(c.dir, false) // busy -> idle
 	waitFor(t, "runner held", func() bool {
 		_, held, stopping, running := d.childState("a")
 		return held && !stopping && !running
 	})
-	// Held well inside one reconcile tick of the idle read.
+	// Held at the first poll that reads idle (plus the locked recheck), so
+	// within one holdPoll of the idle read, and well inside one tick.
+	if reads := f.count() - readsAt; reads > 3 {
+		t.Fatalf("held after %d busy reads, want the first idle poll", reads)
+	}
 	if took := time.Since(idleAt); took >= tick/2 {
 		t.Fatalf("held after %v, want well under one tick (%v)", took, tick)
 	}
