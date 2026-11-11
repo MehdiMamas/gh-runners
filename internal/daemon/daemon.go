@@ -416,8 +416,8 @@ func (d *Daemon) status() control.Status {
 			s.Runners = append(s.Runners, control.ProcState{ID: id, State: "stopping", Strays: n})
 		}
 	}
-	d.mu.Unlock()
 	s.Deferred = d.pref.status()
+	d.mu.Unlock()
 	s.Runners = append(s.Runners, d.jit.states()...)
 	s.OnDemand = d.jit.summary()
 	sort.Slice(s.Runners, func(i, j int) bool { return s.Runners[i].ID < s.Runners[j].ID })

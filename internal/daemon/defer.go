@@ -47,12 +47,20 @@ func (s *deferState) status() []control.Deferred {
 	return append([]control.Deferred(nil), s.held...)
 }
 
-// findPeer returns the peer a rule's To names: its id, its name or its host
-// name, ignoring case.
+// findPeer returns the peer a rule's To names, ignoring case: an id match
+// first, then a name, then a host name, so two machines with one host name
+// can still be told apart by id or name.
 func findPeer(to string, peers []fleet.Peer) (fleet.Peer, bool) {
-	for _, p := range peers {
-		if strings.EqualFold(p.ID, to) || strings.EqualFold(p.Name, to) || strings.EqualFold(p.Info.Hostname, to) {
-			return p, true
+	keys := []func(fleet.Peer) string{
+		func(p fleet.Peer) string { return p.ID },
+		func(p fleet.Peer) string { return p.Name },
+		func(p fleet.Peer) string { return p.Info.Hostname },
+	}
+	for _, key := range keys {
+		for _, p := range peers {
+			if strings.EqualFold(key(p), to) {
+				return p, true
+			}
 		}
 	}
 	return fleet.Peer{}, false
@@ -241,7 +249,7 @@ func (d *Daemon) noteDefer(hits []deferHit) {
 		}
 	}
 	s.on = now
-	s.held = s.held[:0]
+	s.held = nil // a new slice: status() copies the old one under d.mu
 	for label, to := range now {
 		s.held = append(s.held, control.Deferred{Label: label, To: to, Held: count[label]})
 	}

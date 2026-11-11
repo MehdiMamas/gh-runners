@@ -167,3 +167,19 @@ func TestApplyDeferThroughSeam(t *testing.T) {
 		t.Fatalf("hold not lifted: deferred=%v status=%+v", a, st)
 	}
 }
+
+func TestFindPeerPrefersIDAndName(t *testing.T) {
+	peers := []fleet.Peer{
+		{ID: "aaa", Name: "box", Info: fleet.Info{Hostname: "build"}},
+		{ID: "build", Name: "other", Info: fleet.Info{Hostname: "build"}},
+	}
+	if p, _ := findPeer("build", peers); p.ID != "build" {
+		t.Fatalf("id match should win over host name, got %q", p.ID)
+	}
+	if p, _ := findPeer("BOX", peers); p.ID != "aaa" {
+		t.Fatalf("name match, got %q", p.ID)
+	}
+	if _, ok := findPeer("nope", peers); ok {
+		t.Fatal("unknown name matched")
+	}
+}
