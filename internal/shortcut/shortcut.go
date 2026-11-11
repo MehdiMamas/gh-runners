@@ -15,11 +15,16 @@ func Install() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	args := []string{"ui"}
-	if home := os.Getenv("GH_RUNNERS_HOME"); home != "" {
-		args = append(args, "--home", home)
+	return install(exe, uiArgs(os.Getenv("GH_RUNNERS_HOME")))
+}
+
+// uiArgs is the command line after the executable: "ui", plus --home when
+// home is set.
+func uiArgs(home string) []string {
+	if home == "" {
+		return []string{"ui"}
 	}
-	return install(exe, args)
+	return []string{"ui", "--home", home}
 }
 
 // Uninstall removes the shortcut; it is not an error if there is none.

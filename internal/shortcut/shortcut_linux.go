@@ -23,18 +23,24 @@ func execArg(s string) string {
 	return `"` + r.Replace(s) + `"`
 }
 
-func install(exe string, args []string) (string, error) {
-	p := path()
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return "", err
-	}
+// execLine builds the value of the Exec key for exe and args.
+func execLine(exe string, args []string) string {
 	line := execArg(exe)
 	for _, a := range args {
 		line += " " + execArg(a)
 	}
 	// The Exec value is itself unescaped once more for \ in desktop files.
 	line = strings.ReplaceAll(line, `\`, `\\`)
-	entry := "[Desktop Entry]\nType=Application\nName=gh-runners\nComment=Manage GitHub Actions runners on this computer\nExec=" + line +
+	// A literal % is written %% (else it reads as a field code).
+	return strings.ReplaceAll(line, "%", "%%")
+}
+
+func install(exe string, args []string) (string, error) {
+	p := path()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return "", err
+	}
+	entry := "[Desktop Entry]\nType=Application\nName=gh-runners\nComment=Manage GitHub Actions runners on this computer\nExec=" + execLine(exe, args) +
 		"\nIcon=utilities-terminal\nTerminal=false\nCategories=Development;\n"
 	if err := os.WriteFile(p, []byte(entry), 0o644); err != nil {
 		return "", err
