@@ -112,14 +112,16 @@ func (d *Daemon) checkUpdate(ctx context.Context, asked bool) (time.Duration, bo
 		d.setUpdate(func(u *control.UpdateState) {
 			u.Note = devNote(d.Version)
 		})
+		d.endDrain()
 		return updateEvery(), false
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	latest, err := update.Latest(cctx)
+	latest, err := latestRelease(cctx)
 	cancel()
 	if err != nil {
 		d.setUpdate(func(u *control.UpdateState) { u.Error = err.Error() })
 		d.Log.Printf("update check: %v", err)
+		d.endDrain()
 		if asked {
 			return updateBusy, true
 		}
@@ -159,7 +161,7 @@ func (d *Daemon) checkUpdate(ctx context.Context, asked bool) (time.Duration, bo
 // job is running and it should try again later.
 func (d *Daemon) applyUpdate(ctx context.Context, tag string) (waiting bool, err error) {
 	wait := func(why string) (bool, error) {
-		d.noteWaiting(time.Now())
+		d.noteWait(why, time.Now())
 		d.setUpdate(func(u *control.UpdateState) { u.Note = "waiting for " + why + " before updating to " + tag })
 		return true, nil
 	}

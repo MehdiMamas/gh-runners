@@ -1,8 +1,11 @@
 package daemon
 
 import (
+	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/MehdiMamas/gh-runners/internal/update"
 )
 
 const (
@@ -43,4 +46,24 @@ func (d *Daemon) noteWaiting(now time.Time) {
 func (d *Daemon) endDrain() {
 	d.updSince.Store(0)
 	d.draining.Store(false)
+}
+
+// latestRelease is update.Latest (a seam for tests).
+var latestRelease = update.Latest
+
+// noteWait handles a pending update that has to wait for why. Only waiting
+// for runner jobs can end by draining; for any other reason (CI runs, peer
+// jobs, GitHub not answering) the runners are not held.
+func (d *Daemon) noteWait(why string, now time.Time) {
+	if runnerJobWait(why) {
+		d.noteWaiting(now)
+		return
+	}
+	d.endDrain()
+}
+
+// runnerJobWait says a busy reason from Daemon.busy is a runner job
+// (always-on or on-demand) that draining can bring to an end.
+func runnerJobWait(why string) bool {
+	return strings.HasPrefix(why, "the job on ") || strings.Contains(why, "on-demand runner(s)")
 }
