@@ -255,6 +255,20 @@ gh-runners ci run acme/web-app 42 --machine build-pc --jobs mobile --approve --j
 - **Secrets.** `gh-runners ci secret set owner/repo NAME` reads the value from stdin (never from the command line), `--file <path>` keeps a file and gives jobs its path, `ci secret list` shows names only and `ci secret rm` removes one. They are stored in `~/.gh-runners/secrets/<owner>/<repo>.json` (mode 0600) on this machine only. A job that reads `${{ secrets.NAME }}` gets them only after a login on the repo's allowlist (named, not `collaborators`; default: you) approves the exact head commit of the PR in a review, or when you run `ci run --approve`; before that the job is skipped and says who must approve which commit. A job with secrets runs only on this machine, never on a linked PC, and their values are hidden as `***` in its log, statuses and comment. `secrets.GITHUB_TOKEN` is never provided. When the approval comes after the first run, the watcher runs just the secret jobs once more. **Security:** an approved PR runs its own code with these secrets and your keychain, like a self-hosted runner, so approve only commits you have read.
 - The dashboard shows what a run is doing: open a repository's Local CI dialog for the runs going on now (each job with its machine, state and time, and a Log button that opens the tail of its log) and, on every past run, whether a comment was posted. A run that posts nothing on purpose (a job that cannot run on any machine, an infrastructure error, a dry run, posting off, or GitHub refusing the comment) says so with the reason and the next step, and `Details and event feed` lists what happened, step by step. The feed is the `events.jsonl` file in the run's folder.
 
+### Share the emulator lock
+
+Local CI jobs that start the Firebase emulators take turns through a machine-wide lock. A script of your own that starts the emulators or another fixed-port server can wait for the same lock, so it never clashes with a CI job on this machine:
+
+```
+gh-runners ci lock [--name emulator] [--timeout 30m] -- <command> [args...]
+gh-runners ci lock -- npx firebase emulators:exec "npm test"
+gh-runners ci lock --timeout 10min -- ./run-e2e.sh
+```
+
+- `--name` picks the lock (default `emulator`, the one local CI uses). `--timeout` is how long to wait for it (default `30m`; forms like `10min` work).
+- Waiters get the lock in the order they arrived. While it waits, the command prints `waiting for the emulator lock (held by a local CI job)`.
+- The command's own exit code is passed through. If the lock is still held when the timeout ends, nothing runs and `ci lock` exits with 75.
+
 ### Windows laptops
 
 A Windows laptop can take CI jobs from the main host. Joining the fleet is the opt-in: the main host then sends it the jobs its OS and tools fit, and it runs them with the same scrubbed environment. Do these steps on the laptop, in PowerShell:
