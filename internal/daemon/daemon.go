@@ -15,7 +15,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -51,20 +50,6 @@ const (
 	// browser's cookie for it) stays the same across restarts.
 	DefaultPort = 47321
 )
-
-type child struct {
-	cmd      *exec.Cmd
-	done     chan struct{}
-	dir      string
-	stopping bool
-	// healthKill marks a kill by the GitHub health check, so the exit is not
-	// counted as a crash.
-	healthKill bool
-	// held marks a runner stopped on purpose because the host job limit
-	// (max_jobs) is reached; it is kept in d.children and not started.
-	held  bool
-	state control.ProcState
-}
 
 // Daemon supervises runners on this machine.
 type Daemon struct {
@@ -102,6 +87,9 @@ type Daemon struct {
 	upd       control.UpdateState
 	// ciBusy names the queued or running Local CI task, or "" when none.
 	ciBusy func() string
+
+	// busyFn is a test seam for isBusy (hold.go); nil means runner.Busy.
+	busyFn func(dir string) bool
 
 	tokMu    sync.Mutex
 	tok      string
