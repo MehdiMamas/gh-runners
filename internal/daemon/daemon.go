@@ -70,6 +70,7 @@ type Daemon struct {
 	deskErr  string       // last busy_check error already logged, owned by deskLoop
 	// inUseCheck runs the busy_check command; nil means the real command.
 	inUseCheck func(ctx context.Context) (bool, error)
+	pref       deferState     // see defer.go
 	below      int            // reconcile ticks in a row under the max_jobs limit, see hold.go
 	strays     map[string]int // runner id -> processes left after a stop, see sweep.go
 	seen       map[int]bool   // strays the last sweep saw
@@ -415,6 +416,7 @@ func (d *Daemon) status() control.Status {
 			s.Runners = append(s.Runners, control.ProcState{ID: id, State: "stopping", Strays: n})
 		}
 	}
+	s.Deferred = d.pref.status()
 	d.mu.Unlock()
 	s.Runners = append(s.Runners, d.jit.states()...)
 	s.OnDemand = d.jit.summary()
@@ -436,6 +438,7 @@ func (d *Daemon) reconcile() {
 		}
 	}
 	cfg, _ := store.LoadConfig()
+	peers := d.deferPeers(cfg.Defer)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	now := time.Now()
@@ -454,13 +457,14 @@ func (d *Daemon) reconcile() {
 		}
 	}
 	holding := d.applyLimit(cfg.MaxJobs, d.holdAll())
+	d.applyDefer(runners, cfg.Defer, peers)
 	for id, r := range want {
 		c := d.children[id]
 		if c == nil {
 			c = &child{state: control.ProcState{ID: id, State: "stopped", Since: now}}
 			d.children[id] = c
 		}
-		if c.held && holding {
+		if (c.held && holding) || c.deferred {
 			continue
 		}
 		if c.cmd != nil || now.Before(c.state.NextStart) {
@@ -664,9 +668,11 @@ func (d *Daemon) fleetInfo() fleet.Info {
 	}
 	st := d.status()
 	runners, _ := store.List()
+	info.ReportsBusy = true
 	for _, r := range runners {
 		state, _ := ops.LocalState(r, st, true)
-		info.Runners = append(info.Runners, fleet.RunnerInfo{ID: r.ID, Scope: r.Scope(), Name: r.Name, State: state, Labels: r.Labels})
+		info.Runners = append(info.Runners, fleet.RunnerInfo{ID: r.ID, Scope: r.Scope(), Name: r.Name, State: state, Labels: r.Labels,
+			Busy: state == "running" && d.isBusy(r.Dir())})
 	}
 	return info
 }

@@ -407,9 +407,7 @@ func newListCmd() *cobra.Command {
 				fmt.Println("Daemon: not running. `gh-runners service install` starts it now and at login.")
 			} else {
 				fmt.Printf("Daemon: running (pid %d, %s, up %s)\n", st.PID, st.Version, time.Since(st.Started).Round(time.Second))
-				if st.OnDemand != "" && st.OnDemand != "off" {
-					fmt.Printf("On-demand: %s\n", st.OnDemand)
-				}
+				printModes(st)
 				if st.SyncErr != "" {
 					fmt.Printf("Last sync failed: %s\n", st.SyncErr)
 				}

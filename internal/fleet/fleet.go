@@ -126,6 +126,9 @@ type Info struct {
 	// Links lists the ids of the account machines this one has a direct link
 	// to, so a machine that cannot reach one of them can go through it.
 	Links []string `json:"links,omitempty"`
+	// ReportsBusy says Runners carry Busy; an older version without it
+	// would look idle while running jobs (#188).
+	ReportsBusy bool `json:"reports_busy,omitempty"`
 }
 
 // RunnerInfo is one runner of a member.
@@ -135,6 +138,9 @@ type RunnerInfo struct {
 	Name   string   `json:"name"`
 	State  string   `json:"state"`
 	Labels []string `json:"labels"`
+	// Busy says the runner is running a job right now (State alone cannot
+	// tell an idle runner from one with a job).
+	Busy bool `json:"busy,omitempty"`
 }
 
 // conn frames JSON messages (a 4-byte length, then the JSON) and matches

@@ -59,8 +59,19 @@ type Status struct {
 	// runners take no new jobs.
 	InUse      bool      `json:"in_use,omitempty"`
 	InUseSince time.Time `json:"in_use_since,omitzero"`
+	// Deferred lists the labels whose jobs this machine leaves to a linked
+	// machine right now (#188).
+	Deferred []Deferred `json:"deferred,omitempty"`
 	// GitHubCheck is when the daemon last asked GitHub whether its runners are online.
 	GitHubCheck GitHubCheck `json:"github_check"`
+}
+
+// Deferred is one active "defer" rule: idle runners with Label are held for
+// the machine To; Held is how many are stopped for it.
+type Deferred struct {
+	Label string `json:"label"`
+	To    string `json:"to"`
+	Held  int    `json:"held"`
 }
 
 // UpdateState is what the daemon knows about gh-runners releases.

@@ -93,3 +93,14 @@ func pausedLine() string {
 	}
 	return s
 }
+
+// printModes prints the on-demand mode and the "defer" rules (#188) that
+// are holding runners right now.
+func printModes(st control.Status) {
+	if st.OnDemand != "" && st.OnDemand != "off" {
+		fmt.Printf("On-demand: %s\n", st.OnDemand)
+	}
+	for _, df := range st.Deferred {
+		fmt.Printf("Deferred: %s jobs go to %s (%d runners held)\n", df.Label, df.To, df.Held)
+	}
+}

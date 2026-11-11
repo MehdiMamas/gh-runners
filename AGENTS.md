@@ -54,6 +54,30 @@ gh-runners: one static Go binary that sets up and supervises self-hosted GitHub 
 - `d.deskBusy` feeds the `max_jobs` hold (`hold.go`): `applyLimit(maxJobs, inUse)` and `holdIdle(..., inUse)` hold every idle always-on runner (`[id] holding: machine in use`), never one running a job, and lift `holdTicks` ticks after free. `jitAllowed(..., inUse)` is 0 and `jitManager.stopIdle` stops on-demand runners waiting for a job. Never touches the manual pause.
 - State on disk: `~/.gh-runners/in-use` (`since <RFC3339>`, `store.InUsePath/InUse/SetInUse`), cleared at daemon start. `localci.LocalMachine` reads it, `fleet.Info.InUse` (`in_use`) carries it to members and peers (`Host.CIMachines`, `Peers.CIMachines`), `control.Status.InUse/InUseSince`. `localci.Route` skips an `InUse` machine ("<name> is in use"); `control.SelectCIMachine` clears `InUse` on a `--machine` pick. No dashboard UI for it yet.
 
+## Prefer a machine for some jobs (#188)
+
+GitHub gives a queued job to any idle runner whose labels match, with no order
+between machines. On linked account machines you can still send heavy jobs to
+a stronger machine while it is free. In `config.json` on the
+other machines:
+
+```json
+{ "defer": [ { "label": "heavy", "to": "build-pc" } ] }
+```
+
+While `build-pc` is linked, reported within the last 2 minutes, not in use
+(`busy_check`), not paused, and has an idle runner with the same repository
+(or organization) and the label `heavy`, this machine holds its idle runners
+that carry `heavy` (log `[id] holding: deferred to build-pc`) and does not
+start on-demand runners for queued jobs with that label. The moment
+`build-pc` is in use, paused, unlinked, silent for 2 minutes or has no idle
+runner for it, the hold lifts and the jobs overflow here. A runner that is
+running a job is never stopped. `to` is a machine id, name or host name (one that fits two machines is unknown); naming this
+machine or an unknown one is ignored (logged once). Set a rule on one side only: two machines that defer the same label to each other can keep holding and lifting in turn. One idle runner there holds every matching runner here, so when several jobs queue at once, all but one wait until that machine reports it is busy (up to about a minute). A runner there that is up but offline on GitHub counts as idle until the health check restarts it. A job can wait up to about a minute longer when the preferred
+machine fills up. `gh-runners list` shows the active rules.
+Code: `internal/daemon/defer.go` (pure `deferHits`/`deferHold`, `applyDefer` from `reconcile`, `deferJob` from the on-demand poll, `child.deferred`), `fleet.RunnerInfo.Busy`, `control.Status.Deferred`. The preferred
+machine must run a version that reports which runners are busy.
+
 ## Memory (#149)
 - The Linux systemd unit (`Unit`, `internal/service/service_linux.go`) caps the daemon and every runner job under it: `MemoryHigh=70%`, `MemoryMax=80%`, `MemorySwapMax=1G`, `OOMPolicy=continue`, so a runaway job is killed alone instead of freezing the machine (a WSL VM froze when a test step's leftover node processes filled it). `gh-runners service install` rewrites the unit.
 - Job time limit: `Config.MaxJobMinutes` (`max_job_minutes` in config.json; 0 means 180, negative means off; `JobLimit()`). `Daemon.jobLimitLoop` (`internal/daemon/disk.go`) checks every minute; `runner.LongJobs` finds `Runner.Worker` processes older than the limit (`Stray.Start`, from ps `etime=` on unix, process creation time on Windows) and `proc.KillTree` kills each with all its descendants. Config file only, no dashboard input.
