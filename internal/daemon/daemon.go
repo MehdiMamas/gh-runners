@@ -129,8 +129,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.children = map[string]*child{}
 	d.strays, d.seen = map[string]int{}, map[int]bool{}
 	d.started = time.Now()
-	d.reload = make(chan struct{}, 1)
-	d.syncNow = make(chan struct{}, 1)
+	d.reload, d.syncNow = make(chan struct{}, 1), make(chan struct{}, 1)
 	d.updateNow = make(chan struct{}, 1)
 	d.updateCfg = make(chan struct{}, 1)
 	d.jit = newJITManager(d)
@@ -142,6 +141,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		} else if ok {
 			d.Log.Printf("created keepalive task")
 		}
+		service.FixInterop()
 		if ok, err := service.EnsureWatchdog(); err != nil {
 			d.Log.Printf("WSL watchdog script: %v", err)
 		} else if ok {

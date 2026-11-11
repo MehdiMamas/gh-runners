@@ -82,7 +82,10 @@ func Executable() (string, error) {
 }
 
 // Install registers the daemon to start at login and starts it now.
-func Install() (string, error) { return install() }
+func Install() (string, error) {
+	FixInterop()
+	return install()
+}
 
 // Uninstall stops the daemon and removes the login entry.
 func Uninstall() error {
@@ -234,7 +237,11 @@ func waitStopped(timeout time.Duration) {
 func run(name string, args ...string) error {
 	out, err := exec.Command(name, args...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%s %v: %v: %s", name, args, err, out)
+		return fmtRunErr(name, args, err, out)
 	}
 	return nil
+}
+
+func fmtRunErr(name string, args []string, err error, out []byte) error {
+	return fmt.Errorf("%s %v: %v: %s", name, args, err, out)
 }
