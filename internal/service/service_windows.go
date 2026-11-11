@@ -30,7 +30,7 @@ func install() (string, error) {
 	if err := k.SetStringValue(name(), cmdline); err != nil {
 		return "", err
 	}
-	if err := installKeepalive(exe); err != nil {
+	if err := installKeepalive(exe, true); err != nil {
 		return "", err
 	}
 	return `HKCU\` + runKey + `\` + name(), StartDetached()

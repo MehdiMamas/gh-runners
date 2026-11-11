@@ -36,12 +36,30 @@ func keepaliveArgs(exe, home string) []string {
 // keepaliveXML is the S4U task definition for the keepalive task.
 func keepaliveXML(exe, home, user string) string {
 	c, a := keepaliveCommand(exe, home)
-	return taskXML(keepaliveTask(home), user, c, a, "PT2M")
+	return taskXML(keepaliveTask(home), user, c, a, "PT72H")
 }
 
-// needKeepalive tells whether the task must be created: the login entry is
-// set but the task is missing.
-func needKeepalive(installed, exists bool) bool { return installed && !exists }
+type keepaliveStep int
+
+const (
+	planNothing keepaliveStep = iota
+	planCreate                // login entry set, task missing: create it
+	planMigrate               // task logs on interactively: recreate as S4U
+)
+
+// keepalivePlan decides what the daemon start does. queryXML and queryErr are
+// the result of `schtasks /Query /XML`, only read when the task exists.
+func keepalivePlan(installed, exists bool, queryXML string, queryErr error) keepaliveStep {
+	switch {
+	case !installed:
+		return planNothing
+	case !exists:
+		return planCreate
+	case needS4U(queryXML, queryErr):
+		return planMigrate
+	}
+	return planNothing
+}
 
 // EnsureKeepalive creates the keepalive task for an install that predates it
 // (auto-update only restarts the service). It reports whether it created the

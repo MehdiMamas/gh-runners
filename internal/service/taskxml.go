@@ -14,7 +14,7 @@ import (
 // command every 5 minutes. The principal logs on with S4U (service for user),
 // so the task also runs after a reboot before anybody signs in, and with
 // LeastPrivilege, so creating it needs no admin rights and no UAC prompt.
-// limit is the ExecutionTimeLimit, e.g. "PT2M".
+// limit is the ExecutionTimeLimit, e.g. "PT5M".
 func taskXML(name, user, command, args, limit string) string {
 	e := xmlEscape
 	var b strings.Builder

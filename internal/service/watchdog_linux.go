@@ -151,9 +151,10 @@ func windowsUser() (string, error) {
 	return u, nil
 }
 
-// registerWatchdogTask creates the S4U task, or the sign-in-only one when
-// that fails (logged).
-func registerWatchdogTask(winDir, unixDir string) error {
+// registerWatchdogTask creates the S4U task. When that fails, a fresh install
+// (fallback true) gets the sign-in-only task (logged); a migration returns
+// the error and leaves the existing task alone.
+func registerWatchdogTask(winDir, unixDir string, fallback bool) error {
 	script := winDir + `\` + watchdogScript
 	user, err := windowsUser()
 	if err == nil {
@@ -163,6 +164,9 @@ func registerWatchdogTask(winDir, unixDir string) error {
 	}
 	if err == nil {
 		return nil
+	}
+	if !fallback {
+		return err // migration: the existing task stays as it is
 	}
 	log.Printf("WSL watchdog task: S4U logon failed, using the sign-in-only task: %v", err)
 	return run("schtasks.exe", schtasksArgs(script)...)
@@ -176,7 +180,7 @@ func migrateWatchdogTask(winDir, unixDir string) (bool, error) {
 	if !needS4U(string(out), err) {
 		return false, nil
 	}
-	if err := registerWatchdogTask(winDir, unixDir); err != nil {
+	if err := registerWatchdogTask(winDir, unixDir, false); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -248,7 +252,7 @@ func installWatchdog() error {
 	if err := recordWatchdogDir(unix); err != nil {
 		return err
 	}
-	return registerWatchdogTask(win, unix)
+	return registerWatchdogTask(win, unix, true)
 }
 
 // removeWatchdog deletes the task, the script and what the probe left. Best

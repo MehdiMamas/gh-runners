@@ -14,7 +14,7 @@ const goldenKeepalive = `<?xml version="1.0" encoding="UTF-16"?>
   <RegistrationInfo><Description>gh-runners keepalive</Description></RegistrationInfo>
   <Triggers><TimeTrigger><Repetition><Interval>PT5M</Interval></Repetition><StartBoundary>2026-01-01T00:00:00</StartBoundary><Enabled>true</Enabled></TimeTrigger></Triggers>
   <Principals><Principal id="Author"><UserId>PC\me</UserId><LogonType>S4U</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
-  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT2M</ExecutionTimeLimit><Enabled>true</Enabled><Hidden>true</Hidden></Settings>
+  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT72H</ExecutionTimeLimit><Enabled>true</Enabled><Hidden>true</Hidden></Settings>
   <Actions Context="Author"><Exec><Command>conhost.exe</Command><Arguments>--headless &#34;C:\bin\gh-runners.exe&#34; daemon --detach --keepalive</Arguments></Exec></Actions>
 </Task>
 `
