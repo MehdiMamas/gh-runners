@@ -71,3 +71,15 @@ gh-runners: one static Go binary that sets up and supervises self-hosted GitHub 
 - Tests use an in-process fake relay and a fake wake store (`relay_test.go`); never the real relay or GitHub account.
 
 Windows jobs read tool variables (JAVA_HOME, ANDROID_HOME, Path, ...) fresh from the registry, so a new install needs no logoff or daemon restart.
+
+## Listen addresses (#175)
+
+By default the machines ports (the main host's 47322 and the account
+machines' 47323) listen on loopback and on this PC's Tailscale addresses
+only, never on the LAN, and the LAN addresses are not advertised. Set
+`"fleet_lan": true` in `config.json` to listen on every interface as before.
+PCs without Tailscale still reach each other through the relay. A PC that
+joined a main host over the LAN, with no Tailscale, cannot reach a host that
+has `fleet_lan` unset: set `"fleet_lan": true` on that host. A change takes
+effect at the next daemon start (or the next time the main host is switched
+on).

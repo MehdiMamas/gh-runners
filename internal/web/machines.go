@@ -177,11 +177,17 @@ func fleetPort(cfg store.Config) int {
 }
 
 // StartHost starts listening for machines when this is the main host.
-// addr is the interface to listen on; "" means all of them.
+// addr is the interface to listen on; "" means loopback and Tailscale
+// (every interface with fleet_lan).
 func StartHost(h *fleet.Host, addr string) error {
 	cfg, err := store.LoadConfig()
 	if err != nil || !cfg.MainHost {
 		return err
+	}
+	if addr == "" {
+		// Read fresh at every start: loopback and Tailscale only unless
+		// fleet_lan is set.
+		return h.StartPort(fleetPort(cfg), cfg.FleetLAN)
 	}
 	return h.Start(addr + ":" + strconv.Itoa(fleetPort(cfg)))
 }

@@ -26,6 +26,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/github"
@@ -60,6 +61,7 @@ type Host struct {
 	ciLogs   ciLogSet   // CI job id → where its log goes
 	smu      sync.Mutex // host.json
 	mu       sync.Mutex
+	lan      atomic.Bool // set by StartPort: LAN addresses in join codes
 	ln       net.Listener
 	port     int
 	cert     *tls.Certificate
@@ -222,6 +224,34 @@ func fingerprint(der []byte) string {
 // Start listens for members on addr (":47322" style; "" means every
 // interface on DefaultPort).
 func (h *Host) Start(addr string) error {
+	if addr == "" {
+		addr = ":" + strconv.Itoa(DefaultPort)
+	}
+	return h.start(func() (net.Listener, error) {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return nil, fmt.Errorf("cannot listen for machines on %s: %w", addr, err)
+		}
+		h.lan.Store(true) // an explicit address keeps the LAN addresses in join codes
+		return ln, nil
+	})
+}
+
+// StartPort listens on port on loopback and the Tailscale addresses, or on
+// every interface with lan, which also puts the LAN addresses in join
+// codes. A taken port is an error.
+func (h *Host) StartPort(port int, lan bool) error {
+	return h.start(func() (net.Listener, error) {
+		ln, err := ListenScoped(port, lan, false, h.logf)
+		if err != nil {
+			return nil, fmt.Errorf("cannot listen for machines on port %d: %w", port, err)
+		}
+		h.lan.Store(lan)
+		return ln, nil
+	})
+}
+
+func (h *Host) start(listen func() (net.Listener, error)) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.ln != nil {
@@ -232,12 +262,9 @@ func (h *Host) Start(addr string) error {
 		h.startErr = err
 		return err
 	}
-	if addr == "" {
-		addr = ":" + strconv.Itoa(DefaultPort)
-	}
-	ln, err := net.Listen("tcp", addr)
+	ln, err := listen()
 	if err != nil {
-		h.startErr = fmt.Errorf("cannot listen for machines on %s: %w", addr, err)
+		h.startErr = err
 		return h.startErr
 	}
 	h.startErr = nil
@@ -490,7 +517,7 @@ func (h *Host) addrs() []string {
 	if h.Addrs != nil {
 		return h.Addrs()
 	}
-	return LocalAddrs()
+	return LocalAddrsFor(h.lan.Load())
 }
 
 // Invite makes a one-time join code that works for InviteTTL.

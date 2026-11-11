@@ -194,6 +194,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 		CIEmulatorOK: d.member.CIEmulatorOK,
 		RelayURL:     fleet.RelayURLFromEnv(),
 	}
+	if c, err := store.LoadConfig(); err != nil {
+		d.Log.Printf("config: %v (account machines listen on loopback and Tailscale only)", err)
+	} else {
+		d.peers.LAN = c.FleetLAN
+	}
 	d.member.IsPeer = d.peers.Linked
 	dash := web.New(web.Hooks{
 		Version:     d.Version,

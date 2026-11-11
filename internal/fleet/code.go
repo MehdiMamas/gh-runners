@@ -55,8 +55,41 @@ func ParseCode(s string) (Code, error) {
 // LocalAddrs lists the addresses other machines may reach this one on:
 // LAN addresses first, then Tailscale's (100.64.0.0/10) and its MagicDNS
 // name when Tailscale is running.
-func LocalAddrs() []string {
-	var lan, ts []string
+func LocalAddrs() []string { return LocalAddrsFor(true) }
+
+// LocalAddrsFor is LocalAddrs; with lan false it leaves out the LAN
+// addresses and keeps only Tailscale's and the MagicDNS name.
+func LocalAddrsFor(lan bool) []string {
+	var lanAddrs []string
+	if lan {
+		ifs, _ := net.Interfaces()
+		for _, ifc := range ifs {
+			if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
+				continue
+			}
+			addrs, _ := ifc.Addrs()
+			for _, a := range addrs {
+				ipn, ok := a.(*net.IPNet)
+				if !ok || ipn.IP.IsLinkLocalUnicast() || ipn.IP.IsLoopback() {
+					continue
+				}
+				if ipn.IP.To4() != nil && !tailnet.Contains(ipn.IP) {
+					lanAddrs = append(lanAddrs, ipn.IP.String())
+				}
+			}
+		}
+	}
+	ts := tailscaleIPs()
+	if name := magicDNS(); name != "" {
+		ts = append(ts, name)
+	}
+	return append(lanAddrs, ts...)
+}
+
+// tailscaleIPs lists this machine's Tailscale addresses (100.64.0.0/10 and
+// fd7a:115c:a1e0::/48) on interfaces that are up and not loopback.
+func tailscaleIPs() []string {
+	var ts []string
 	ifs, _ := net.Interfaces()
 	for _, ifc := range ifs {
 		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
@@ -69,20 +102,12 @@ func LocalAddrs() []string {
 				continue
 			}
 			ip := ipn.IP
-			switch {
-			case tailnet.Contains(ip):
-				ts = append(ts, ip.String())
-			case ip.To4() != nil:
-				lan = append(lan, ip.String())
-			case strings.HasPrefix(ip.String(), "fd7a:115c:a1e0:"):
+			if tailnet.Contains(ip) || strings.HasPrefix(ip.String(), "fd7a:115c:a1e0:") {
 				ts = append(ts, ip.String())
 			}
 		}
 	}
-	if name := magicDNS(); name != "" {
-		ts = append(ts, name)
-	}
-	return append(lan, ts...)
+	return ts
 }
 
 var tailnet = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
