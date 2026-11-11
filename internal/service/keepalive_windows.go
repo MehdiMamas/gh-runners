@@ -1,8 +1,12 @@
 package service
 
 import (
+	"fmt"
+	"log"
 	"os"
 	"os/exec"
+	"os/user"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -16,8 +20,32 @@ func schtasks(args ...string) ([]byte, error) {
 	return cmd.CombinedOutput()
 }
 
-func installKeepalive(exe string) error {
+// installKeepalive creates the S4U task. When that fails, a fresh install
+// (fallback true) gets the sign-in-only task; a migration (fallback false)
+// leaves the existing task alone and returns the error.
+func installKeepalive(exe string, fallback bool) error {
 	home := os.Getenv("GH_RUNNERS_HOME")
+	var err error
+	if u, uerr := user.Current(); uerr != nil || u.Username == "" {
+		err = fmt.Errorf("no Windows user name: %v", uerr)
+	} else {
+		dir := os.TempDir()
+		err = registerTaskXML(func(args ...string) error {
+			out, err := schtasks(args...)
+			if err != nil {
+				return &keepaliveError{err, out}
+			}
+			return nil
+		}, keepaliveTask(home), keepaliveXML(exe, home, u.Username), dir,
+			func(base string) string { return filepath.Join(dir, base) })
+	}
+	if err == nil {
+		return nil
+	}
+	if !fallback {
+		return err
+	}
+	log.Printf("keepalive task: S4U logon failed, using the sign-in-only task: %v", err)
 	out, err := schtasks(keepaliveArgs(exe, home)...)
 	if err != nil {
 		return &keepaliveError{err, out}
@@ -46,15 +74,21 @@ func keepaliveExists() bool {
 
 func ensureKeepalive() (bool, error) {
 	s := status()
-	if !needKeepalive(s.Installed, s.Keepalive) {
-		return false, nil
+	var out []byte
+	var qerr error
+	if s.Installed && s.Keepalive {
+		out, qerr = schtasks("/Query", "/TN", keepaliveTask(os.Getenv("GH_RUNNERS_HOME")), "/XML")
 	}
-	exe, err := Executable()
-	if err != nil {
-		return false, err
+	switch keepalivePlan(s.Installed, s.Keepalive, string(out), qerr) {
+	case planCreate, planMigrate:
+		exe, err := Executable()
+		if err != nil {
+			return false, err
+		}
+		if err := installKeepalive(exe, !s.Keepalive); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
-	if err := installKeepalive(exe); err != nil {
-		return false, err
-	}
-	return true, nil
+	return false, nil
 }

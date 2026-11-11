@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -40,15 +41,25 @@ func TestKeepaliveArgs(t *testing.T) {
 	}
 }
 
-func TestNeedKeepalive(t *testing.T) {
-	for _, c := range []struct{ installed, exists, want bool }{
-		{true, false, true},
-		{true, true, false},
-		{false, false, false},
-		{false, true, false},
+func TestKeepalivePlan(t *testing.T) {
+	inter := `<LogonType>InteractiveToken</LogonType>`
+	s4u := `<LogonType>S4U</LogonType>`
+	for _, c := range []struct {
+		name              string
+		installed, exists bool
+		xml               string
+		err               error
+		want              keepaliveStep
+	}{
+		{"not installed", false, false, "", nil, planNothing},
+		{"not installed, stray task", false, true, inter, nil, planNothing},
+		{"installed, no task", true, false, "", nil, planCreate},
+		{"installed, interactive task", true, true, inter, nil, planMigrate},
+		{"installed, S4U task", true, true, s4u, nil, planNothing},
+		{"installed, task unreadable", true, true, "", errors.New("x"), planNothing},
 	} {
-		if got := needKeepalive(c.installed, c.exists); got != c.want {
-			t.Errorf("installed=%v exists=%v: got %v", c.installed, c.exists, got)
+		if got := keepalivePlan(c.installed, c.exists, c.xml, c.err); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
 		}
 	}
 }

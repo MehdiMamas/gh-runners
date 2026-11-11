@@ -155,3 +155,20 @@ func TestSchtasksArgs(t *testing.T) {
 		t.Fatalf("got  %q\nwant %q", got, want)
 	}
 }
+
+const goldenWatchdog = `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>gh-runners WSL watchdog</Description></RegistrationInfo>
+  <Triggers><TimeTrigger><Repetition><Interval>PT5M</Interval></Repetition><StartBoundary>2026-01-01T00:00:00</StartBoundary><Enabled>true</Enabled></TimeTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>PC\me</UserId><LogonType>S4U</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT5M</ExecutionTimeLimit><Enabled>true</Enabled><Hidden>true</Hidden></Settings>
+  <Actions Context="Author"><Exec><Command>conhost.exe</Command><Arguments>--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File &#34;C:\Users\me\AppData\Local\gh-runners\wsl-watchdog.ps1&#34;</Arguments></Exec></Actions>
+</Task>
+`
+
+func TestWatchdogXMLGolden(t *testing.T) {
+	got := watchdogXML(`C:\Users\me\AppData\Local\gh-runners\wsl-watchdog.ps1`, `PC\me`)
+	if got != goldenWatchdog {
+		t.Errorf("got:\n%s", got)
+	}
+}
