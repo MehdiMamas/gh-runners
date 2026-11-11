@@ -49,11 +49,26 @@ func Latest(ctx context.Context) (string, error) {
 		return "", err
 	}
 	req.Header.Set("X-No-Redirect", "1")
+	// Ask every cache on the way for a fresh answer (#174).
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
 	resp.Body.Close()
+	if resp.StatusCode/100 == 5 {
+		// A gateway error is usually gone a moment later: ask once more.
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+		if resp, err = client.Do(req); err != nil {
+			return "", err
+		}
+		resp.Body.Close()
+	}
 	loc := resp.Header.Get("Location")
 	if resp.StatusCode/100 != 3 || loc == "" {
 		return "", fmt.Errorf("latest release: unexpected answer %s", resp.Status)

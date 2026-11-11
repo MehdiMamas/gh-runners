@@ -112,3 +112,31 @@ func TestApplyRejectsBadChecksum(t *testing.T) {
 		t.Fatalf("left behind: %v", left)
 	}
 }
+
+func TestLatestRetriesGatewayError(t *testing.T) {
+	var n int
+	var noCache bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		noCache = r.Header.Get("Cache-Control") == "no-cache"
+		if n == 1 {
+			w.WriteHeader(http.StatusGatewayTimeout)
+			return
+		}
+		http.Redirect(w, r, "/"+Repo+"/releases/tag/v1.2.3", http.StatusFound)
+	}))
+	defer srv.Close()
+	old := Base
+	Base = srv.URL
+	defer func() { Base = old }()
+	tag, err := Latest(context.Background())
+	if err != nil || tag != "v1.2.3" {
+		t.Fatalf("Latest = %q, %v", tag, err)
+	}
+	if n != 2 {
+		t.Fatalf("requests = %d, want 2", n)
+	}
+	if !noCache {
+		t.Fatal("request lacked Cache-Control: no-cache")
+	}
+}

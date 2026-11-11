@@ -83,3 +83,9 @@ joined a main host over the LAN, with no Tailscale, cannot reach a host that
 has `fleet_lan` unset: set `"fleet_lan": true` on that host. A change takes
 effect at the next daemon start (or the next time the main host is switched
 on).
+
+## Self-update drain (#174)
+- A pending update that finds jobs running notes the time (`Daemon.noteWaiting`, `internal/daemon/updatedrain.go`). After `updateDrainAfter` (30 min) it logs `update pending: draining runners` once and sets `draining`: `holdAll()` (machine in use or draining) makes `applyLimit` hold every idle always-on runner (`[id] holding: update pending`) and `jitAllowed` 0 for on-demand runners, like the in-use hold (#164). A running job is never stopped; the install runs when the busy ones finish (check every minute while draining, `drainDue` is the pure decision).
+- `endDrain` lifts the hold when the update is no longer pending (installed, up to date, auto-update off, error, paused). Remote CI jobs, `ci run` runs and CI jobs still block the install as before (#120).
+- `update.Latest` sends `Cache-Control: no-cache` and retries once on a 5xx, so `gh-runners update` and the dashboard's update action name the newest release.
+- Account machines log lines (`account machines: <name>: ...`) for connect, disconnect and failures are written only when a peer's last line of that kind changes; a connect clears the failure lines (so a later failure logs again) but keeps the link line.

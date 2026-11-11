@@ -690,7 +690,8 @@ func (r *peerRun) register(l *link, info *Info) bool {
 	l.since = time.Now()
 	r.links[l.id] = l
 	st := r.stateLocked(l.id)
-	st.err, st.misses, st.lastSeen, st.logged = "", 0, time.Now(), nil
+	st.err, st.misses, st.lastSeen = "", 0, time.Now()
+	st.clearFailures()
 	if info != nil {
 		st.info, st.hasInfo = *info, true
 	}
@@ -701,7 +702,7 @@ func (r *peerRun) register(l *link, info *Info) bool {
 func (r *peerRun) serveLink(ctx context.Context, l *link) {
 	stop := context.AfterFunc(ctx, func() { l.c.close(ctx.Err()) })
 	defer stop()
-	r.p.logf("account machines: connected to %s", r.name(l.id))
+	r.logLink(l.id, "connected")
 	err := l.c.serve(func(f frame) frame { return r.handle(ctx, l, f) }, func(f frame) error {
 		switch f.Type {
 		case tCILog:
@@ -729,7 +730,7 @@ func (r *peerRun) serveLink(ctx context.Context, l *link) {
 		}
 	}
 	r.mu.Unlock()
-	r.p.logf("account machines: disconnected from %s: %v", r.name(l.id), err)
+	r.logLink(l.id, fmt.Sprintf("disconnected: %v", err))
 }
 
 func (r *peerRun) name(id string) string {

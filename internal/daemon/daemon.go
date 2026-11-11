@@ -68,9 +68,9 @@ type child struct {
 
 // Daemon supervises runners on this machine.
 type Daemon struct {
-	Version string
-	Log     *log.Logger
-
+	Version  string
+	Log      *log.Logger
+	drain    // pending-update drain state, see updatedrain.go
 	mu       sync.Mutex
 	children map[string]*child
 	started  time.Time
@@ -465,7 +465,7 @@ func (d *Daemon) reconcile() {
 			delete(d.children, id)
 		}
 	}
-	holding := d.applyLimit(cfg.MaxJobs, d.deskBusy.Load())
+	holding := d.applyLimit(cfg.MaxJobs, d.holdAll())
 	for id, r := range want {
 		c := d.children[id]
 		if c == nil {

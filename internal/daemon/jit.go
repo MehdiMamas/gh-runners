@@ -119,7 +119,7 @@ func (m *jitManager) loop(ctx context.Context) {
 			paused := m.paused
 			m.mu.Unlock()
 			if cfg.OnDemand.Enabled && !paused && !m.d.paused.Load() {
-				if m.d.deskBusy.Load() {
+				if m.d.holdAll() {
 					m.stopIdle()
 				}
 				err = m.poll(ctx, cfg)
@@ -213,7 +213,7 @@ func (m *jitManager) poll(ctx context.Context, cfg store.Config) error {
 	m.mu.Lock()
 	repos, me := m.repos, m.me
 	m.mu.Unlock()
-	allowed := jitAllowed(max, cfg.MaxJobs, m.d.busyAlwaysCount(), m.d.deskBusy.Load())
+	allowed := jitAllowed(max, cfg.MaxJobs, m.d.busyAlwaysCount(), m.d.holdAll())
 	watching := 0
 	for _, repo := range repos {
 		if ok, _ := f.Match(repo, me); !ok || persistent[strings.ToLower(repo.FullName)] {
