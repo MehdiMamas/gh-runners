@@ -399,6 +399,8 @@ any machine that can run Docker with no manual step.
   more runners of the same repo go in `runners/<owner>__<repo>__<name>/`;
   the dashboard can move this folder anywhere), a shared download cache, logs
   and the dashboard secret.
+  A daemon started by hand for a test should set `GH_RUNNERS_ACCOUNT_MACHINES=off` so
+  it stays out of your account's machines.
 - **Downloads** come from GitHub's official
   [actions/runner](https://github.com/actions/runner) releases and are checked
   against GitHub's SHA-256 checksums. Each runner updates itself, as usual.
