@@ -691,6 +691,13 @@ func (r *peerRun) register(l *link, info *Info) bool {
 	r.links[l.id] = l
 	st := r.stateLocked(l.id)
 	st.err, st.misses, st.lastSeen = "", 0, time.Now()
+	// A connect clears the failure lines, so a failure after it logs again;
+	// only the link line is kept, so a flapping link logs each change once.
+	for k := range st.logged {
+		if k != "link" {
+			delete(st.logged, k)
+		}
+	}
 	if info != nil {
 		st.info, st.hasInfo = *info, true
 	}
