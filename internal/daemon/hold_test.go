@@ -98,6 +98,10 @@ func TestApplyLimitInUseHoldsThenLifts(t *testing.T) {
 	}
 }
 
+// holdPoll is set once, before any test runs: a watcher outliving its test
+// would race with a per-test change.
+func init() { holdPoll = 5 * time.Millisecond }
+
 // fakeBusy is a busyFn driven by the test: dir -> busy, plus a call counter.
 type fakeBusy struct {
 	mu    sync.Mutex
@@ -125,7 +129,7 @@ func (f *fakeBusy) count() int {
 }
 
 // watchDaemon is a Daemon with running (fake) children named by ids, all busy,
-// the busy state read from the returned fakeBusy, and holdPoll of 5 ms.
+// the busy state read from the returned fakeBusy, (holdPoll is 5 ms, see init).
 func watchDaemon(t *testing.T, maxJobs int, ids ...string) (*Daemon, *fakeBusy) {
 	t.Helper()
 	t.Setenv("GH_RUNNERS_HOME", t.TempDir())
@@ -134,9 +138,6 @@ func watchDaemon(t *testing.T, maxJobs int, ids ...string) (*Daemon, *fakeBusy) 
 	if err := store.SaveConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
-	old := holdPoll
-	holdPoll = 5 * time.Millisecond
-	t.Cleanup(func() { holdPoll = old })
 	f := &fakeBusy{busy: map[string]bool{}}
 	d := &Daemon{
 		Log: log.New(io.Discard, "", 0), children: map[string]*child{},
