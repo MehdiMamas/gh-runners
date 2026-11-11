@@ -55,12 +55,13 @@ type multiListener struct {
 	mu   sync.Mutex
 	lns  []net.Listener
 	have map[string]bool
+	bad  map[string]bool // addresses whose failure was logged
 	shut bool
 	wg   sync.WaitGroup
 }
 
 func newMultiListener(first net.Listener, logf func(string, ...any)) *multiListener {
-	m := &multiListener{logf: logf, conns: make(chan net.Conn), done: make(chan struct{}), have: map[string]bool{}}
+	m := &multiListener{logf: logf, conns: make(chan net.Conn), done: make(chan struct{}), have: map[string]bool{}, bad: map[string]bool{}}
 	m.port = first.Addr().(*net.TCPAddr).Port
 	m.add(first, "")
 	return m
@@ -113,7 +114,7 @@ func (m *multiListener) add(ln net.Listener, ip string) {
 }
 
 // addIPs listens on port at each address not yet listened on; a failure is
-// logged and skipped.
+// logged once per address and skipped (retried at the next refresh).
 func (m *multiListener) addIPs(ips []string) {
 	for _, ip := range ips {
 		m.mu.Lock()
@@ -124,10 +125,17 @@ func (m *multiListener) addIPs(ips []string) {
 		}
 		ln, err := net.Listen("tcp", net.JoinHostPort(ip, strconv.Itoa(m.port)))
 		if err != nil {
-			m.logf("machines port: not listening on %s: %v", ip, err)
+			m.mu.Lock()
+			logged := m.bad[ip]
+			m.bad[ip] = true
+			m.mu.Unlock()
+			if !logged {
+				m.logf("machines port: not listening on %s: %v", ip, err)
+			}
 			continue
 		}
 		m.mu.Lock()
+		delete(m.bad, ip)
 		m.have[ip] = true
 		m.mu.Unlock()
 		m.add(ln, ip)
