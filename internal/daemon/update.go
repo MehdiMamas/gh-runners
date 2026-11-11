@@ -224,7 +224,7 @@ func (d *Daemon) busy(ctx context.Context) string {
 		return "a CI job is running"
 	}
 	if n := len(d.jit.states()); n > 0 {
-		return fmt.Sprintf("%d on-demand runner(s) to finish their job", n)
+		return fmt.Sprint(n) + jitWaitSuffix
 	}
 	d.mu.Lock()
 	running := map[string]bool{}
@@ -275,7 +275,7 @@ func JobRunning(ctx context.Context, c *github.Client, runners []store.Runner) s
 		for _, r := range rs {
 			for _, g := range remote {
 				if g.Busy && strings.EqualFold(g.Name, r.Name) {
-					return "the job on " + r.Name + " (" + scope + ") to finish"
+					return jobWaitPrefix + r.Name + " (" + scope + ") to finish"
 				}
 			}
 		}

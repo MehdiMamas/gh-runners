@@ -52,18 +52,24 @@ func (d *Daemon) endDrain() {
 var latestRelease = update.Latest
 
 // noteWait handles a pending update that has to wait for why. Only waiting
-// for runner jobs can end by draining; for any other reason (CI runs, peer
-// jobs, GitHub not answering) the runners are not held.
+// for runner jobs starts the clock and the drain. Any other reason (CI runs,
+// peer jobs, GitHub not answering) neither starts nor resets them, so a short
+// CI run during the wait does not push the drain back (#174).
 func (d *Daemon) noteWait(why string, now time.Time) {
 	if runnerJobWait(why) {
 		d.noteWaiting(now)
-		return
 	}
-	d.endDrain()
 }
+
+// Busy reasons for runner jobs; Daemon.busy and JobRunning build them with
+// these, and runnerJobWait reads them back.
+const (
+	jobWaitPrefix = "the job on "
+	jitWaitSuffix = " on-demand runner(s) to finish their job"
+)
 
 // runnerJobWait says a busy reason from Daemon.busy is a runner job
 // (always-on or on-demand) that draining can bring to an end.
 func runnerJobWait(why string) bool {
-	return strings.HasPrefix(why, "the job on ") || strings.Contains(why, "on-demand runner(s)")
+	return strings.HasPrefix(why, jobWaitPrefix) || strings.HasSuffix(why, jitWaitSuffix)
 }

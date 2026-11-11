@@ -73,15 +73,17 @@ func TestNoteWaitOnlyForRunnerJobs(t *testing.T) {
 	if !d.draining.Load() {
 		t.Fatal("runner job wait did not drain")
 	}
+	since := d.updSince.Load()
 	d.noteWait("a local CI run is in progress", start.Add(updateDrainAfter))
-	if d.draining.Load() || d.updSince.Load() != 0 {
-		t.Fatal("other wait kept the drain")
+	if !d.draining.Load() || d.updSince.Load() != since {
+		t.Fatal("a CI wait reset the drain")
 	}
+	d.endDrain()
 	d.noteWait("GitHub to answer (x)", start)
-	if d.updSince.Load() != 0 {
-		t.Fatal("GitHub wait noted time")
+	if d.updSince.Load() != 0 || d.draining.Load() {
+		t.Fatal("GitHub wait started the clock")
 	}
-	d.noteWait("2 on-demand runner(s) to finish their job", start)
+	d.noteWait("2"+jitWaitSuffix, start)
 	if d.updSince.Load() == 0 {
 		t.Fatal("on-demand wait not noted")
 	}
