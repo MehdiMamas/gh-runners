@@ -42,7 +42,7 @@ func TestMultiListenerMerges(t *testing.T) {
 	a, _ := net.Listen("tcp", "127.0.0.1:0")
 	b, _ := net.Listen("tcp", "127.0.0.1:0")
 	m := newMultiListener(a, func(string, ...any) {})
-	m.add(b)
+	m.add(b, "")
 	defer m.Close()
 	for _, l := range []net.Listener{a, b} {
 		c, err := net.Dial("tcp", l.Addr().String())

@@ -224,6 +224,7 @@ func fingerprint(der []byte) string {
 // Start listens for members on addr (":47322" style; "" means every
 // interface on DefaultPort).
 func (h *Host) Start(addr string) error {
+	h.lan.Store(true) // an explicit address keeps the LAN addresses in join codes
 	if addr == "" {
 		addr = ":" + strconv.Itoa(DefaultPort)
 	}

@@ -61,11 +61,13 @@ type multiListener struct {
 func newMultiListener(first net.Listener, logf func(string, ...any)) *multiListener {
 	m := &multiListener{logf: logf, conns: make(chan net.Conn), done: make(chan struct{}), have: map[string]bool{}}
 	m.port = first.Addr().(*net.TCPAddr).Port
-	m.add(first)
+	m.add(first, "")
 	return m
 }
 
-func (m *multiListener) add(ln net.Listener) {
+// add serves ln; ip is its Tailscale address ("" for loopback). When ln
+// fails outside Close, ip is forgotten so the next refresh listens again.
+func (m *multiListener) add(ln net.Listener, ip string) {
 	m.mu.Lock()
 	if m.shut {
 		m.mu.Unlock()
@@ -80,6 +82,17 @@ func (m *multiListener) add(ln net.Listener) {
 		for {
 			c, err := ln.Accept()
 			if err != nil {
+				select {
+				case <-m.done:
+				default:
+					m.logf("machines port: listener on %s stopped: %v", ln.Addr(), err)
+					_ = ln.Close()
+					if ip != "" {
+						m.mu.Lock()
+						delete(m.have, ip)
+						m.mu.Unlock()
+					}
+				}
 				return
 			}
 			select {
@@ -110,7 +123,7 @@ func (m *multiListener) addIPs(ips []string) {
 		m.mu.Lock()
 		m.have[ip] = true
 		m.mu.Unlock()
-		m.add(ln)
+		m.add(ln, ip)
 	}
 }
 

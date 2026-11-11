@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -207,13 +208,17 @@ func (p *Peers) start(parent context.Context) (*peerRun, error) {
 		return nil, err
 	}
 	var ln net.Listener
+	where := p.Addr
+	if where == "" {
+		where = "port " + strconv.Itoa(p.listenPort())
+	}
 	if p.Addr != "" {
 		ln, err = net.Listen("tcp", p.Addr)
 	} else {
 		ln, err = ListenScoped(p.listenPort(), p.LAN, true, p.logf)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("cannot listen on port %d for the account's other PCs: %w", p.listenPort(), err)
+		return nil, fmt.Errorf("cannot listen on %s for the account's other PCs: %w", where, err)
 	}
 	ctx, cancel := context.WithCancel(parent)
 	r := &peerRun{p: p, cancel: cancel, dir: dir, ln: ln, port: ln.Addr().(*net.TCPAddr).Port, cert: c,
