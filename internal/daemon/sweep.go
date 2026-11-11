@@ -30,7 +30,8 @@ func (d *Daemon) stopChild(id string, c *child, grace time.Duration) {
 	c.state.State, c.state.Since = "stopped", time.Now()
 	c.state.GitHubOffline, c.state.GitHubOfflineSince = false, time.Time{}
 	if c.held || c.deferred {
-		// Stopped by the host job limit: stays listed until it may start.
+		// Held (job limit, machine in use, update drain or a defer rule):
+		// stays listed until it may start.
 		c.stopping, c.state.State = false, "held"
 		nudge(d.reload)
 		return

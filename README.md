@@ -301,7 +301,7 @@ start on-demand runners for queued jobs with that label. The moment
 `build-pc` is in use, paused, unlinked, silent for 2 minutes or has no idle
 runner for it, the hold lifts and the jobs overflow here. A runner that is
 running a job is never stopped. `to` is a machine id, name or host name (one that fits two machines is unknown); naming this
-machine or an unknown one is ignored (logged once). Set a rule on one side only: two machines that defer the same label to each other can keep holding and lifting in turn. A job can wait up to about a minute longer when the preferred
+machine or an unknown one is ignored (logged once). Set a rule on one side only: two machines that defer the same label to each other can keep holding and lifting in turn. One idle runner there holds every matching runner here, so when several jobs queue at once, all but one wait until that machine reports it is busy (up to about a minute). A runner there that is up but offline on GitHub counts as idle until the health check restarts it. A job can wait up to about a minute longer when the preferred
 machine fills up. `gh-runners list` shows the active rules. The preferred
 machine must run a version that reports which runners are busy.
 
