@@ -179,6 +179,10 @@ func TestFindPeerPrefersIDAndName(t *testing.T) {
 	if p, _ := findPeer("BOX", peers); p.ID != "aaa" {
 		t.Fatalf("name match, got %q", p.ID)
 	}
+	two := []fleet.Peer{{ID: "a", Info: fleet.Info{Hostname: "same"}}, {ID: "b", Info: fleet.Info{Hostname: "same"}}}
+	if _, ok := findPeer("same", two); ok {
+		t.Fatal("a host name shared by two machines must match none")
+	}
 	if _, ok := findPeer("nope", peers); ok {
 		t.Fatal("unknown name matched")
 	}

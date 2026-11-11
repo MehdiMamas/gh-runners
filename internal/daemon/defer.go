@@ -48,8 +48,8 @@ func (s *deferState) status() []control.Deferred {
 }
 
 // findPeer returns the peer a rule's To names, ignoring case: an id match
-// first, then a name, then a host name, so two machines with one host name
-// can still be told apart by id or name.
+// first, then a name, then a host name. A key that matches more than one
+// machine matches none.
 func findPeer(to string, peers []fleet.Peer) (fleet.Peer, bool) {
 	keys := []func(fleet.Peer) string{
 		func(p fleet.Peer) string { return p.ID },
@@ -57,10 +57,19 @@ func findPeer(to string, peers []fleet.Peer) (fleet.Peer, bool) {
 		func(p fleet.Peer) string { return p.Info.Hostname },
 	}
 	for _, key := range keys {
+		var hit []fleet.Peer
 		for _, p := range peers {
 			if strings.EqualFold(key(p), to) {
-				return p, true
+				hit = append(hit, p)
 			}
+		}
+		if len(hit) == 1 {
+			return hit[0], true
+		}
+		if len(hit) > 1 {
+			// Ambiguous (peer order is not stable): match none, so the
+			// rule is logged as unknown instead of picking one at random.
+			return fleet.Peer{}, false
 		}
 	}
 	return fleet.Peer{}, false
