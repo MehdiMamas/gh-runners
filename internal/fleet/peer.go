@@ -81,6 +81,7 @@ type Peers struct {
 
 	mu       sync.Mutex
 	run      *peerRun
+	off      bool
 	startErr error
 }
 
@@ -107,6 +108,7 @@ type peerRun struct {
 	links   map[string]*link
 	state   map[string]*peerState
 	lastRef time.Time
+	now     func() time.Time // test clock; nil means time.Now
 }
 
 type link struct {
@@ -125,6 +127,7 @@ type Peer struct {
 	LastSeen time.Time
 	Info     Info
 	HasInfo  bool
+	Named    bool // Name carries an id suffix to tell it from another machine
 	// Error says in plain words why it is not connected.
 	Error string
 	// Via is the id of the machine that passes calls on to this one, and
@@ -178,7 +181,7 @@ func (p *Peers) ID() string {
 func (p *Peers) Start(parent context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.run != nil {
+	if p.run != nil || p.disabled() {
 		return nil
 	}
 	r, err := p.start(parent)
@@ -278,7 +281,7 @@ func (p *Peers) Remove(ctx context.Context, id string) error {
 	r := p.run
 	p.mu.Unlock()
 	if r == nil {
-		return errors.New("account machines are not running")
+		return p.notRunning()
 	}
 	if id == r.selfID {
 		return errors.New("this is the machine itself")
@@ -306,6 +309,8 @@ func (p *Peers) Peers() []Peer {
 	out := make([]Peer, 0, len(r.entries))
 	for id, e := range r.entries {
 		pe := Peer{Entry: e}
+		pe.Name = r.nameLocked(id)
+		pe.Named = pe.Name != e.Name
 		if st := r.state[id]; st != nil {
 			pe.LastSeen, pe.Info, pe.HasInfo, pe.Error = st.lastSeen, st.info, st.hasInfo, st.err
 		}
@@ -313,11 +318,7 @@ func (p *Peers) Peers() []Peer {
 			pe.Online, pe.Since, pe.Error, pe.Relay = true, l.since, "", l.relay
 		} else if via := r.relayLocked(id); via != "" {
 			pe.Online, pe.Error, pe.Via = true, "", via
-			if v, ok := r.entries[via]; ok && v.Name != "" {
-				pe.ViaName = v.Name
-			} else {
-				pe.ViaName = via
-			}
+			pe.ViaName = r.nameLocked(via)
 		}
 		out = append(out, pe)
 	}
@@ -702,7 +703,7 @@ func (r *peerRun) register(l *link, info *Info) bool {
 func (r *peerRun) serveLink(ctx context.Context, l *link) {
 	stop := context.AfterFunc(ctx, func() { l.c.close(ctx.Err()) })
 	defer stop()
-	r.logLink(l.id, "connected")
+	r.linkUp(l.id)
 	err := l.c.serve(func(f frame) frame { return r.handle(ctx, l, f) }, func(f frame) error {
 		switch f.Type {
 		case tCILog:
@@ -730,16 +731,7 @@ func (r *peerRun) serveLink(ctx context.Context, l *link) {
 		}
 	}
 	r.mu.Unlock()
-	r.logLink(l.id, fmt.Sprintf("disconnected: %v", err))
-}
-
-func (r *peerRun) name(id string) string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if e, ok := r.entries[id]; ok && e.Name != "" {
-		return e.Name
-	}
-	return id
+	r.linkDown(l.id, err)
 }
 
 // handle answers a request from another machine. Both checks happen here,
@@ -859,7 +851,7 @@ func (r *peerRun) dialRound(ctx context.Context) {
 			}
 			r.mu.Unlock()
 			if err != nil && ctx.Err() == nil {
-				r.logFailure(e.ID, "dial", e.Name, plainErr(err))
+				r.logFailure(e.ID, "dial", r.name(e.ID), plainErr(err))
 			}
 		}()
 	}
@@ -912,6 +904,7 @@ func (r *peerRun) statusLoop(ctx context.Context) {
 			ls = append(ls, l)
 		}
 		r.mu.Unlock()
+		r.checkLinks()
 		if len(ls) == 0 {
 			continue
 		}
@@ -929,7 +922,7 @@ func (pe Peer) Machine() Machine {
 	if !pe.HasInfo {
 		m.Info = Info{Hostname: pe.Name, OS: pe.OS, Arch: pe.Arch, Version: pe.Version, Runners: []RunnerInfo{}}
 	}
-	if m.Info.Hostname == "" {
+	if m.Info.Hostname == "" || pe.Named {
 		m.Info.Hostname = pe.Name
 	}
 	if m.Info.Runners == nil {

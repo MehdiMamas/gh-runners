@@ -1161,7 +1161,7 @@ function renderMachines() {
   mount(el,
     h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Machines'),
       f.main_host ? h('button', { class: 'btn primary', onclick: addMachine }, 'Add a machine') : null),
-    f.account_error ? h('div', { class: 'notice bad' }, h('div', { class: 'grow' }, 'Cannot reach your other PCs: ' + f.account_error + '.')) : null,
+    (f.account_error || f.account_note) ? h('div', { class: f.account_error ? 'notice bad' : 'notice' }, h('div', { class: 'grow' }, f.account_error ? 'Cannot reach your other PCs: ' + f.account_error + '.' : f.account_note)) : null,
     (f.listening || (f.account && !f.main_host)) ? null : h('div', { class: 'notice bad' }, h('div', { class: 'grow' }, 'Not listening for machines' + (f.error ? ': ' + f.error : '') + '.'), h('button', { class: 'btn', onclick: () => selectTab('settings') }, 'Open settings')),
     mine,
     members.length ? members.map(machineCard) : h('div', { class: 'card empty' },

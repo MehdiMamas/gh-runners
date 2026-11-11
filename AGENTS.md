@@ -70,6 +70,7 @@ gh-runners: one static Go binary that sets up and supervises self-hosted GitHub 
 - Wake files: `wants/<target id>.json` in `<login>/gh-runners-machines`, `{"from":{"<dialer id>":"<RFC3339 until>"}}`. The dialer writes its entry (2 min), the target polls its own file every 10 s and connects as `accept`.
 - A link is "wanted" for 2 minutes after a Machines tab request (`Peers.WantAll`), and a `Peers.Call` or `PeerExecutor.RunJob` to an unlinked peer waits up to 25 s for it. A relay link idle for 2 minutes and not wanted is closed.
 - Tests use an in-process fake relay and a fake wake store (`relay_test.go`); never the real relay or GitHub account.
+- A daemon started by hand for a test sets `GH_RUNNERS_ACCOUNT_MACHINES=off` (`Peers.Start` then returns before any cert, id, listener, dial or relay; the Machines tab shows `fleet.OffNote`) and is stopped with `daemon --stop` when the test ends (#186). An unstable link logs its first quick drop, then one `link unstable: <n> reconnects` line per 10 min and `link stable again` after 5 min up (`peerstate.go`); same-name machines get ` (<id prefix>)` (`peername.go`).
 
 Windows jobs read tool variables (JAVA_HOME, ANDROID_HOME, Path, ...) fresh from the registry, so a new install needs no logoff or daemon restart.
 

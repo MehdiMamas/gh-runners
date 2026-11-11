@@ -48,6 +48,8 @@ type machinesView struct {
 	// machine.
 	Account      bool   `json:"account,omitempty"`
 	AccountError string `json:"account_error,omitempty"`
+	// AccountNote is shown when account machines are switched off.
+	AccountNote  string `json:"account_note,omitempty"`
 	AccountPort  int    `json:"account_port,omitempty"`
 	AllowControl bool   `json:"allow_control"`
 	// Login is the GitHub login this machine is signed in with, so the page
@@ -162,6 +164,8 @@ func (s *Server) getMachines(w http.ResponseWriter, r *http.Request) {
 			for _, pe := range p.Peers() {
 				v.Machines = append(v.Machines, pe.Machine())
 			}
+		} else if p.Off() {
+			v.Account, v.AccountNote = true, fleet.OffNote
 		} else if err := p.StartErr(); err != nil {
 			v.Account, v.AccountError = true, err.Error()
 		}

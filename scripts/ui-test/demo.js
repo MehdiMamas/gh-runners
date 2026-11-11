@@ -16,7 +16,7 @@ fs.mkdirSync(out, { recursive: true });
 
 const bin = path.join(root, process.platform === 'win32' ? 'gh-runners.exe' : 'gh-runners');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ghr-demo-'));
-const env = Object.assign({}, process.env, { HOME: home, USERPROFILE: home, GH_RUNNERS_HOME: path.join(home, '.gh-runners') });
+const env = Object.assign({}, process.env, { HOME: home, USERPROFILE: home, GH_RUNNERS_HOME: path.join(home, '.gh-runners'), GH_RUNNERS_ACCOUNT_MACHINES: 'off' });
 
 const ago = (min) => new Date(Date.now() - min * 60000).toISOString();
 const repos = [
