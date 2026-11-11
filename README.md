@@ -282,6 +282,31 @@ has `fleet_lan` unset: set `"fleet_lan": true` on that host. A change takes
 effect at the next daemon start (or the next time the main host is switched
 on).
 
+## Prefer a machine for some jobs (#188)
+
+GitHub gives a queued job to any idle runner whose labels match, with no order
+between machines. On linked account machines you can still send heavy jobs to
+a stronger machine while it is free. In `~/.gh-runners/config.json` on the
+other machines:
+
+```json
+{ "defer": [ { "label": "heavy", "to": "build-pc" } ] }
+```
+
+While `build-pc` is linked, reported within the last 2 minutes, not in use
+(`busy_check`), not paused, and has an idle runner with the same repository
+(or organization) and the label `heavy`, this machine holds its idle runners
+that carry `heavy` (log `[id] holding: deferred to build-pc`) and does not
+start on-demand runners for queued jobs with that label. The moment
+`build-pc` is in use, paused, unlinked, silent for 2 minutes or has no idle
+runner for it, the hold lifts and the jobs overflow here. A runner that is
+running a job is never stopped. `to` is a machine name or id; naming this
+machine or an unknown one is ignored (logged once). If two machines defer to
+each other, each holds only while the other has an idle runner, so a job is
+always taken. A job can wait up to about a minute longer when the preferred
+machine fills up. `gh-runners list` shows the active rules. The preferred
+machine must run a version that reports which runners are busy.
+
 ## Pause a machine
 
 Pause stops everything gh-runners runs on one machine at once: every runner and

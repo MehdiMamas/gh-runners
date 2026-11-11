@@ -282,6 +282,9 @@ type Config struct {
 	// anything else counts as free. While in use, runners take no new jobs.
 	// Empty means off. Config file only.
 	BusyCheck []string `json:"busy_check,omitempty"`
+	// Defer holds this machine's idle runners that carry a label while a
+	// linked machine is free to take those jobs (#188). Config file only.
+	Defer []DeferRule `json:"defer,omitempty"`
 	// AutoUpdate installs new gh-runners releases when no job is running;
 	// unset means on.
 	AutoUpdate *bool `json:"auto_update,omitempty"`
@@ -549,4 +552,11 @@ func retry(fn func() error) error {
 		err = fn()
 	}
 	return err
+}
+
+// DeferRule says jobs with Label go to the linked machine To (its name or id)
+// while it is free; this machine takes them only when it is not.
+type DeferRule struct {
+	Label string `json:"label"`
+	To    string `json:"to"`
 }

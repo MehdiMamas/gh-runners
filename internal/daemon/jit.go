@@ -224,7 +224,7 @@ func (m *jitManager) poll(ctx context.Context, cfg store.Config) error {
 		}
 		watching++
 		scope := github.Scope{Owner: repo.Owner.Login, Repo: repo.Name}
-		queued, err := m.matchingQueuedJobs(ctx, c, scope, ours)
+		queued, err := m.matchingQueuedJobs(ctx, c, scope, ours, cfg.Defer)
 		if err != nil {
 			m.d.Log.Printf("on-demand %s: %v", scope, err)
 			continue
@@ -250,7 +250,7 @@ func (m *jitManager) poll(ctx context.Context, cfg store.Config) error {
 	return nil
 }
 
-func (m *jitManager) matchingQueuedJobs(ctx context.Context, c *github.Client, scope github.Scope, ours []string) (int, error) {
+func (m *jitManager) matchingQueuedJobs(ctx context.Context, c *github.Client, scope github.Scope, ours []string, rules []store.DeferRule) (int, error) {
 	n := 0
 	// A run stays in_progress while its later jobs wait in the queue.
 	for _, status := range []string{"queued", "in_progress"} {
@@ -264,7 +264,7 @@ func (m *jitManager) matchingQueuedJobs(ctx context.Context, c *github.Client, s
 				return 0, err
 			}
 			for _, j := range jobs {
-				if j.Status == "queued" && JobMatches(j.Labels, ours) {
+				if j.Status == "queued" && JobMatches(j.Labels, ours) && !m.d.deferJob(rules, scope.String(), j.Labels) {
 					n++
 				}
 			}

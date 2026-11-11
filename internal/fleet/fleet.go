@@ -135,6 +135,9 @@ type RunnerInfo struct {
 	Name   string   `json:"name"`
 	State  string   `json:"state"`
 	Labels []string `json:"labels"`
+	// Busy says the runner is running a job right now (State alone cannot
+	// tell an idle runner from one with a job).
+	Busy bool `json:"busy,omitempty"`
 }
 
 // conn frames JSON messages (a 4-byte length, then the JSON) and matches

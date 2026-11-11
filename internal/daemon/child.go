@@ -17,6 +17,9 @@ type child struct {
 	// held marks a runner stopped on purpose because the host job limit
 	// (max_jobs) is reached; it is kept in d.children and not started.
 	held bool
+	// deferred marks a runner stopped on purpose because a linked machine
+	// takes its jobs (#188, defer.go).
+	deferred bool
 	// holdAfterJob marks that holdWhenIdle watches this busy runner, so only
 	// one watcher runs per child. Set and read under Daemon.mu.
 	holdAfterJob bool
