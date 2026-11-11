@@ -138,7 +138,8 @@ func watchdogXML(scriptWinPath, user string) string {
 
 // windowsUser is DOMAIN\user of the Windows account, read through interop.
 func windowsUser() (string, error) {
-	cmd := exec.Command("cmd.exe", "/c", `echo %USERDOMAIN%\%USERNAME%`)
+	cmd, cancel := winCommand("cmd.exe", "/c", `echo %USERDOMAIN%\%USERNAME%`)
+	defer cancel()
 	cmd.Dir = "/mnt/c"
 	out, err := cmd.Output()
 	if err != nil {
@@ -158,7 +159,7 @@ func registerWatchdogTask(winDir, unixDir string, fallback bool) error {
 	script := winDir + `\` + watchdogScript
 	user, err := windowsUser()
 	if err == nil {
-		err = registerTaskXML(func(args ...string) error { return run("schtasks.exe", args...) },
+		err = registerTaskXML(func(args ...string) error { return runWin("schtasks.exe", args...) },
 			watchdogTask, watchdogXML(script, user), unixDir,
 			func(base string) string { return winDir + `\` + base })
 	}
@@ -169,14 +170,16 @@ func registerWatchdogTask(winDir, unixDir string, fallback bool) error {
 		return err // migration: the existing task stays as it is
 	}
 	log.Printf("WSL watchdog task: S4U logon failed, using the sign-in-only task: %v", err)
-	return run("schtasks.exe", schtasksArgs(script)...)
+	return runWin("schtasks.exe", schtasksArgs(script)...)
 }
 
 // migrateWatchdogTask recreates an existing task that still logs on with an
 // interactive token. A missing task is never created here. It reports
 // whether it recreated the task.
 func migrateWatchdogTask(winDir, unixDir string) (bool, error) {
-	out, err := exec.Command("schtasks.exe", "/Query", "/TN", watchdogTask, "/XML").Output()
+	qcmd, cancel := winCommand("schtasks.exe", "/Query", "/TN", watchdogTask, "/XML")
+	defer cancel()
+	out, err := qcmd.Output()
 	if !needS4U(string(out), err) {
 		return false, nil
 	}
@@ -199,7 +202,8 @@ func watchdogWanted() bool {
 // watchdogDir is the folder of the script, as a Windows path and as a path
 // seen from WSL.
 func watchdogDir() (win, unix string, err error) {
-	cmd := exec.Command("cmd.exe", "/c", "echo %LOCALAPPDATA%")
+	cmd, cancel := winCommand("cmd.exe", "/c", "echo %LOCALAPPDATA%")
+	defer cancel()
 	cmd.Dir = "/mnt/c"
 	out, err := cmd.Output()
 	if err != nil {
@@ -261,7 +265,7 @@ func removeWatchdog() {
 	if !watchdogWanted() {
 		return
 	}
-	_ = run("schtasks.exe", "/Delete", "/F", "/TN", watchdogTask)
+	_ = runWin("schtasks.exe", "/Delete", "/F", "/TN", watchdogTask)
 	unix := ""
 	if _, u, err := watchdogDir(); err == nil {
 		unix = u
@@ -286,6 +290,7 @@ func EnsureWatchdog() (bool, error) {
 	}
 	win, unix, derr := watchdogDir()
 	if derr != nil {
+		log.Printf("watchdog: cannot reach Windows (%v), S4U task check skipped (retried at next start)", derr)
 		unix = recordedWatchdogDir()
 	}
 	if unix == "" {
