@@ -194,6 +194,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 		CIEmulatorOK: d.member.CIEmulatorOK,
 		RelayURL:     fleet.RelayURLFromEnv(),
 	}
+	// Read once: a change to fleet_lan takes effect at the next daemon start.
+	if c, err := store.LoadConfig(); err == nil {
+		d.peers.LAN = c.FleetLAN
+	}
 	d.member.IsPeer = d.peers.Linked
 	dash := web.New(web.Hooks{
 		Version:     d.Version,

@@ -270,6 +270,18 @@ A Windows laptop can take CI jobs from the main host. Joining the fleet is the o
 
 If a laptop goes offline while it runs a job, that job fails with "machine went offline" instead of hanging. `gh-runners ci run` shows which machine ran each job in its `machine` column.
 
+## Listen addresses (#175)
+
+By default the machines ports (the main host's 47322 and the account
+machines' 47323) listen on loopback and on this PC's Tailscale addresses
+only, never on the LAN, and the LAN addresses are not advertised. Set
+`"fleet_lan": true` in `config.json` to listen on every interface as before.
+PCs without Tailscale still reach each other through the relay. A PC that
+joined a main host over the LAN, with no Tailscale, cannot reach a host that
+has `fleet_lan` unset: set `"fleet_lan": true` on that host. A change takes
+effect at the next daemon start (or the next time the main host is switched
+on).
+
 ## Pause a machine
 
 Pause stops everything gh-runners runs on one machine at once: every runner and

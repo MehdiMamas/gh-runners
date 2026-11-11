@@ -293,6 +293,10 @@ type Config struct {
 	MainHost bool `json:"main_host,omitempty"`
 	// FleetPort is the main host's port for its machines (default 47322).
 	FleetPort int `json:"fleet_port,omitempty"`
+	// FleetLAN also opens the machines ports (main host and account
+	// machines) on the LAN; unset means loopback and Tailscale only. Config
+	// file only; a change takes effect at the next daemon start.
+	FleetLAN bool `json:"fleet_lan,omitempty"`
 	// AllowControl lets the other PCs signed in to the same GitHub account
 	// start, stop and change runners here; unset means yes.
 	AllowControl *bool `json:"allow_control,omitempty"`

@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +45,9 @@ type Peers struct {
 	// is the listen address instead (tests use "127.0.0.1:0").
 	Port func() int
 	Addr string
+	// LAN also listens on, and advertises, the LAN addresses; false means
+	// loopback and Tailscale only. Read once at start.
+	LAN bool
 	// Addrs lists the addresses put in the directory; nil means LocalAddrs.
 	Addrs func() []string
 	// Info describes this machine's runners for the others.
@@ -204,22 +206,14 @@ func (p *Peers) start(parent context.Context) (*peerRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	addr := p.Addr
-	if addr == "" {
-		port := PeerPort
-		if p.Port != nil {
-			port = p.Port()
-		}
-		addr = ":" + strconv.Itoa(port)
-	}
-	ln, err := net.Listen("tcp", addr)
-	if err != nil && p.Addr == "" {
-		// Taken (often by another program): any free port does, the
-		// directory tells the others which one.
-		ln, err = net.Listen("tcp", ":0")
+	var ln net.Listener
+	if p.Addr != "" {
+		ln, err = net.Listen("tcp", p.Addr)
+	} else {
+		ln, err = ListenScoped(p.listenPort(), p.LAN, true, p.logf)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("cannot listen on %s for the account's other PCs: %w", addr, err)
+		return nil, fmt.Errorf("cannot listen for the account's other PCs: %w", err)
 	}
 	ctx, cancel := context.WithCancel(parent)
 	r := &peerRun{p: p, cancel: cancel, dir: dir, ln: ln, port: ln.Addr().(*net.TCPAddr).Port, cert: c,
@@ -501,7 +495,7 @@ func (r *peerRun) selfEntry() Entry {
 	if name == "" {
 		name, _ = os.Hostname()
 	}
-	addrs := LocalAddrs
+	addrs := func() []string { return LocalAddrsFor(p.LAN) }
 	if p.Addrs != nil {
 		addrs = p.Addrs
 	}

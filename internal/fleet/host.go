@@ -45,6 +45,9 @@ type Host struct {
 	Token func(context.Context) (string, error)
 	// Addrs lists the addresses put in join codes; nil means LocalAddrs.
 	Addrs func() []string
+	// LAN also listens on, and puts in join codes, the LAN addresses (used
+	// by StartPort); false means loopback and Tailscale only.
+	LAN bool
 	// Log, when set, gets one line per member event.
 	Log func(format string, args ...any)
 	// CIRepos lists the owner/repo names whose source members may download
@@ -222,6 +225,31 @@ func fingerprint(der []byte) string {
 // Start listens for members on addr (":47322" style; "" means every
 // interface on DefaultPort).
 func (h *Host) Start(addr string) error {
+	if addr == "" {
+		addr = ":" + strconv.Itoa(DefaultPort)
+	}
+	return h.start(func() (net.Listener, error) {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return nil, fmt.Errorf("cannot listen for machines on %s: %w", addr, err)
+		}
+		return ln, nil
+	})
+}
+
+// StartPort listens on port on loopback and the Tailscale addresses, or on
+// every interface when h.LAN is set. A taken port is an error.
+func (h *Host) StartPort(port int) error {
+	return h.start(func() (net.Listener, error) {
+		ln, err := ListenScoped(port, h.LAN, false, h.logf)
+		if err != nil {
+			return nil, fmt.Errorf("cannot listen for machines on port %d: %w", port, err)
+		}
+		return ln, nil
+	})
+}
+
+func (h *Host) start(listen func() (net.Listener, error)) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.ln != nil {
@@ -232,12 +260,9 @@ func (h *Host) Start(addr string) error {
 		h.startErr = err
 		return err
 	}
-	if addr == "" {
-		addr = ":" + strconv.Itoa(DefaultPort)
-	}
-	ln, err := net.Listen("tcp", addr)
+	ln, err := listen()
 	if err != nil {
-		h.startErr = fmt.Errorf("cannot listen for machines on %s: %w", addr, err)
+		h.startErr = err
 		return h.startErr
 	}
 	h.startErr = nil
@@ -490,7 +515,7 @@ func (h *Host) addrs() []string {
 	if h.Addrs != nil {
 		return h.Addrs()
 	}
-	return LocalAddrs()
+	return LocalAddrsFor(h.LAN)
 }
 
 // Invite makes a one-time join code that works for InviteTTL.
