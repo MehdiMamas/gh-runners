@@ -60,6 +60,10 @@ func jitAllowed(max, maxJobs, busyAlways int, inUse bool) int {
 	return n
 }
 
+// holdAll says every idle runner is held and no on-demand runner starts:
+// the machine is in use (#164) or an update is draining (#174).
+func (d *Daemon) holdAll() bool { return d.deskBusy.Load() || d.draining.Load() }
+
 // busyAlways reports, for each always-on runner that is running, whether it
 // runs a job. Caller holds d.mu.
 func (d *Daemon) busyAlways() map[string]bool {
@@ -75,7 +79,7 @@ func (d *Daemon) busyAlways() map[string]bool {
 // busyAlwaysCount is the number of always-on runners running a job. It is 0
 // without calling the process list when no limit is set.
 func (d *Daemon) busyAlwaysCount() int {
-	if cfg, _ := store.LoadConfig(); cfg.MaxJobs <= 0 && !d.deskBusy.Load() {
+	if cfg, _ := store.LoadConfig(); cfg.MaxJobs <= 0 && !d.holdAll() {
 		return 0
 	}
 	d.mu.Lock()
@@ -127,7 +131,9 @@ func (d *Daemon) applyLimit(maxJobs int, inUse bool) (holding bool) {
 		}
 		c.held, c.stopping = true, true
 		c.state.State = "stopping"
-		if inUse {
+		if inUse && !d.deskBusy.Load() {
+			d.Log.Printf("[%s] holding: update pending", id)
+		} else if inUse {
 			d.Log.Printf("[%s] holding: machine in use", id)
 		} else {
 			d.Log.Printf("[%s] holding: %d jobs running, limit %d", id, n, maxJobs)

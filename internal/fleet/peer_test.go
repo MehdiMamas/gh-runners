@@ -763,3 +763,16 @@ func TestLogFailureOnlyWhenItChanges(t *testing.T) {
 		t.Fatalf("lines = %q", lines)
 	}
 }
+
+func TestLogLinkOnlyOnChange(t *testing.T) {
+	var lines []string
+	r := &peerRun{p: &Peers{Log: func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }}, state: map[string]*peerState{}, entries: map[string]Entry{"a": {Name: "PC"}}}
+	r.logLink("a", "connected")
+	r.logLink("a", "connected")
+	r.logLink("a", "disconnected: EOF")
+	r.logLink("a", "disconnected: EOF")
+	r.logLink("a", "connected")
+	if len(lines) != 3 {
+		t.Fatalf("lines = %q", lines)
+	}
+}

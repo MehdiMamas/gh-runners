@@ -68,6 +68,7 @@ func (d *Daemon) updateLoop(ctx context.Context) {
 		}
 		if d.paused.Load() {
 			pending = false
+			d.endDrain()
 			arm(d.pausedWait())
 			continue
 		}
@@ -127,22 +128,29 @@ func (d *Daemon) checkUpdate(ctx context.Context, asked bool) (time.Duration, bo
 	d.setUpdate(func(u *control.UpdateState) { u.Latest, u.Checked, u.Error = latest, time.Now(), "" })
 	if !update.Newer(latest, d.Version) {
 		d.setUpdate(func(u *control.UpdateState) { u.Note = "up to date" })
+		d.endDrain()
 		return updateEvery(), false
 	}
 	cfg, _ := store.LoadConfig()
 	if !asked && !cfg.AutoUpdateOn() {
 		d.setUpdate(func(u *control.UpdateState) { u.Note = latest + " is available; auto-update is off" })
+		d.endDrain()
 		return updateEvery(), false
 	}
 	waiting, err := d.applyUpdate(ctx, latest)
 	if err != nil {
 		d.setUpdate(func(u *control.UpdateState) { u.Error = err.Error() })
 		d.Log.Printf("update to %s: %v", latest, err)
+		d.endDrain()
 		return time.Hour, false
 	}
 	if waiting {
+		if d.draining.Load() {
+			return updateDrainCheck, asked
+		}
 		return updateBusy, asked
 	}
+	d.endDrain()
 	return updateEvery(), false
 }
 
@@ -151,6 +159,7 @@ func (d *Daemon) checkUpdate(ctx context.Context, asked bool) (time.Duration, bo
 // job is running and it should try again later.
 func (d *Daemon) applyUpdate(ctx context.Context, tag string) (waiting bool, err error) {
 	wait := func(why string) (bool, error) {
+		d.noteWaiting(time.Now())
 		d.setUpdate(func(u *control.UpdateState) { u.Note = "waiting for " + why + " before updating to " + tag })
 		return true, nil
 	}
