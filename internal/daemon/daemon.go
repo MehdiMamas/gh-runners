@@ -140,12 +140,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 		if ok, err := service.EnsureKeepalive(); err != nil {
 			d.Log.Printf("keepalive task: %v", err)
 		} else if ok {
-			d.Log.Printf("created keepalive task")
+			d.Log.Printf("created or re-created keepalive task (S4U: runs with nobody signed in)")
 		}
 		if ok, err := service.EnsureWatchdog(); err != nil {
 			d.Log.Printf("WSL watchdog script: %v", err)
 		} else if ok {
-			d.Log.Printf("updated WSL watchdog script")
+			d.Log.Printf("updated WSL watchdog script or task (S4U: runs with nobody signed in)")
 		}
 	}()
 

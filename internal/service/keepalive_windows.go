@@ -18,11 +18,13 @@ func schtasks(args ...string) ([]byte, error) {
 
 func installKeepalive(exe string) error {
 	home := os.Getenv("GH_RUNNERS_HOME")
-	out, err := schtasks(keepaliveArgs(exe, home)...)
-	if err != nil {
-		return &keepaliveError{err, out}
-	}
-	return nil
+	return createTask(keepaliveArgs(exe, home), func(args []string) error {
+		out, err := schtasks(args...)
+		if err != nil {
+			return &keepaliveError{err, out}
+		}
+		return nil
+	})
 }
 
 type keepaliveError struct {
@@ -46,7 +48,12 @@ func keepaliveExists() bool {
 
 func ensureKeepalive() (bool, error) {
 	s := status()
-	if !needKeepalive(s.Installed, s.Keepalive) {
+	migrate := false
+	if s.Keepalive {
+		out, err := schtasks("/Query", "/TN", keepaliveTask(os.Getenv("GH_RUNNERS_HOME")), "/V", "/FO", "LIST")
+		migrate = err == nil && interactiveOnly(string(out)) == logonInteractive
+	}
+	if !migrate && !needKeepalive(s.Installed, s.Keepalive) {
 		return false, nil
 	}
 	exe, err := Executable()

@@ -24,15 +24,19 @@ func TestKeepaliveTask(t *testing.T) {
 func TestKeepaliveArgs(t *testing.T) {
 	got := keepaliveArgs(`C:\bin\gh-runners.exe`, "")
 	want := []string{"/Create", "/F", "/SC", "MINUTE", "/MO", "5", "/TN", "gh-runners keepalive",
-		"/TR", `conhost.exe --headless "C:\bin\gh-runners.exe" daemon --detach --keepalive`}
+		"/TR", `conhost.exe --headless "C:\bin\gh-runners.exe" daemon --detach --keepalive`, "/NP"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %q", got)
 	}
 	home := filepath.Join(t.TempDir(), "h")
 	got = keepaliveArgs(`C:\bin\gh-runners.exe`, home)
-	if tr := got[len(got)-1]; !strings.Contains(tr, ` --home "`+home+`" daemon --detach --keepalive`) {
+	if tr := got[len(got)-2]; !strings.Contains(tr, ` --home "`+home+`" daemon --detach --keepalive`) {
 		t.Errorf("home missing: %q", tr)
 	}
+	if got[len(got)-1] != "/NP" {
+		t.Errorf("/NP missing: %q", got)
+	}
+	got = got[:len(got)-1]
 	for _, a := range got {
 		if a == "/RL" || a == "/RU" || a == "/RP" {
 			t.Errorf("elevation or account flag %q", a)

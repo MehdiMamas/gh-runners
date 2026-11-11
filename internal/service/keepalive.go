@@ -23,7 +23,7 @@ func keepaliveArgs(exe, home string) []string {
 		tr += ` --home "` + home + `"`
 	}
 	tr += ` daemon --detach --keepalive`
-	return []string{"/Create", "/F", "/SC", "MINUTE", "/MO", "5", "/TN", keepaliveTask(home), "/TR", tr}
+	return []string{"/Create", "/F", "/SC", "MINUTE", "/MO", "5", "/TN", keepaliveTask(home), "/TR", tr, "/NP"}
 }
 
 // needKeepalive tells whether the task must be created: the login entry is
@@ -31,6 +31,7 @@ func keepaliveArgs(exe, home string) []string {
 func needKeepalive(installed, exists bool) bool { return installed && !exists }
 
 // EnsureKeepalive creates the keepalive task for an install that predates it
-// (auto-update only restarts the service). It reports whether it created the
+// (auto-update only restarts the service) and re-creates one that is still
+// interactive-only (#177). It reports whether it created or re-created the
 // task; on other OS it does nothing.
 func EnsureKeepalive() (bool, error) { return ensureKeepalive() }

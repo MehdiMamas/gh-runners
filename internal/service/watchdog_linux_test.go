@@ -150,6 +150,7 @@ func TestSchtasksArgs(t *testing.T) {
 	want := []string{
 		"/Create", "/F", "/SC", "MINUTE", "/MO", "5", "/TN", "gh-runners WSL watchdog",
 		"/TR", `conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Users\me\AppData\Local\gh-runners\wsl-watchdog.ps1"`,
+		"/NP",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got  %q\nwant %q", got, want)

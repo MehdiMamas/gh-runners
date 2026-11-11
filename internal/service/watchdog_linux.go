@@ -116,11 +116,13 @@ func renderWatchdog(distro string, uid int) string {
 }
 
 // schtasksArgs creates the per-user task that runs the script every 5
-// minutes: no admin, no SYSTEM, and no window (conhost --headless).
+// minutes: no admin, no SYSTEM, and no window (conhost --headless). /NP makes
+// it an S4U task: it runs with nobody signed in and stores no password.
 func schtasksArgs(scriptWinPath string) []string {
 	return []string{
 		"/Create", "/F", "/SC", "MINUTE", "/MO", "5", "/TN", watchdogTask,
 		"/TR", `conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File "` + scriptWinPath + `"`,
+		"/NP",
 	}
 }
 
@@ -190,7 +192,11 @@ func installWatchdog() error {
 	if err := recordWatchdogDir(unix); err != nil {
 		return err
 	}
-	return run("schtasks.exe", schtasksArgs(win+`\`+watchdogScript)...)
+	return createWatchdogTask(win + `\` + watchdogScript)
+}
+
+func createWatchdogTask(scriptWinPath string) error {
+	return createTask(schtasksArgs(scriptWinPath), func(args []string) error { return run("schtasks.exe", args...) })
 }
 
 // removeWatchdog deletes the task, the script and what the probe left. Best
@@ -215,16 +221,15 @@ func removeWatchdog() {
 }
 
 // EnsureWatchdog rewrites the script of an install that already has one when
-// it differs from the current template. It never creates a script and never
-// touches the task. It reports whether it rewrote.
+// it differs from the current template. It never creates a script or a task;
+// it only re-creates a task that exists but is interactive-only (#177). It
+// reports whether it rewrote the script or re-created the task.
 func EnsureWatchdog() (bool, error) {
 	if !watchdogWanted() {
 		return false, nil
 	}
-	unix := ""
-	if _, u, err := watchdogDir(); err == nil {
-		unix = u
-	} else {
+	win, unix, err := watchdogDir()
+	if err != nil {
 		unix = recordedWatchdogDir()
 	}
 	if unix == "" {
@@ -236,7 +241,18 @@ func EnsureWatchdog() (bool, error) {
 	if err := recordWatchdogDir(unix); err != nil {
 		return false, err
 	}
-	return rewriteWatchdog(unix, renderWatchdog(os.Getenv("WSL_DISTRO_NAME"), os.Getuid()))
+	changed, err := rewriteWatchdog(unix, renderWatchdog(os.Getenv("WSL_DISTRO_NAME"), os.Getuid()))
+	if err != nil || win == "" {
+		return changed, err
+	}
+	out, qerr := exec.Command("schtasks.exe", "/Query", "/TN", watchdogTask, "/V", "/FO", "LIST").Output()
+	if qerr == nil && interactiveOnly(string(out)) == logonInteractive {
+		if err := createWatchdogTask(win + `\` + watchdogScript); err != nil {
+			return changed, err
+		}
+		return true, nil
+	}
+	return changed, nil
 }
 
 // rewriteWatchdog replaces the script in dir with content when it exists and
