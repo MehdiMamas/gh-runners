@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"errors"
 	"net"
 	"strconv"
 	"sync"
@@ -84,14 +85,20 @@ func (m *multiListener) add(ln net.Listener, ip string) {
 			if err != nil {
 				select {
 				case <-m.done:
+					return
 				default:
-					m.logf("machines port: listener on %s stopped: %v", ln.Addr(), err)
-					_ = ln.Close()
-					if ip != "" {
-						m.mu.Lock()
-						delete(m.have, ip)
-						m.mu.Unlock()
-					}
+				}
+				if !errors.Is(err, net.ErrClosed) {
+					// Temporary (out of file handles and the like): retry,
+					// as the single listener did.
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+				m.logf("machines port: listener on %s stopped: %v", ln.Addr(), err)
+				if ip != "" {
+					m.mu.Lock()
+					delete(m.have, ip)
+					m.mu.Unlock()
 				}
 				return
 			}

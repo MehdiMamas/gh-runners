@@ -241,12 +241,12 @@ func (h *Host) Start(addr string) error {
 // every interface with lan, which also puts the LAN addresses in join
 // codes. A taken port is an error.
 func (h *Host) StartPort(port int, lan bool) error {
-	h.lan.Store(lan)
 	return h.start(func() (net.Listener, error) {
 		ln, err := ListenScoped(port, lan, false, h.logf)
 		if err != nil {
 			return nil, fmt.Errorf("cannot listen for machines on port %d: %w", port, err)
 		}
+		h.lan.Store(lan)
 		return ln, nil
 	})
 }
