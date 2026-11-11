@@ -12,6 +12,7 @@ import (
 )
 
 const (
+	maxInteropTries     = 5
 	interopProbeTimeout = 5 * time.Second
 	interopSockGlob     = "/run/WSL/*_interop"
 )
@@ -52,7 +53,15 @@ func fixInterop(getenv func(string) string, setenv func(k, v string) error, glob
 	if cur != "" && probe(cur) {
 		return cur
 	}
-	for _, s := range interopSockets(glob) {
+	socks := interopSockets(glob)
+	if len(socks) > maxInteropTries {
+		socks = socks[:maxInteropTries]
+	}
+	shown := cur
+	if shown == "" {
+		shown = "(unset)"
+	}
+	for _, s := range socks {
 		if s == cur || !probe(s) {
 			continue
 		}
@@ -60,10 +69,10 @@ func fixInterop(getenv func(string) string, setenv func(k, v string) error, glob
 			log.Printf("wsl interop: %v", err)
 			return cur
 		}
-		log.Printf("wsl interop: %s not answering, using %s", cur, s)
+		log.Printf("wsl interop: %s not answering, using %s", shown, s)
 		return s
 	}
-	log.Printf("wsl interop: %s not answering and no other socket does", cur)
+	log.Printf("wsl interop: %s not answering and no other socket does", shown)
 	return cur
 }
 

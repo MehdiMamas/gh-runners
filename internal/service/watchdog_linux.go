@@ -290,7 +290,7 @@ func EnsureWatchdog() (bool, error) {
 	}
 	win, unix, derr := watchdogDir()
 	if derr != nil {
-		log.Printf("watchdog: Windows interop not answering, S4U task check skipped (retried at next start)")
+		log.Printf("watchdog: cannot reach Windows (%v), S4U task check skipped (retried at next start)", derr)
 		unix = recordedWatchdogDir()
 	}
 	if unix == "" {

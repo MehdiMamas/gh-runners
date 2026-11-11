@@ -109,3 +109,19 @@ func TestWinCommandTimesOut(t *testing.T) {
 		t.Errorf("took %v", time.Since(start))
 	}
 }
+
+func TestFixInteropUnsetAndCap(t *testing.T) {
+	names := map[string]time.Duration{}
+	for i := 0; i < 8; i++ {
+		names[string(rune('a'+i))+"_interop"] = time.Duration(i) * time.Minute
+	}
+	glob := fakeSockets(t, names)
+	e := &interopEnv{vars: map[string]string{"WSL_DISTRO_NAME": "U"}, live: map[string]bool{}}
+	e.run(t, glob)
+	if len(e.probed) != maxInteropTries {
+		t.Errorf("probed %d sockets: %v", len(e.probed), e.probed)
+	}
+	if !strings.Contains(e.logs.String(), "(unset) not answering") || e.vars["WSL_INTEROP"] != "" {
+		t.Errorf("env %v logs %q", e.vars, e.logs)
+	}
+}

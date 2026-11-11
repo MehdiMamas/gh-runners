@@ -89,6 +89,7 @@ func Install() (string, error) {
 
 // Uninstall stops the daemon and removes the login entry.
 func Uninstall() error {
+	FixInterop()
 	err := uninstall()
 	store.ClearDaemonLive()
 	return err
