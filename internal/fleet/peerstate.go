@@ -44,3 +44,13 @@ func (r *peerRun) stateLocked(id string) *peerState {
 	}
 	return st
 }
+
+// clearFailures runs on a connect: a failure after it logs again; only the
+// link line is kept, so a flapping link logs each change once.
+func (st *peerState) clearFailures() {
+	for k := range st.logged {
+		if k != "link" {
+			delete(st.logged, k)
+		}
+	}
+}
