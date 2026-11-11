@@ -668,6 +668,7 @@ func (d *Daemon) fleetInfo() fleet.Info {
 	}
 	st := d.status()
 	runners, _ := store.List()
+	info.ReportsBusy = true
 	for _, r := range runners {
 		state, _ := ops.LocalState(r, st, true)
 		info.Runners = append(info.Runners, fleet.RunnerInfo{ID: r.ID, Scope: r.Scope(), Name: r.Name, State: state, Labels: r.Labels,

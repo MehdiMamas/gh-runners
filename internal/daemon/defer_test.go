@@ -17,7 +17,7 @@ func freePeer() fleet.Peer {
 	return fleet.Peer{
 		Entry:  fleet.Entry{ID: "id-b", Name: "build-pc"},
 		Online: true, HasInfo: true, LastSeen: deferNow.Add(-10 * time.Second),
-		Info: fleet.Info{Hostname: "build-pc", Runners: []fleet.RunnerInfo{
+		Info: fleet.Info{Hostname: "build-pc", ReportsBusy: true, Runners: []fleet.RunnerInfo{
 			{ID: "r1", Scope: "org/app", State: "running", Labels: []string{"self-hosted", "heavy"}},
 		}},
 	}
@@ -47,6 +47,7 @@ func TestDeferHits(t *testing.T) {
 		{"peer runner held", func(p *fleet.Peer) { p.Info.Runners[0].State = "held" }, 0},
 		{"peer runner other scope", func(p *fleet.Peer) { p.Info.Runners[0].Scope = "org/other" }, 0},
 		{"peer runner without the label", func(p *fleet.Peer) { p.Info.Runners[0].Labels = []string{"self-hosted"} }, 0},
+		{"peer on a version without busy flags", func(p *fleet.Peer) { p.Info.ReportsBusy = false }, 0},
 		{"peer without runners", func(p *fleet.Peer) { p.Info.Runners = nil }, 0},
 	}
 	for _, c := range cases {

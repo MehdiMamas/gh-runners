@@ -69,13 +69,14 @@ func hasLabel(labels []string, l string) bool {
 }
 
 // peerTakes says peer p is linked directly, reported within peerFresh, is not
-// in use or paused, and has a runner for scope and label that is up and not
+// in use or paused, reports which runners run jobs (an older version
+// does not), and has a runner for scope and label that is up and not
 // running a job.
 func peerTakes(p fleet.Peer, scope, label string, now time.Time) bool {
 	if !p.Online || p.Via != "" || !p.HasInfo || p.LastSeen.IsZero() || now.Sub(p.LastSeen) > peerFresh {
 		return false
 	}
-	if p.Info.InUse || p.Info.Paused {
+	if p.Info.InUse || p.Info.Paused || !p.Info.ReportsBusy {
 		return false
 	}
 	for _, r := range p.Info.Runners {
