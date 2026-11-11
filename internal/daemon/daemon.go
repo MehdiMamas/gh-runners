@@ -88,6 +88,9 @@ type Daemon struct {
 	// ciBusy names the queued or running Local CI task, or "" when none.
 	ciBusy func() string
 
+	// busyFn is a test seam for isBusy (hold.go); nil means runner.Busy.
+	busyFn func(dir string) bool
+
 	tokMu    sync.Mutex
 	tok      string
 	tokAt    time.Time

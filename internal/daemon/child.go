@@ -16,6 +16,9 @@ type child struct {
 	healthKill bool
 	// held marks a runner stopped on purpose because the host job limit
 	// (max_jobs) is reached; it is kept in d.children and not started.
-	held  bool
-	state control.ProcState
+	held bool
+	// holdAfterJob marks that holdWhenIdle watches this busy runner, so only
+	// one watcher runs per child. Set and read under Daemon.mu.
+	holdAfterJob bool
+	state        control.ProcState
 }
