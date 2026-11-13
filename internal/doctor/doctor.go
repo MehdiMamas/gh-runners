@@ -116,7 +116,7 @@ func Run(ctx context.Context, st *control.Status) []Check {
 	add(OK, "labels this machine answers to: %s", strings.Join(ops.MachineLabels(cfg), ", "))
 	add(OK, "runners folder: %s", store.RunnersDir())
 	if p := store.ProtectedFolder(store.RunnersDir()); p != "" {
-		add(Fix, "the runners folder is inside %s, which macOS guards: it asks for access again and again. Move it in the dashboard (Runners folder) to ~/.gh-runners/runners; never grant Full Disk Access", p)
+		add(Fix, "the runners folder is inside %s, which macOS guards: it asks for access again and again. Move it in the dashboard (Runners folder) to %s; never grant Full Disk Access", p, store.DefaultRunnersDir())
 	}
 	if cfg.Sync.Auto {
 		add(OK, "auto-sync on (every %s)", cfg.Sync.Interval.Or(time.Hour))
