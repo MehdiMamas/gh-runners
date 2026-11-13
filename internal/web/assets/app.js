@@ -384,13 +384,8 @@ function signIn() {
       mount(body, seg,
         h('ol', { class: 'steps' },
           h('li', {}, h('a', { href: 'https://github.com/settings/personal-access-tokens/new', target: '_blank', rel: 'noopener' }, 'Create a fine-grained token on GitHub'), ' (pick an expiry). Under "Repository access" choose the repositories you run on, and also your ', h('code', {}, 'gh-runners-machines'), ' repository if you link several computers (create it first: a token cannot create it).'),
-          h('li', {}, 'Under "Repository permissions" set:',
-            h('ul', {},
-              h('li', {}, h('b', {}, 'Runners: '), 'Administration (read and write), Actions (read), Metadata (read, automatic).'),
-              h('li', {}, h('b', {}, 'Linked computers and local CI: '), 'Contents (read and write).'),
-              h('li', {}, h('b', {}, 'Local CI results: '), 'Commit statuses, Pull requests and Issues (all read and write).'))),
-          h('li', {}, 'Paste it here:')),
-        h('div', { class: 'row' }, input, h('button', { class: 'btn primary', onclick: () => guard(async () => {
+          h('li', {}, 'Under "Repository permissions" set:', h('ul', {}, ...[['Runners: ', 'Administration (read and write), Actions (read), Metadata (read, automatic).'], ['Linked computers and local CI: ', 'Contents (read and write).'], ['Local CI results: ', 'Commit statuses, Pull requests and Issues (all read and write).']].map(([a, b]) => h('li', {}, h('b', {}, a), b)))),
+          h('li', {}, 'Paste it here:')), h('div', { class: 'row' }, input, h('button', { class: 'btn primary', onclick: () => guard(async () => {
           const r = await api('POST', '/api/login/token', { token: input.value });
           closeDialog(); toast('Signed in as ' + r.login); await refreshState(); loadRepos(true);
         }) }, 'Save')),
