@@ -383,13 +383,18 @@ function signIn() {
       const input = h('input', { type: 'password', placeholder: 'ghp_... or github_pat_...', autocomplete: 'off' });
       mount(body, seg,
         h('ol', { class: 'steps' },
-          h('li', {}, h('a', { href: 'https://github.com/settings/tokens/new?scopes=repo&description=gh-runners', target: '_blank', rel: 'noopener' }, 'Create a token on GitHub'), ' (classic, "repo" scope is already ticked; pick an expiry).'),
+          h('li', {}, h('a', { href: 'https://github.com/settings/personal-access-tokens/new', target: '_blank', rel: 'noopener' }, 'Create a fine-grained token on GitHub'), ' (pick an expiry). Under "Repository access" choose the repositories you run on, and also your ', h('code', {}, 'gh-runners-machines'), ' repository if you link several computers (create it first: a token cannot create it).'),
+          h('li', {}, 'Under "Repository permissions" set:',
+            h('ul', {},
+              h('li', {}, h('b', {}, 'Runners: '), 'Administration (read and write), Actions (read), Metadata (read, automatic).'),
+              h('li', {}, h('b', {}, 'Linked computers and local CI: '), 'Contents (read and write).'),
+              h('li', {}, h('b', {}, 'Local CI results: '), 'Commit statuses, Pull requests and Issues (all read and write).'))),
           h('li', {}, 'Paste it here:')),
         h('div', { class: 'row' }, input, h('button', { class: 'btn primary', onclick: () => guard(async () => {
           const r = await api('POST', '/api/login/token', { token: input.value });
           closeDialog(); toast('Signed in as ' + r.login); await refreshState(); loadRepos(true);
         }) }, 'Save')),
-        h('p', { class: 'muted small' }, 'Fine-grained tokens work too: give them Administration (read and write) and Actions (read) on your repositories. The token is stored in ' + (S.state ? S.state.home : '~/.gh-runners') + ' and only readable by you.'));
+        h('p', { class: 'muted small' }, 'Simpler but broader: a ', h('a', { href: 'https://github.com/settings/tokens/new?scopes=repo&description=gh-runners', target: '_blank', rel: 'noopener' }, 'classic token'), ' with the "repo" scope (already ticked) covers everything. The token is stored in ' + (S.state ? S.state.home : '~/.gh-runners') + ' and only readable by you.'));
       setTimeout(() => input.focus(), 50);
     }
   };
