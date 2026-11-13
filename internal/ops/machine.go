@@ -67,6 +67,9 @@ func MoveRunners(dir string, log io.Writer) error {
 	if target == "" {
 		target = store.DefaultRunnersDir()
 	}
+	if p := store.ProtectedFolder(target); p != "" {
+		return fmt.Errorf("%s is inside %s, which macOS guards with permission prompts; pick a folder such as %s", target, p, store.DefaultRunnersDir())
+	}
 	old := filepath.Clean(store.RunnersDir())
 	cfg, err := store.LoadConfig()
 	if err != nil {
