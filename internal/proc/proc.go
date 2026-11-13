@@ -79,7 +79,7 @@ func Env() []string { return env() }
 // of everything else: otherwise `shell: bash` finds the WSL launcher in
 // WindowsApps, which cannot run the runner's temp script.
 func EnvFor(dir string) []string {
-	env := withPathFile(Env(), dir)
+	env := withSimHook(withPathFile(Env(), dir), dir)
 	if runtime.GOOS == "windows" {
 		env = withFirstDirs(env, windowsToolDirs(os.Getenv, isDir))
 	}
