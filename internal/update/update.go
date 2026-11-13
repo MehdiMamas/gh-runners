@@ -212,7 +212,7 @@ func Smoke(ctx context.Context, path string) error {
 	defer cancel()
 	err := exec.CommandContext(ctx, path, "help").Run()
 	var ee *exec.ExitError
-	if errors.As(err, &ee) && !ee.Exited() {
+	if errors.As(err, &ee) && ctx.Err() == nil && !ee.Exited() {
 		return fmt.Errorf("the downloaded binary was killed at its first start (%v); keeping the current one", ee)
 	}
 	return nil

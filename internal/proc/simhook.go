@@ -34,12 +34,17 @@ func withSimHook(base []string, dir string) []string {
 			return base
 		}
 	}
-	if b, err := os.ReadFile(filepath.Join(dir, ".env")); err == nil && strings.Contains(string(b), simHookVar+"=") {
-		return base
+	if b, err := os.ReadFile(filepath.Join(dir, ".env")); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), simHookVar+"=") {
+				return base
+			}
+		}
 	}
 	path := filepath.Join(dir, "job-completed.sh")
 	if b, err := os.ReadFile(path); err != nil || string(b) != simHookScript {
-		if os.WriteFile(path, []byte(simHookScript), 0o755) != nil {
+		tmp := path + ".tmp"
+		if os.WriteFile(tmp, []byte(simHookScript), 0o755) != nil || os.Rename(tmp, path) != nil {
 			return base
 		}
 	}
