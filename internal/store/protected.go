@@ -28,7 +28,27 @@ func ProtectedFolder(dir string) string {
 	if err != nil {
 		return ""
 	}
-	return protectedFolderIn(dir, home)
+	if r := protectedFolderIn(dir, home); r != "" {
+		return r
+	}
+	// A symlink from an unguarded folder into a guarded one still prompts.
+	return protectedFolderIn(resolve(dir), resolve(home))
+}
+
+// resolve follows symlinks on the longest part of p that exists.
+func resolve(p string) string {
+	rest := ""
+	for q := filepath.Clean(p); ; {
+		if r, err := filepath.EvalSymlinks(q); err == nil {
+			return filepath.Join(r, rest)
+		}
+		up := filepath.Dir(q)
+		if up == q {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(q), rest)
+		q = up
+	}
 }
 
 func protectedFolderIn(dir, home string) string {
