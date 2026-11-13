@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -189,11 +190,32 @@ func Download(ctx context.Context, tag, dir string, log io.Writer) (string, erro
 	if err == nil {
 		err = os.Chmod(tmp.Name(), 0o755)
 	}
+	if err == nil {
+		err = Smoke(ctx, tmp.Name())
+	}
 	if err != nil {
 		os.Remove(tmp.Name())
 		return "", err
 	}
 	return tmp.Name(), nil
+}
+
+// Smoke runs the downloaded binary once on macOS (`help`, 10 s) before it
+// replaces the working one. macOS kills a binary with an invalid signature
+// at its first start, so one that dies from a signal is refused and the old
+// one stays (#196). Other systems skip it.
+func Smoke(ctx context.Context, path string) error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	err := exec.CommandContext(ctx, path, "help").Run()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && !ee.Exited() {
+		return fmt.Errorf("the downloaded binary was killed at its first start (%v); keeping the current one", ee)
+	}
+	return nil
 }
 
 // Replace swaps src in for exe. Windows can't overwrite a running exe but

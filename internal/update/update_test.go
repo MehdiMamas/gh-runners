@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -138,5 +139,22 @@ func TestLatestRetriesGatewayError(t *testing.T) {
 	}
 	if !noCache {
 		t.Fatal("request lacked Cache-Control: no-cache")
+	}
+}
+
+func TestSmoke(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS only")
+	}
+	dir := t.TempDir()
+	ok := filepath.Join(dir, "ok")
+	os.WriteFile(ok, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	if err := Smoke(context.Background(), ok); err != nil {
+		t.Fatal(err)
+	}
+	bad := filepath.Join(dir, "bad")
+	os.WriteFile(bad, []byte("#!/bin/sh\nkill -9 $$\n"), 0o755)
+	if err := Smoke(context.Background(), bad); err == nil {
+		t.Fatal("a binary killed by a signal was accepted")
 	}
 }
