@@ -309,6 +309,9 @@ func TestWakeFileRoundTrip(t *testing.T) {
 	if m, err := w.Read(ctx, a.ID()); err != nil || len(m) != 0 {
 		t.Fatalf("empty read: %v %v", m, err)
 	}
+	if !g.has("wants/" + a.ID() + ".json") {
+		t.Fatal("a read of a missing wake file must create it, else every poll is a counted 404")
+	}
 	if err := w.Put(ctx, a.ID(), dialer, time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}

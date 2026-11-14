@@ -147,7 +147,8 @@ func parseWants(raw []byte, now time.Time) map[string]time.Time {
 
 // ghWants keeps the wake files in the directory's repository. A read of an
 // unchanged file is a 304 (the client sends If-None-Match), which GitHub does
-// not count against the rate limit.
+// not count against the rate limit. Read creates a missing file, because a
+// 404 is counted every time.
 type ghWants struct{ d *Directory }
 
 func (g ghWants) Read(ctx context.Context, self string) (map[string]time.Time, error) {
@@ -157,6 +158,10 @@ func (g ghWants) Read(ctx context.Context, self string) (map[string]time.Time, e
 	}
 	cont, err := c.GetContents(ctx, owner, DirectoryRepo, wantsPath(self))
 	if github.IsNotFound(err) {
+		// A 404 has no ETag, so every poll of a missing file counts against
+		// the rate limit (6 a minute per machine). Create it empty once: from
+		// then on an unchanged read is a free 304.
+		_, _ = c.PutContents(ctx, owner, DirectoryRepo, wantsPath(self), "gh-runners: wake "+self, []byte(`{"from":{}}`), "")
 		return nil, nil
 	}
 	if err != nil {
