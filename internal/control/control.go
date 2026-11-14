@@ -8,10 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/localci"
+	"github.com/MehdiMamas/gh-runners/internal/proc"
 	"github.com/MehdiMamas/gh-runners/internal/store"
 )
 
@@ -125,6 +128,27 @@ func GetStatus() (Status, error) {
 	var s Status
 	err := call(http.MethodGet, "/status", &s)
 	return s, err
+}
+
+// Alive reports the PID of a running daemon, also one too busy to answer
+// /status in time: its recorded process exists and its port still accepts a
+// connection. Whatever starts a daemon asks this, never GetStatus alone: a
+// slow answer once counted as "not running" and each keepalive run added one
+// more daemon, until dozens ran at once.
+func Alive() (int, bool) {
+	if s, err := GetStatus(); err == nil {
+		return s.PID, true
+	}
+	info, err := store.LoadDaemonInfo()
+	if err != nil || info.Addr == "" || info.PID == os.Getpid() || !proc.Alive(info.PID) {
+		return 0, false
+	}
+	c, err := net.DialTimeout("tcp", info.Addr, 2*time.Second)
+	if err != nil {
+		return 0, false
+	}
+	c.Close()
+	return info.PID, true
 }
 
 // Reload makes the daemon rescan runners now instead of at its next tick.

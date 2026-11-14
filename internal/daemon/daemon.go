@@ -109,8 +109,8 @@ const dockerEvery = 10 * time.Minute
 // Run blocks until ctx is cancelled or /shutdown is called, then stops
 // every runner it started.
 func (d *Daemon) Run(ctx context.Context) error {
-	if s, err := control.GetStatus(); err == nil {
-		return fmt.Errorf("a gh-runners daemon is already running (pid %d)", s.PID)
+	if pid, ok := control.Alive(); ok {
+		return fmt.Errorf("a gh-runners daemon is already running (pid %d)", pid)
 	}
 	if d.Log == nil {
 		d.Log = log.New(os.Stderr, "", log.LstdFlags)

@@ -138,7 +138,7 @@ func Get() Status {
 // StartDetached runs `<exe> daemon` in the background, detached from this
 // terminal, and waits for it to answer.
 func StartDetached() error {
-	if _, err := control.GetStatus(); err == nil {
+	if _, ok := control.Alive(); ok {
 		return nil
 	}
 	exe, err := Executable()
