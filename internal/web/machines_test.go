@@ -429,6 +429,11 @@ func TestFleetManageOffByDefault(t *testing.T) {
 		t.Fatal("manage is on by default")
 	}
 	m := f.member.h.Member
+	// The member may still be redialling the host after setup; the check
+	// below is about the host's answer, not about the link.
+	for deadline := time.Now().Add(10 * time.Second); !m.Status().Connected && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+	}
 	for _, c := range [][2]string{
 		{"GET", "/api/machines"},
 		{"GET", "/api/machines/" + f.id + "/api/state"},

@@ -468,7 +468,7 @@ func withCI(t *testing.T) func(*Peers) {
 		p.CIEmulatorOK = func() bool { return false }
 		p.CIFetch = func(_ context.Context, _, _, dest string) error { return os.WriteFile(dest, tinyTarball(t), 0o644) }
 		t.Cleanup(func() {
-			waitFor(t, func() bool { return p.run == nil || p.run.ci.busy() == 0 })
+			waitWithin(t, jobStopBudget, func() bool { return p.run == nil || p.run.ci.busy() == 0 })
 		})
 	}
 }
@@ -531,7 +531,7 @@ func TestPeerCICancelStopsTheJob(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("cancel did not return")
 	}
-	waitFor(t, func() bool { return b.run.ci.busy() == 0 })
+	waitWithin(t, jobStopBudget, func() bool { return b.run.ci.busy() == 0 })
 }
 
 func TestPeerCILinkDropsMidJob(t *testing.T) {
@@ -553,7 +553,7 @@ func TestPeerCILinkDropsMidJob(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the sender waited for the dead link")
 	}
-	waitFor(t, func() bool { return b.run.ci.busy() == 0 })
+	waitWithin(t, jobStopBudget, func() bool { return b.run.ci.busy() == 0 })
 	if r := (PeerExecutor{Peers: a.Peers, ID: "nobody"}).RunJob(context.Background(), spec(t, "true")); r.Status != localci.Fail || !strings.Contains(r.Reason, "offline") {
 		t.Fatalf("unknown peer: %v %q", r.Status, r.Reason)
 	}
