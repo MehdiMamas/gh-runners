@@ -61,13 +61,24 @@ func connect(t *testing.T, h *Host, api http.Handler) *Member {
 
 func waitFor(t *testing.T, ok func() bool) {
 	t.Helper()
-	for i := 0; i < 500; i++ {
+	waitWithin(t, 5*time.Second, ok)
+}
+
+// jobStopBudget is how long a cancelled or cut-off job may take to end:
+// localci gives it a 3 s grace period, then up to 8 s (WaitDelay) for its
+// pipes to close. Slow hosted Windows runners can need more than 5 s.
+const jobStopBudget = 15 * time.Second
+
+func waitWithin(t *testing.T, d time.Duration, ok func() bool) {
+	t.Helper()
+	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
 		if ok() {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("timed out")
+	if !ok() {
+		t.Fatal("timed out")
+	}
 }
 
 func TestCodeRoundTrip(t *testing.T) {
