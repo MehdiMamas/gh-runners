@@ -75,6 +75,7 @@ type Daemon struct {
 	strays     map[string]int // runner id -> processes left after a stop, see sweep.go
 	seen       map[int]bool   // strays the last sweep saw
 	sweeping   atomic.Bool
+	lastPrune  time.Time   // last Docker prune, owned by diskLoop, see disk.go
 	updated    atomic.Bool // a new binary was installed; see stopResult
 
 	// GitHub health check (health.go), guarded by mu.
