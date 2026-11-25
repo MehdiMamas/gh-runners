@@ -15,6 +15,8 @@ gofmt -l .            # must print nothing
 
 CI runs the same checks on Linux, macOS and Windows.
 
+Run `lefthook install` once per clone (install lefthook with `brew install lefthook`, `scoop install lefthook` or `go install github.com/evilmartians/lefthook/v2@latest`). The pre-push hook then runs `gofmt -l .` and `go vet ./...`; the full test run stays in CI.
+
 ## Dashboard changes
 
 The dashboard lives in `internal/web/assets`. Go tests and `node --check` do not

@@ -551,7 +551,7 @@ rm -rf ~/.gh-runners   # and the binary (and your runners folder, if you moved i
 
 ## Development
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and send a pull request.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and send a pull request. Run `lefthook install` once per clone to get the pre-push check.
 
 ```sh
 go test ./...
