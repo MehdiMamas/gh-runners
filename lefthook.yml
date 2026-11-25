@@ -5,6 +5,6 @@ pre-push:
   parallel: true
   commands:
     gofmt:
-      run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      run: gofmt -l . | (! grep .)
     vet:
       run: go vet ./...
