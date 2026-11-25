@@ -116,3 +116,7 @@ on).
 - `endDrain` lifts the hold when the update is no longer pending (installed, up to date, auto-update off, error, paused). Remote CI jobs, `ci run` runs and CI jobs still block the install as before (#120).
 - `update.Latest` sends `Cache-Control: no-cache` and retries once on a 5xx, so `gh-runners update` and the dashboard's update action name the newest release.
 - Account machines log lines (`account machines: <name>: ...`) for connect, disconnect and failures are written only when a peer's last line of that kind changes; a connect clears the failure lines (so a later failure logs again) but keeps the link line.
+
+## Disk cleanup (#202)
+- `internal/proc/jobhook.go`: on every OS the runner gets `ACTIONS_RUNNER_HOOK_JOB_COMPLETED` (`job-completed.sh`, `.ps1` on Windows) that empties `$GITHUB_WORKSPACE` (only under the runner's `_work`, only when no other Runner.Worker runs); macOS also shuts simulators down. A hook set in the environment or `.env` is left alone.
+- `internal/daemon/disk.go` `pruneDocker`: once a day (first disk pass included), when `docker info` works, `docker system prune -f --filter until=24h` (never volumes); logs the reclaimed space.

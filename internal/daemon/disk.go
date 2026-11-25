@@ -3,11 +3,14 @@ package daemon
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/MehdiMamas/gh-runners/internal/fleet"
 	"github.com/MehdiMamas/gh-runners/internal/localci"
+	"github.com/MehdiMamas/gh-runners/internal/ops"
 	"github.com/MehdiMamas/gh-runners/internal/proc"
 	"github.com/MehdiMamas/gh-runners/internal/runner"
 	"github.com/MehdiMamas/gh-runners/internal/store"
@@ -68,7 +71,48 @@ func (d *Daemon) stopLongJobs(root string, limit time.Duration, kill func(pid in
 	}
 }
 
+// pruneEvery is how often old Docker images, containers, networks and build
+// cache are pruned. Volumes are never touched.
+const pruneEvery = 24 * time.Hour
+
+// dockerPrune runs the prune and returns its output. Tests replace it.
+var dockerPrune = func() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "system", "prune", "-f", "--filter", "until=24h")
+	hideWindow(cmd)
+	cmd.Cancel = func() error { return proc.KillTree(cmd.Process.Pid) }
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// pruneDocker prunes at the first pass and then once a day, when Docker
+// works. lastPrune is only touched by diskLoop.
+func (d *Daemon) pruneDocker() {
+	if !d.lastPrune.IsZero() && time.Since(d.lastPrune) < pruneEvery {
+		return
+	}
+	if !ops.DockerAvailable() {
+		return
+	}
+	d.lastPrune = time.Now()
+	out, err := dockerPrune()
+	if err != nil {
+		d.Log.Printf("disk: docker prune failed: %v", err)
+		return
+	}
+	freed := "unknown"
+	for _, l := range strings.Split(out, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(l), "Total reclaimed space:"); ok {
+			freed = strings.TrimSpace(v)
+		}
+	}
+	d.Log.Printf("disk: docker prune freed %s", freed)
+}
+
 func (d *Daemon) cleanDisk() {
+	d.pruneDocker()
 	freed := runner.CleanRunners(store.RunnersDir(), runner.Busy)
 	freed += localci.PruneRuns(filepath.Join(store.Home(), "ci"), localci.CIRunAge)
 	// The ciRunners are not reachable from here, so a job folder counts as
