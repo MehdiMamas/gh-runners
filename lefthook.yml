@@ -1,0 +1,10 @@
+# Runs before every push. Install once per clone: `lefthook install`
+# (install lefthook first: `brew install lefthook`, `scoop install lefthook`, or `go install github.com/evilmartians/lefthook/v2@latest`).
+# Quick subset of CI: format and vet (vet also compiles every test file). The full `go test -race ./...` stays in CI.
+pre-push:
+  parallel: true
+  commands:
+    gofmt:
+      run: gofmt -l . | (! grep .)
+    vet:
+      run: go vet ./...
